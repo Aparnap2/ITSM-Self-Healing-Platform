@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Simulators / local state
+mockoon-data/
+localstack/
+*.local.json
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
