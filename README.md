@@ -13,9 +13,10 @@ an independent verifier establishes success.
 
 ## Status
 
-Skeleton phase — architecture and repository structure only. No business
-logic is implemented yet. See `PRD.md` for the full specification and
-`docs/architecture.md` for boundaries and import rules.
+Implementation in progress: ingestion, durable inbox/outbox, NATS
+JetStream consumer, LangGraph remediation workflow, deterministic policy,
+independent verification, and audit persistence are implemented and
+tested (61 tests). See `PRD.md` for the full specification.
 
 ## Stack
 
@@ -25,6 +26,18 @@ Mockoon (deterministic HTTP simulators) · Moto (AWS API simulator) ·
 Ollama (optional local LLM) · OpenTelemetry / Prometheus.
 
 Headless by design: no UI, no dashboard.
+
+## Running the worker
+
+Set ITSM_POSTGRES_DSN and ITSM_NATS_URL, then run:
+
+    python -m itsm_agent.workers.consumer
+
+Environment: ITSM_POSTGRES_DSN/DATABASE_URL, ITSM_NATS_URL/NATS_URL,
+ITSM_WORKER_CONCURRENCY (default 4), ITSM_WORKER_SHUTDOWN_TIMEOUT (default 30),
+ITSM_SIMULATOR_SEED (default 42). The worker subscribes to itsm.events.> on the
+ITSM_EVENTS stream (durable consumer itsm-workflow), ACKs only after durable
+processing, NAKs transient failures, dead-letters poison messages.
 
 ## Repository layout
 

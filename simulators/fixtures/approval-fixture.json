@@ -1,0 +1,8 @@
+{
+  "approval_id": "apr-sim-0001",
+  "decision": "APPROVE",
+  "approver_id": "approver-sim-001",
+  "decided_at": "2026-10-28T09:05:00Z",
+  "nonce": "nonce-sim-0001",
+  "proposal_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+}
