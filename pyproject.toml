@@ -68,4 +68,5 @@ markers = [
     "security: policy and safety invariant tests",
     "fault_injection: deterministic fault injection tests",
     "scenarios: end-to-end scenario suite",
+    "e2e: end-to-end verification against live stack",
 ]
