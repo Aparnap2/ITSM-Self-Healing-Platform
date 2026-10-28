@@ -719,11 +719,13 @@ Unique constraint: `(source_system, external_event_id)`.
 ``` python
 from enum import StrEnum
 
+
 class Severity(StrEnum):
     P1 = "P1"
     P2 = "P2"
     P3 = "P3"
     P4 = "P4"
+
 
 class IncidentStatus(StrEnum):
     NEW = "NEW"
@@ -734,6 +736,7 @@ class IncidentStatus(StrEnum):
     ESCALATED = "ESCALATED"
     REJECTED = "REJECTED"
 
+
 class WorkflowStatus(StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
@@ -743,15 +746,18 @@ class WorkflowStatus(StrEnum):
     ESCALATED = "ESCALATED"
     CANCELLED = "CANCELLED"
 
+
 class ActionType(StrEnum):
     RESTART_SERVICE = "RESTART_SERVICE"
     CLEAR_SIMULATED_CACHE = "CLEAR_SIMULATED_CACHE"
     GRANT_TEST_RESOURCE_ACCESS = "GRANT_TEST_RESOURCE_ACCESS"
 
+
 class PolicyOutcome(StrEnum):
     ALLOW = "ALLOW"
     DENY = "DENY"
     REQUIRE_APPROVAL = "REQUIRE_APPROVAL"
+
 
 class ApprovalStatus(StrEnum):
     PENDING = "PENDING"
@@ -759,6 +765,7 @@ class ApprovalStatus(StrEnum):
     REJECTED = "REJECTED"
     EXPIRED = "EXPIRED"
     INVALIDATED = "INVALIDATED"
+
 
 class ActionStatus(StrEnum):
     INTENT_RECORDED = "INTENT_RECORDED"
@@ -769,6 +776,7 @@ class ActionStatus(StrEnum):
     RECONCILED = "RECONCILED"
     CANCELLED = "CANCELLED"
 
+
 class EvidenceKind(StrEnum):
     HEALTH_CHECK = "HEALTH_CHECK"
     LOG_EXCERPT = "LOG_EXCERPT"
@@ -776,11 +784,13 @@ class EvidenceKind(StrEnum):
     ACTION_RESULT = "ACTION_RESULT"
     POSTCONDITION_CHECK = "POSTCONDITION_CHECK"
 
+
 class EvidenceTrust(StrEnum):
     UNTRUSTED_EXTERNAL = "UNTRUSTED_EXTERNAL"
     SIMULATOR_OBSERVATION = "SIMULATOR_OBSERVATION"
     POLICY_ENGINE = "POLICY_ENGINE"
     INDEPENDENT_VERIFIER = "INDEPENDENT_VERIFIER"
+
 
 class InboxStatus(StrEnum):
     RECEIVED = "RECEIVED"
@@ -808,10 +818,14 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
-SafeIdentifier = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
+SafeIdentifier = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)
+]
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
 
 class IncidentCreated(StrictModel):
     schema_version: Literal["1.0"] = "1.0"
@@ -894,6 +908,7 @@ class RestartServiceParameters(StrictModel):
     reason: Annotated[str, StringConstraints(max_length=500)]
     evidence_ids: list[UUID] = Field(min_length=1, max_length=10)
 
+
 class ClearCacheParameters(StrictModel):
     action_type: Literal["CLEAR_SIMULATED_CACHE"]
     service_name: SafeIdentifier
@@ -901,12 +916,14 @@ class ClearCacheParameters(StrictModel):
     reason: Annotated[str, StringConstraints(max_length=500)]
     evidence_ids: list[UUID] = Field(min_length=1, max_length=10)
 
+
 class GrantTestAccessParameters(StrictModel):
     action_type: Literal["GRANT_TEST_RESOURCE_ACCESS"]
     principal_id: SafeIdentifier
     resource_id: SafeIdentifier
     environment: Literal["local", "test"]
     ticket_reference: SafeIdentifier
+
 
 ActionProposal = RestartServiceParameters | ClearCacheParameters | GrantTestAccessParameters
 ```
@@ -952,6 +969,7 @@ class ApprovalRequest(StrictModel):
     expires_at: datetime
     status: Literal["PENDING", "APPROVED", "REJECTED", "EXPIRED", "INVALIDATED"]
 
+
 class ApprovalDecision(StrictModel):
     approval_id: UUID
     decision: Literal["APPROVE", "REJECT"]
@@ -977,6 +995,7 @@ class ToolResult(StrictModel):
     summary: Annotated[str, StringConstraints(max_length=1500)]
     observed_at: datetime
     evidence_ids: list[UUID] = Field(default_factory=list, max_length=20)
+
 
 class VerificationResult(StrictModel):
     verification_id: UUID
