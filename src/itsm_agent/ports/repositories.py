@@ -303,6 +303,18 @@ __all__ = [
 ]
 
 
+class SourceCheckpoint(BaseModel):
+    """Mutable ingestion checkpoint (per tenant/source)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: UUID
+    source: str
+    checkpoint_token: str
+    last_event_time: datetime | None = None
+    updated_at: datetime
+
+
 @runtime_checkable
 class SourceEventRepository(Protocol):
     async def insert(
@@ -314,3 +326,19 @@ class SourceEventRepository(Protocol):
     async def get_by_idempotency(
         self, tenant_id: UUID, idempotency_key: str, *, conn: AsyncConnection | None = None
     ) -> SourceEvent | None: ...
+
+
+@runtime_checkable
+class SourceCheckpointRepository(Protocol):
+    async def get(
+        self, tenant_id: UUID, source: str, *, conn: AsyncConnection | None = None
+    ) -> SourceCheckpoint | None: ...
+    async def upsert(
+        self,
+        tenant_id: UUID,
+        source: str,
+        checkpoint_token: str,
+        last_event_time: datetime | None = None,
+        *,
+        conn: AsyncConnection | None = None,
+    ) -> None: ...

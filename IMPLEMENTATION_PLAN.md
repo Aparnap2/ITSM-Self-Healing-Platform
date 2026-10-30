@@ -53,7 +53,7 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 - **Depends on:** Task 3 (contract frozen AND reviewed/approved)
 - **Commit:** Task 6 slice (migration 002 + SourceEvent contract + repository + sink + tests + contract amendments)
 
-### Task 7: NATS durable consumers + replay safety — ⏳ TODO
+### Task 7: NATS durable consumers + replay safety — ✅ DONE
 - **Scope:** Batch consumer, checkpoints, idempotent projections, dead-letter, retry.
 - **Depends on:** Task 6
 

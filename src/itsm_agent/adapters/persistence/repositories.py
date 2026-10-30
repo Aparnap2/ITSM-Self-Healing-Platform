@@ -32,6 +32,7 @@ from itsm_agent.ports.repositories import (
     InboxReceipt,
     Incident,
     OutboxEvent,
+    SourceCheckpoint,
     TerminalStateConflictError,
     WorkflowState,
 )
@@ -656,6 +657,8 @@ class RepositoryBundle:
         self.audit = PsycopgAuditRepository(pool)
         self.workflow_state = PsycopgWorkflowStateRepository(pool)
         self.terminal_state = PsycopgTerminalStateRepository(pool)
+        self.source_events = PsycopgSourceEventRepository(pool)
+        self.source_checkpoints = PsycopgSourceCheckpointRepository(pool)
 
 
 class PsycopgSourceEventRepository(_BaseRepository):
@@ -761,3 +764,47 @@ def _source_event_from_row(row: dict[str, Any]) -> SourceEvent:
         raw_evidence_reference=row["raw_evidence_reference"],
         correlation_metadata=row["correlation_metadata"] or {},
     )
+
+
+class PsycopgSourceCheckpointRepository(_BaseRepository):
+    async def get(
+        self, tenant_id: UUID, source: str, *, conn: AsyncConnection | None = None
+    ) -> SourceCheckpoint | None:
+        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                "SELECT * FROM source_checkpoints WHERE tenant_id = %s AND source = %s",
+                (tenant_id, source),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return SourceCheckpoint(
+            tenant_id=row["tenant_id"],
+            source=row["source"],
+            checkpoint_token=row["checkpoint_token"],
+            last_event_time=row["last_event_time"],
+            updated_at=row["updated_at"],
+        )
+
+    async def upsert(
+        self,
+        tenant_id: UUID,
+        source: str,
+        checkpoint_token: str,
+        last_event_time: datetime | None = None,
+        *,
+        conn: AsyncConnection | None = None,
+    ) -> None:
+        async with self._session(conn) as c, c.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO source_checkpoints (
+                    tenant_id, source, checkpoint_token, last_event_time, updated_at
+                ) VALUES (%s, %s, %s, %s, now())
+                ON CONFLICT (tenant_id, source) DO UPDATE SET
+                    checkpoint_token = EXCLUDED.checkpoint_token,
+                    last_event_time = EXCLUDED.last_event_time,
+                    updated_at = now()
+                """,
+                (tenant_id, source, checkpoint_token, last_event_time),
+            )
