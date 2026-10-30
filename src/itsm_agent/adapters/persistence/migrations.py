@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from psycopg import AsyncConnection
+from psycopg import AsyncConnection, sql
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[4] / "migrations"
 BOOKKEEPING_TABLE = "schema_migrations"
@@ -22,19 +22,29 @@ async def apply_migrations(dsn: str) -> list[str]:
     applied_now: list[str] = []
     async with await AsyncConnection.connect(dsn) as conn:
         await conn.execute("SET lock_timeout = '5s'")
+        # Identifier is composed with psycopg.sql.Identifier (injection-safe
+        # whitelisting); nothing here is user-controlled.
         await conn.execute(
-            f"CREATE TABLE IF NOT EXISTS {BOOKKEEPING_TABLE} ("
-            "filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+            sql.SQL(
+                "CREATE TABLE IF NOT EXISTS {} ("
+                "filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+            ).format(sql.Identifier(BOOKKEEPING_TABLE))
         )
         async with conn.cursor() as cur:
-            await cur.execute(f"SELECT filename FROM {BOOKKEEPING_TABLE}")
+            await cur.execute(
+                sql.SQL("SELECT filename FROM {}").format(sql.Identifier(BOOKKEEPING_TABLE))
+            )
             already = {row[0] for row in await cur.fetchall()}
         for path in _migration_files():
             if path.name in already:
                 continue
             await conn.execute(path.read_text(encoding="utf-8"))
+            # Identifier composed with psycopg.sql.Identifier (see above).
             await conn.execute(
-                f"INSERT INTO {BOOKKEEPING_TABLE} (filename) VALUES (%s)", (path.name,)
+                sql.SQL("INSERT INTO {} (filename) VALUES (%s)").format(
+                    sql.Identifier(BOOKKEEPING_TABLE)
+                ),
+                (path.name,),
             )
             await conn.commit()
             applied_now.append(path.name)

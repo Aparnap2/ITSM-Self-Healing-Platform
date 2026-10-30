@@ -37,14 +37,28 @@ typecheck: ## Strict typecheck with mypy (CI gate 2)
 test-unit: ## Unit tests (CI gate 3)
 	uv run pytest -m unit
 
+test-contract: ## Adapter contract tests against simulators (offline)
+	uv run pytest -m contract
+
 test-security: ## Security invariant tests (CI gate 4)
 	uv run pytest -m security
+
+test-fault-injection: ## Deterministic fault injection tests (requires local stack)
+	uv run pytest -m fault_injection
 
 test-integration: ## Integration tests (requires local stack or CI services)
 	uv run pytest -m integration
 
 test-scenarios: ## 24-scenario evaluation harness (CI gate 7)
 	uv run pytest -m scenarios
+
+sast: ## SAST scan of src/ with bandit (must exit 0)
+	uv run bandit -q -c pyproject.toml -r src
+
+audit-deps: ## Known-vulnerability audit of the locked dependency set
+	uv export --frozen --format requirements-txt --no-emit-project -o .itsm-requirements.txt
+	uv run pip-audit --disable-pip -r .itsm-requirements.txt
+	rm -f .itsm-requirements.txt
 
 test: ## Full test suite (all markers)
 	uv run pytest

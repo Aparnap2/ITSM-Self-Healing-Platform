@@ -166,7 +166,8 @@ class CloudTrailCollector(CollectorPort):
             try:
                 ev = normalize_record(rec, self.tenant_id)
             except Exception:
-                continue
+                # Malformed source records are skipped, not retried.
+                continue  # nosec B112
             events.append(ev)
             if latest is None or ev.event_time > latest:
                 latest = ev.event_time
