@@ -59,7 +59,7 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 
 ### Task 8: AWS CloudTrail adapter (Moto) — ✅ DONE
 ### Task 9: PostgreSQL pgAudit adapter — ✅ DONE
-### Task 10: GitHub org audit adapter — ⏳ TODO
+### Task 10: GitHub org audit adapter — ✅ DONE
 ### Task 11: Identity + resource resolution — ⏳ TODO
 ### Task 12: Deterministic detection + coverage engine — ⏳ TODO
 ### Task 13: Agentic investigation layer (read-only tools) — ⏳ TODO
