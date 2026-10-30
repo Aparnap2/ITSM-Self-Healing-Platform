@@ -133,3 +133,6 @@ async def test_investigation_id_mismatch_rejected() -> None:
 
     with pytest.raises(ValueError):
         await run_investigation(req, fetch_evidence=fetcher, model=model)
+
+
+pytestmark = pytest.mark.unit

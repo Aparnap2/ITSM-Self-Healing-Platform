@@ -56,3 +56,6 @@ async def test_moto_s3_roundtrip() -> None:
         assert events[0].event_type == "CreateUser"
         assert events[0].tenant_id == tenant
         assert events[0].source == "cloudtrail"
+
+
+pytestmark = pytest.mark.contract

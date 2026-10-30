@@ -5,6 +5,8 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import pytest
+
 from itsm_agent.domain.models import EvidenceReference, Finding, Severity
 from itsm_agent.reporting.evidence_bundle import build_evidence_bundle
 
@@ -55,3 +57,6 @@ def test_bundle_empty_evidence() -> None:
     b = build_evidence_bundle(finding, [])
     assert b["evidence"] == []
     assert "bundle_hash" in b
+
+
+pytestmark = pytest.mark.unit

@@ -658,3 +658,6 @@ async def test_db_backed_dedup_live_stack() -> None:
         assert second.value == "DUPLICATE"
     finally:
         await pool.close()
+
+
+pytestmark = pytest.mark.e2e

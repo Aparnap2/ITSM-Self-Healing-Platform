@@ -8,7 +8,7 @@ Pure domain: stdlib + pydantic only.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter
@@ -181,12 +181,12 @@ ActionProposal = Annotated[
     Field(discriminator="action_type"),
 ]
 
-ACTION_PROPOSAL_ADAPTER: TypeAdapter[ActionProposal] = TypeAdapter(ActionProposal)  # type: ignore[arg-type]
+ACTION_PROPOSAL_ADAPTER = TypeAdapter(cast(Any, ActionProposal))
 
 
 def parse_action_proposal(raw: object) -> ActionProposal:
     """Validate untrusted input into a typed action proposal (fail closed)."""
-    return ACTION_PROPOSAL_ADAPTER.validate_python(raw)
+    return ACTION_PROPOSAL_ADAPTER.validate_python(raw)  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------

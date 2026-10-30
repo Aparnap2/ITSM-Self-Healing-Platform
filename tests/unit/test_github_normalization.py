@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
 from itsm_agent.collectors.github.audit_log import (
     _idempotency_key,
     _parse_ts,
@@ -56,3 +58,6 @@ def test_payload_hash_stable() -> None:
     ev1 = normalize_record(_record(), TENANT)
     ev2 = normalize_record(_record(), TENANT)
     assert ev1.payload_hash == ev2.payload_hash
+
+
+pytestmark = pytest.mark.unit

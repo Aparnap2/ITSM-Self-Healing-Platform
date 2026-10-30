@@ -101,3 +101,6 @@ async def test_collect_with_fake_fetcher() -> None:
     events = await collector.collect(datetime.now(UTC))
     assert len(events) == 3
     assert all(e.tenant_id == tenant for e in events)
+
+
+pytestmark = pytest.mark.unit

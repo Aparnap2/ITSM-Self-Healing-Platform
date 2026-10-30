@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from itsm_agent.privacy.redaction import redact_secrets
 
 
@@ -25,3 +27,6 @@ def test_redact_password() -> None:
 def test_redact_token() -> None:
     out = redact_secrets("Bearer abc.def.ghi")
     assert "abc.def.ghi" not in out
+
+
+pytestmark = pytest.mark.unit

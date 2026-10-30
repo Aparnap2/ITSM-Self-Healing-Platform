@@ -58,3 +58,6 @@ async def test_rate_limit_stops() -> None:
         )
         records = await fetch_github_audit_log(org, token, since)
     assert records == []
+
+
+pytestmark = pytest.mark.contract

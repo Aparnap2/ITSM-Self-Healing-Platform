@@ -81,3 +81,6 @@ async def test_unavailable_provider_maps_to_error_outcome() -> None:
     result = await adapter.verify_principal("carol")
     assert result.outcome == "ERROR"
     await adapter.aclose()
+
+
+pytestmark = pytest.mark.contract

@@ -263,3 +263,6 @@ async def test_G_reconciliation_budget_exhausted_escalates() -> None:
     state["max_reconciliation_attempts"] = 1
     result = await graph.ainvoke(state)
     assert result["status"] == "ESCALATED"
+
+
+pytestmark = pytest.mark.integration

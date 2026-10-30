@@ -59,3 +59,6 @@ def test_mockoon_covers_adapter_paths() -> None:
 @pytest.mark.contract
 def test_mockoon_file_exists() -> None:
     assert MOCKOON.is_file()
+
+
+pytestmark = pytest.mark.contract

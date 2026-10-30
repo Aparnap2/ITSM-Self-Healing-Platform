@@ -169,3 +169,6 @@ async def test_api_key_never_in_error_messages() -> None:
     except ModelUnavailableError as exc:
         assert "test-key-not-real" not in str(exc)
     await adapter.aclose()
+
+
+pytestmark = pytest.mark.contract

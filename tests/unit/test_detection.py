@@ -5,6 +5,8 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import pytest
+
 from itsm_agent.collectors.aws.cloudtrail import normalize_record
 from itsm_agent.detection.engine import (
     detect_coverage_gap,
@@ -77,3 +79,6 @@ def test_run_detection() -> None:
     ev = normalize_record(_record(), TENANT)
     findings = run_detection([ev])
     assert len(findings) >= 1
+
+
+pytestmark = pytest.mark.unit

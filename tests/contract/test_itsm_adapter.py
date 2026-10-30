@@ -119,3 +119,6 @@ async def test_malformed_response_fails_closed() -> None:
     with pytest.raises(UnexpectedResponseError):
         await adapter.get_ticket("TCK-1")
     await adapter.aclose()
+
+
+pytestmark = pytest.mark.contract

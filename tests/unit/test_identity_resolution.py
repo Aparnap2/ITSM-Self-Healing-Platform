@@ -5,6 +5,8 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from itsm_agent.domain.identity_resolution import resolve_identity
 from itsm_agent.domain.models import IdentityMapping
 
@@ -62,3 +64,6 @@ def test_cross_tenant_not_resolved_here() -> None:
     m = _mapping(INTERNAL_A)
     iid, status = resolve_identity([m], at=NOW)
     assert status == "RESOLVED"
+
+
+pytestmark = pytest.mark.unit

@@ -232,3 +232,6 @@ def test_action_success_response_is_not_proof() -> None:
     )
     assert observation.passed is True
     assert observation.verifier_version == "independent-verifier-v1"
+
+
+pytestmark = pytest.mark.contract

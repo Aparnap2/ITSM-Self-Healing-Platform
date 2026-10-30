@@ -119,3 +119,6 @@ def test_mockoon_wrong_type_fails_validation() -> None:
     }
     with pytest.raises(ValidationError):
         TicketSnapshot.model_validate(bad)
+
+
+pytestmark = pytest.mark.contract

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
 from itsm_agent.collectors.postgresql.pgaudit import (
     _redact_sql,
     normalize_record,
@@ -61,3 +63,6 @@ def test_normalize_idempotency_key() -> None:
     assert rec is not None
     ev = normalize_record(rec, TENANT)
     assert ev.idempotency_key.startswith(f"{TENANT}:pgaudit:")
+
+
+pytestmark = pytest.mark.unit
