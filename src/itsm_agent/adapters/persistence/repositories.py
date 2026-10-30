@@ -10,9 +10,11 @@ Contract notes:
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID, uuid4
 
 from psycopg import AsyncConnection
@@ -20,6 +22,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
+from itsm_agent.domain.events import SourceEvent
 from itsm_agent.ports.repositories import (
     ActionIntent,
     ApprovalNotPendingError,
@@ -653,3 +656,108 @@ class RepositoryBundle:
         self.audit = PsycopgAuditRepository(pool)
         self.workflow_state = PsycopgWorkflowStateRepository(pool)
         self.terminal_state = PsycopgTerminalStateRepository(pool)
+
+
+class PsycopgSourceEventRepository(_BaseRepository):
+    async def insert(
+        self, event: SourceEvent, *, conn: AsyncConnection | None = None
+    ) -> SourceEvent:
+        async with self._session(conn) as c, c.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO source_events (
+                    id, tenant_id, source, source_event_id, idempotency_key,
+                    source_schema_version, canonical_schema_version, event_type,
+                    event_category, event_time, observed_at, ingested_at,
+                    actor_id, principal_id, session_id, action, resource_type,
+                    resource_id, outcome, permission_context, payload_hash,
+                    raw_evidence_reference, correlation_metadata
+                ) VALUES (
+                    %(id)s, %(tenant_id)s, %(source)s, %(source_event_id)s,
+                    %(idempotency_key)s, %(source_schema_version)s,
+                    %(canonical_schema_version)s, %(event_type)s, %(event_category)s,
+                    %(event_time)s, %(observed_at)s, %(ingested_at)s, %(actor_id)s,
+                    %(principal_id)s, %(session_id)s, %(action)s, %(resource_type)s,
+                    %(resource_id)s, %(outcome)s, %(permission_context)s,
+                    %(payload_hash)s, %(raw_evidence_reference)s,
+                    %(correlation_metadata)s
+                )
+                """,
+                {
+                    "id": event.event_id,
+                    "tenant_id": event.tenant_id,
+                    "source": event.source,
+                    "source_event_id": event.source_event_id,
+                    "idempotency_key": event.idempotency_key,
+                    "source_schema_version": event.source_schema_version,
+                    "canonical_schema_version": event.canonical_schema_version,
+                    "event_type": event.event_type,
+                    "event_category": event.event_category,
+                    "event_time": event.event_time,
+                    "observed_at": event.observed_at,
+                    "ingested_at": event.ingested_at,
+                    "actor_id": event.actor_id,
+                    "principal_id": event.principal_id,
+                    "session_id": event.session_id,
+                    "action": event.action,
+                    "resource_type": event.resource_type,
+                    "resource_id": event.resource_id,
+                    "outcome": event.outcome,
+                    "permission_context": json.dumps(event.permission_context),
+                    "payload_hash": event.payload_hash,
+                    "raw_evidence_reference": event.raw_evidence_reference,
+                    "correlation_metadata": json.dumps(event.correlation_metadata),
+                },
+            )
+        return event
+
+    async def get(
+        self, event_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> SourceEvent | None:
+        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute("SELECT * FROM source_events WHERE id = %s", (event_id,))
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return _source_event_from_row(row)
+
+    async def get_by_idempotency(
+        self, tenant_id: UUID, idempotency_key: str, *, conn: AsyncConnection | None = None
+    ) -> SourceEvent | None:
+        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                "SELECT * FROM source_events WHERE tenant_id = %s AND idempotency_key = %s",
+                (tenant_id, idempotency_key),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return _source_event_from_row(row)
+
+
+def _source_event_from_row(row: dict[str, Any]) -> SourceEvent:
+    return SourceEvent(
+        event_id=row["id"],
+        tenant_id=row["tenant_id"],
+        source=row["source"],
+        source_event_id=row["source_event_id"],
+        idempotency_key=row["idempotency_key"],
+        source_schema_version=row["source_schema_version"],
+        canonical_schema_version=row["canonical_schema_version"],
+        event_type=row["event_type"],
+        event_category=row["event_category"],
+        event_time=row["event_time"],
+        observed_at=row["observed_at"],
+        ingested_at=row["ingested_at"],
+        actor_id=row["actor_id"],
+        principal_id=row["principal_id"],
+        session_id=row["session_id"],
+        action=row["action"],
+        resource_type=row["resource_type"],
+        resource_id=row["resource_id"],
+        outcome=row["outcome"],
+        permission_context=row["permission_context"] or {},
+        payload_hash=row["payload_hash"],
+        raw_evidence_reference=row["raw_evidence_reference"],
+        correlation_metadata=row["correlation_metadata"] or {},
+    )

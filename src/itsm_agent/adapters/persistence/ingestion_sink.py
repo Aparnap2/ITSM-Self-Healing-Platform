@@ -18,9 +18,10 @@ from psycopg_pool import AsyncConnectionPool
 from itsm_agent.adapters.persistence.repositories import (
     PsycopgInboxRepository,
     PsycopgOutboxRepository,
+    PsycopgSourceEventRepository,
 )
 from itsm_agent.api.routes.ingestion import SinkOutcome
-from itsm_agent.domain.events import IncidentCreated
+from itsm_agent.domain.events import IncidentCreated, SourceEvent
 from itsm_agent.ports.repositories import InboxReceipt
 
 __all__ = ["PsycopgIngestionSink"]
@@ -61,4 +62,38 @@ class PsycopgIngestionSink:
                 )
             return SinkOutcome.ACCEPTED
         except Exception:  # noqa: BLE001 — fail closed on any commit failure
+            return SinkOutcome.UNAVAILABLE
+
+
+class PsycopgSourceEventSink:
+    """Durable inbox + source_events + outbox acceptance (Task 6)."""
+
+    def __init__(self, pool: AsyncConnectionPool[Any]) -> None:
+        self._pool = pool
+        self._inbox = PsycopgInboxRepository(pool)
+        self._source_events = PsycopgSourceEventRepository(pool)
+        self._outbox = PsycopgOutboxRepository(pool)
+
+    async def accept_source_event(self, event: SourceEvent) -> SinkOutcome:
+        source_system = event.source
+        external_event_id = event.idempotency_key
+        try:
+            async with self._pool.connection() as conn, conn.transaction():
+                receipt = await self._inbox.try_record(
+                    source_system=source_system,
+                    external_event_id=external_event_id,
+                    payload_hash=event.payload_hash,
+                    conn=conn,
+                )
+                if receipt is InboxReceipt.DUPLICATE:
+                    return SinkOutcome.DUPLICATE
+                await self._source_events.insert(event, conn=conn)
+                await self._outbox.append(
+                    event_type="SourceEventIngested",
+                    aggregate_id=event.event_id,
+                    payload=event.model_dump(mode="json"),
+                    conn=conn,
+                )
+            return SinkOutcome.ACCEPTED
+        except Exception:  # noqa: BLE001 — fail closed
             return SinkOutcome.UNAVAILABLE

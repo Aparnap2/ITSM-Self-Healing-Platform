@@ -243,6 +243,7 @@ class AuditEventRecord(StrictModel):
 
 class InboxEventRecord(StrictModel):
     id: UUID
+    tenant_id: UUID | None = None
     source_system: str
     external_event_id: str
     payload_hash: str
@@ -254,6 +255,7 @@ class InboxEventRecord(StrictModel):
 
 class OutboxEventRecord(StrictModel):
     id: UUID
+    tenant_id: UUID | None = None
     event_type: str
     aggregate_id: UUID
     payload: dict[str, object]

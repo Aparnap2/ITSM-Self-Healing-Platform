@@ -36,6 +36,47 @@ def ensure_utc(value: datetime) -> datetime:
 
 
 # ---------------------------------------------------------------------------
+# 6.0 Source event (canonical, immutable) — security audit pivot Task 6
+# ---------------------------------------------------------------------------
+
+
+class SourceEvent(StrictModel):
+    """Canonical, immutable security event (Task 6).
+
+    One source event may yield zero, one, or many downstream facts.
+    Immutable once persisted; corrections are new events.
+    """
+
+    event_id: UUID
+    tenant_id: UUID
+    source: SafeIdentifier
+    source_event_id: SafeIdentifier | None = None
+    idempotency_key: SafeIdentifier
+    source_schema_version: SafeIdentifier | None = None
+    canonical_schema_version: SafeIdentifier
+    event_type: SafeIdentifier
+    event_category: Literal["auth", "data", "config", "access", "identity"]
+    event_time: datetime
+    observed_at: datetime
+    ingested_at: datetime = Field(default_factory=utc_now)
+    actor_id: SafeIdentifier | None = None
+    principal_id: SafeIdentifier | None = None
+    session_id: SafeIdentifier | None = None
+    action: SafeIdentifier
+    resource_type: SafeIdentifier | None = None
+    resource_id: SafeIdentifier | None = None
+    outcome: Literal["success", "failure", "denied"] | None = None
+    permission_context: dict[str, str | int | float | bool | None] = Field(
+        default_factory=dict, max_length=50
+    )
+    payload_hash: Sha256Hex
+    raw_evidence_reference: Annotated[str, StringConstraints(max_length=512)] | None = None
+    correlation_metadata: dict[str, str | int | float | bool | None] = Field(
+        default_factory=dict, max_length=50
+    )
+
+
+# ---------------------------------------------------------------------------
 # 6.1 Incident event
 # ---------------------------------------------------------------------------
 

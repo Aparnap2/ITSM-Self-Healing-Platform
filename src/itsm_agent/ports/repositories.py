@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 # OutboxEventRecord lacks the queue fields (status/attempts/next_attempt_at)
 # pinned by the Phase 3 deliverable — drift noted for the domain owner.
 # ---------------------------------------------------------------------------
+from itsm_agent.domain.events import SourceEvent
 from itsm_agent.domain.models import (  # noqa: E402
     ActionAttemptRecord as ActionIntent,
 )
@@ -63,6 +64,7 @@ class OutboxEvent(BaseModel):
     id: UUID
     event_type: str
     aggregate_id: UUID
+    tenant_id: UUID | None = None
     payload: dict[str, object]
     created_at: datetime
     published_at: datetime | None = None
@@ -299,3 +301,16 @@ __all__ = [
     "Incident",
     "WorkflowState",
 ]
+
+
+@runtime_checkable
+class SourceEventRepository(Protocol):
+    async def insert(
+        self, event: SourceEvent, *, conn: AsyncConnection | None = None
+    ) -> SourceEvent: ...
+    async def get(
+        self, event_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> SourceEvent | None: ...
+    async def get_by_idempotency(
+        self, tenant_id: UUID, idempotency_key: str, *, conn: AsyncConnection | None = None
+    ) -> SourceEvent | None: ...
