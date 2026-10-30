@@ -1,22 +1,17 @@
-# ITSM Self-Healing Platform
+# Event-Driven, Evidence-First Agentic Security Audit System
 
-A headless, event-driven IT operations agent: it consumes incident
-events, gathers diagnostic evidence, proposes a bounded remediation,
-passes it through deterministic deny-by-default policy enforcement,
-executes only allowlisted tools, independently verifies the actual
-resulting state, and records an auditable outcome — resolving an
-incident only when verification passes.
+A headless, event-driven security audit platform: it ingests security events
+from AWS CloudTrail, pgAudit, GitHub, and identity/approval sources,
+preserves immutable evidence, runs deterministic detection and policy
+evaluation, selectively invokes bounded agentic investigation, and produces
+an auditable compliance-evidence report — without claiming certification.
 
-**The point:** agentic reasoning inside deterministic operational
-boundaries. The LLM proposes; policy code authorizes; adapters execute;
-an independent verifier establishes success.
+**The point:** agentic reasoning inside deterministic audit boundaries. The
+LLM proposes and explains; policy code authorizes; adapters execute; an
+independent verifier establishes success.
 
 ## Status
-
-Implementation in progress: ingestion, durable inbox/outbox, NATS
-JetStream consumer, LangGraph remediation workflow, deterministic policy,
-independent verification, and audit persistence are implemented and
-tested (61 tests). See `PRD.md` for the full specification.
+Implementation in progress (pivot). See `PRD.md` and `docs/`.
 
 ## Stack
 
