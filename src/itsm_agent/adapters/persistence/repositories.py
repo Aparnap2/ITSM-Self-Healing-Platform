@@ -23,6 +23,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from itsm_agent.domain.events import SourceEvent
+from itsm_agent.domain.models import IdentityMapping
 from itsm_agent.ports.repositories import (
     ActionIntent,
     ApprovalNotPendingError,
@@ -659,6 +660,7 @@ class RepositoryBundle:
         self.terminal_state = PsycopgTerminalStateRepository(pool)
         self.source_events = PsycopgSourceEventRepository(pool)
         self.source_checkpoints = PsycopgSourceCheckpointRepository(pool)
+        self.identity_mappings = PsycopgIdentityMappingRepository(pool)
 
 
 class PsycopgSourceEventRepository(_BaseRepository):
@@ -808,3 +810,96 @@ class PsycopgSourceCheckpointRepository(_BaseRepository):
                 """,
                 (tenant_id, source, checkpoint_token, last_event_time),
             )
+
+
+class PsycopgIdentityMappingRepository(_BaseRepository):
+    async def upsert(
+        self, mapping: IdentityMapping, *, conn: AsyncConnection | None = None
+    ) -> IdentityMapping:
+        async with self._session(conn) as c, c.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO identity_mappings (
+                    id, tenant_id, source_system, source_identifier, internal_identity_id,
+                    confidence, provenance, valid_from, valid_to
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (tenant_id, source_system, source_identifier, valid_from) DO UPDATE SET
+                    internal_identity_id = EXCLUDED.internal_identity_id,
+                    confidence = EXCLUDED.confidence,
+                    provenance = EXCLUDED.provenance,
+                    valid_to = EXCLUDED.valid_to
+                """,
+                (
+                    mapping.id,
+                    mapping.tenant_id,
+                    mapping.source_system,
+                    mapping.source_identifier,
+                    mapping.internal_identity_id,
+                    mapping.confidence,
+                    mapping.provenance,
+                    mapping.valid_from,
+                    mapping.valid_to,
+                ),
+            )
+        return mapping
+
+    async def get(
+        self,
+        tenant_id: UUID,
+        source_system: str,
+        source_identifier: str,
+        *,
+        at: datetime | None = None,
+        conn: AsyncConnection | None = None,
+    ) -> list[IdentityMapping]:
+        when = at if at is not None else datetime.now(tz=UTC)
+        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT * FROM identity_mappings
+                WHERE tenant_id = %s AND source_system = %s AND source_identifier = %s
+                  AND valid_from <= %s AND (valid_to IS NULL OR valid_to >= %s)
+                ORDER BY valid_from DESC
+                """,
+                (tenant_id, source_system, source_identifier, when, when),
+            )
+            rows = await cur.fetchall()
+        return [
+            IdentityMapping(
+                id=r["id"],
+                tenant_id=r["tenant_id"],
+                source_system=r["source_system"],
+                source_identifier=r["source_identifier"],
+                internal_identity_id=r["internal_identity_id"],
+                confidence=r["confidence"],
+                provenance=r["provenance"],
+                valid_from=r["valid_from"],
+                valid_to=r["valid_to"],
+            )
+            for r in rows
+        ]
+
+    async def list_by_internal(
+        self, tenant_id: UUID, internal_identity_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> list[IdentityMapping]:
+        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                "SELECT * FROM identity_mappings "
+                "WHERE tenant_id = %s AND internal_identity_id = %s",
+                (tenant_id, internal_identity_id),
+            )
+            rows = await cur.fetchall()
+        return [
+            IdentityMapping(
+                id=r["id"],
+                tenant_id=r["tenant_id"],
+                source_system=r["source_system"],
+                source_identifier=r["source_identifier"],
+                internal_identity_id=r["internal_identity_id"],
+                confidence=r["confidence"],
+                provenance=r["provenance"],
+                valid_from=r["valid_from"],
+                valid_to=r["valid_to"],
+            )
+            for r in rows
+        ]

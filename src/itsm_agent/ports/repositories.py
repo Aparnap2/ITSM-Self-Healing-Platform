@@ -46,10 +46,11 @@ from itsm_agent.domain.models import (
     AuditEventRecord as AuditEvent,
 )
 from itsm_agent.domain.models import (
-    InboxEventRecord as InboxEvent,
+    IdentityMapping,
+    Incident,
 )
 from itsm_agent.domain.models import (
-    Incident,
+    InboxEventRecord as InboxEvent,
 )
 from itsm_agent.domain.models import (
     WorkflowRun as WorkflowState,
@@ -342,3 +343,22 @@ class SourceCheckpointRepository(Protocol):
         *,
         conn: AsyncConnection | None = None,
     ) -> None: ...
+
+
+@runtime_checkable
+class IdentityMappingRepository(Protocol):
+    async def upsert(
+        self, mapping: IdentityMapping, *, conn: AsyncConnection | None = None
+    ) -> IdentityMapping: ...
+    async def get(
+        self,
+        tenant_id: UUID,
+        source_system: str,
+        source_identifier: str,
+        *,
+        at: datetime | None = None,
+        conn: AsyncConnection | None = None,
+    ) -> list[IdentityMapping]: ...
+    async def list_by_internal(
+        self, tenant_id: UUID, internal_identity_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> list[IdentityMapping]: ...

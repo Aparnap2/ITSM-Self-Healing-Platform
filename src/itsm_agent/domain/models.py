@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -263,3 +264,17 @@ class OutboxEventRecord(StrictModel):
     published_at: datetime | None = None
     publish_attempts: int = 0
     last_error: str | None = None
+
+
+class IdentityMapping(StrictModel):
+    """Source-to-internal identity mapping with provenance and validity."""
+
+    id: UUID
+    tenant_id: UUID
+    source_system: str
+    source_identifier: str
+    internal_identity_id: UUID
+    confidence: Literal["HIGH", "MEDIUM", "LOW", "UNRESOLVED"] = "MEDIUM"
+    provenance: str
+    valid_from: datetime
+    valid_to: datetime | None = None
