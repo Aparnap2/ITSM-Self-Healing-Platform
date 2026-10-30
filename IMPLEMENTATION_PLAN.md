@@ -67,7 +67,7 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 ### Task 15: Security/privacy/multi-tenancy — ⏳ TODO
 ### Task 16: Reliability/observability/E2E + golden dataset — ⏳ TODO
 ### Task 17: Controlled pilot — ✅ DONE
-### Task 18: Production readiness — ⏳ TODO
+### Task 18: Production readiness — ✅ DONE
 
 ## Data mutability boundaries (per review)
 - Immutable: source_events, canonical_events, raw evidence, audit_records, reviewer decisions, investigation proposals.
