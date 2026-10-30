@@ -14,8 +14,13 @@ Graph topology (safety-critical edges only):
     execute_action --(route_after_execute)-->
               SUCCEEDED        -> verify_postcondition
               OUTCOME_UNKNOWN  -> reconcile_uncertain_action
+              FAILED retryable -> prepare_retry
               FAILED / missing -> escalate
-    reconcile_uncertain_action -> verify_postcondition | escalate
+    reconcile_uncertain_action --(route_after_reconcile)-->
+              APPLIED          -> verify_postcondition
+              NOT_APPLIED      -> prepare_retry (policy re-checked)
+              INCONCLUSIVE     -> reconcile_uncertain_action (bounded) | escalate
+    prepare_retry --(route_after_retry_precheck)--> record_action_intent | escalate
     verify_postcondition --(route_after_verify)--> update_itsm | escalate
     update_itsm / escalate -> finalize_audit -> END
 
@@ -44,6 +49,7 @@ from itsm_agent.application.services import (
     route_after_policy,
     route_after_reconcile,
     route_after_request_approval,
+    route_after_retry_precheck,
     route_after_validate_approval,
     route_after_verify,
     route_entry,
@@ -87,12 +93,22 @@ def build_workflow(deps: WorkflowDeps) -> Any:
     builder.add_conditional_edges(
         "execute_action",
         route_after_execute,
-        ["verify_postcondition", "reconcile_uncertain_action", "escalate"],
+        ["verify_postcondition", "reconcile_uncertain_action", "prepare_retry", "escalate"],
     )
     builder.add_conditional_edges(
         "reconcile_uncertain_action",
         route_after_reconcile,
-        ["verify_postcondition", "escalate"],
+        [
+            "verify_postcondition",
+            "prepare_retry",
+            "reconcile_uncertain_action",
+            "escalate",
+        ],
+    )
+    builder.add_conditional_edges(
+        "prepare_retry",
+        route_after_retry_precheck,
+        ["record_action_intent", "escalate"],
     )
     builder.add_conditional_edges(
         "verify_postcondition",
@@ -120,6 +136,7 @@ def route_table() -> dict[str, Callable[[WorkflowState], str]]:
         "route_after_validate_approval": route_after_validate_approval,
         "route_after_execute": route_after_execute,
         "route_after_reconcile": route_after_reconcile,
+        "route_after_retry_precheck": route_after_retry_precheck,
         "route_after_verify": route_after_verify,
         "route_terminal": route_terminal,
     }

@@ -49,13 +49,20 @@ class WorkflowState(TypedDict, total=False):
     # Execution
     action_attempt_id: str | None
     idempotency_key: str | None
+    intent_status: str | None  # durable ActionStatus at intent record time
     tool_result: dict[str, Any] | None  # serialized ToolResult
     action_attempts: int
+
+    # Reconciliation (uncertain outcomes — never a blind retry)
+    reconciliation: dict[str, Any] | None  # serialized ReconciliationResult
+    reconciliation_attempts: int
 
     # Verification
     verification: dict[str, Any] | None  # serialized VerificationResult
 
     # Budgets
+    max_action_attempts: int
+    max_reconciliation_attempts: int
     model_attempts: int
     tool_calls: int
     deadline_at: str | None  # ISO timestamp
@@ -138,14 +145,40 @@ def route_after_execute(state: WorkflowState) -> str:
     if result["status"] == "SUCCEEDED":
         return "verify_postcondition"
     if result["status"] == "OUTCOME_UNKNOWN":
+        # Never retry a possibly-applied mutation: reconcile first.
         return "reconcile_uncertain_action"
+    # FAILED: only a provably pre-execution failure may be retried, and only
+    # through the same policy-checked retry path as reconciliation.
+    if result.get("retryable") is True:
+        return "prepare_retry"
     return "escalate"
 
 
 def route_after_reconcile(state: WorkflowState) -> str:
-    result = state.get("tool_result")
-    if result is not None and result["status"] == "SUCCEEDED":
+    if state.get("error_code") is not None:
+        return "escalate"
+    reconciliation = state.get("reconciliation")
+    if reconciliation is None:
+        return "escalate"
+    outcome = reconciliation["outcome"]
+    if outcome == "APPLIED":
         return "verify_postcondition"
+    if outcome == "NOT_APPLIED":
+        if state.get("action_attempts", 0) >= state.get("max_action_attempts", 1):
+            return "escalate"
+        return "prepare_retry"
+    # INCONCLUSIVE: bounded reconciliation passes, then escalate.
+    if state.get("reconciliation_attempts", 0) >= state.get("max_reconciliation_attempts", 2):
+        return "escalate"
+    if state.get("action_attempts", 0) >= state.get("max_action_attempts", 1):
+        return "escalate"
+    return "reconcile_uncertain_action"
+
+
+def route_after_retry_precheck(state: WorkflowState) -> str:
+    decision = state.get("policy_decision")
+    if decision is not None and decision["outcome"] == "ALLOW":
+        return "record_action_intent"
     return "escalate"
 
 

@@ -363,8 +363,21 @@ async def record_action_intent(state: WorkflowState, deps: WorkflowDeps) -> dict
         # Defensive: graph structure should make this unreachable.
         return set_error(state, "EXECUTION_WITHOUT_ALLOW")
 
+    proposal = parse_action_proposal(raw_candidate)
+    next_attempt = state.get("action_attempts", 0) + 1
     idempotency_key = canonical_idempotency_key(
-        state["workflow_id"], decision["proposal_hash"], state.get("action_attempts", 0)
+        state["workflow_id"], decision["proposal_hash"], next_attempt
+    )
+    intent_status, durable_attempt = await deps.intents.record_intent(
+        incident_id=UUID(state["incident_id"]),
+        workflow_id=UUID(state["workflow_id"]),
+        action_type=str(proposal.action_type),
+        resource_id=_resource_id_of(proposal),
+        idempotency_key=idempotency_key,
+        proposal_hash=decision["proposal_hash"],
+        adapter_name=type(deps.executor).__name__,
+        attempt_number=next_attempt,
+        recorded_at=deps.clock.now(),
     )
     attempt_id = str(uuid4())
     await deps.audit.append(
@@ -372,7 +385,11 @@ async def record_action_intent(state: WorkflowState, deps: WorkflowDeps) -> dict
             state,
             deps,
             "ACTION_INTENT_RECORDED",
-            {"idempotency_key": idempotency_key},
+            {
+                "idempotency_key": idempotency_key,
+                "attempt_number": durable_attempt,
+                "intent_status": intent_status,
+            },
         )
     )
     return {
@@ -380,7 +397,8 @@ async def record_action_intent(state: WorkflowState, deps: WorkflowDeps) -> dict
         "status": "IN_PROGRESS",
         "action_attempt_id": attempt_id,
         "idempotency_key": idempotency_key,
-        "action_attempts": state.get("action_attempts", 0) + 1,
+        "intent_status": intent_status,
+        "action_attempts": durable_attempt,
     }
 
 
@@ -399,7 +417,28 @@ async def execute_action(state: WorkflowState, deps: WorkflowDeps) -> dict[str, 
     if raw_candidate is None or idempotency_key is None or attempt_id is None:
         return set_error(state, "EXECUTION_STATE_MISSING")
     proposal = parse_action_proposal(raw_candidate)
+
+    # Crash/replay recovery: the durable intent already records the outcome.
+    # Never re-execute a mutation whose result is known or uncertain.
+    intent_status = state.get("intent_status")
+    if intent_status == "SUCCEEDED":
+        return _replayed_result(state, "SUCCEEDED", "REPLAYED_SUCCESS")
+    if intent_status in {"FAILED", "CANCELLED"}:
+        return _replayed_result(state, "FAILED", "REPLAYED_FAILURE")
+    if intent_status in {"OUTCOME_UNKNOWN", "RECONCILED", "RUNNING"}:
+        # RUNNING without a recorded outcome means the worker died mid-call.
+        return _replayed_result(state, "OUTCOME_UNKNOWN", "CRASH_DURING_EXECUTION")
+
+    await deps.intents.mark_outcome(
+        idempotency_key=idempotency_key, status="RUNNING", result_code="EXECUTING"
+    )
     result = await deps.executor.execute(proposal, idempotency_key)
+    await deps.intents.mark_outcome(
+        idempotency_key=idempotency_key,
+        status=result.status,
+        result_code=result.result_code,
+        result_summary=result.summary[:1000],
+    )
     return {
         "current_node": "execute_action",
         "tool_result": result.model_dump(mode="json"),
@@ -407,20 +446,126 @@ async def execute_action(state: WorkflowState, deps: WorkflowDeps) -> dict[str, 
     }
 
 
+def _replayed_result(state: WorkflowState, status: str, result_code: str) -> dict[str, Any]:
+    return {
+        "current_node": "execute_action",
+        "tool_result": {
+            "action_attempt_id": state.get("action_attempt_id"),
+            "idempotency_key": state.get("idempotency_key"),
+            "status": status,
+            "result_code": result_code,
+            "summary": "Recovered from durable action intent; not re-executed.",
+            "observed_at": None,
+            "evidence_ids": [],
+            "retryable": False,
+        },
+    }
+
+
 async def reconcile_uncertain_action(state: WorkflowState, deps: WorkflowDeps) -> dict[str, Any]:
-    """Uncertain outcome: inspect target state before any retry (rule 11)."""
+    """Uncertain outcome: query target state before any retry (rule 11).
+
+    Never performs a mutation and never resolves the incident. Exhausting
+    the bounded reconciliation budget escalates with the uncertainty intact.
+    """
+    raw_candidate = state.get("candidate")
+    idempotency_key = state.get("idempotency_key")
     attempt_id = state.get("action_attempt_id")
-    if attempt_id is None:
+    if raw_candidate is None or idempotency_key is None or attempt_id is None:
         return set_error(state, "RECONCILE_STATE_MISSING")
-    verification = await deps.verifier.verify(UUID(state["incident_id"]), UUID(attempt_id))
-    # Reconciliation result is recorded; execution is never blindly retried.
-    if verification.passed:
+
+    proposal = parse_action_proposal(raw_candidate)
+    reconciliation = await deps.reconciler.reconcile(
+        proposal,
+        idempotency_key=idempotency_key,
+        action_attempt_id=UUID(attempt_id),
+    )
+    status_map = {
+        "APPLIED": ("RECONCILED", "RECONCILED_APPLIED"),
+        "NOT_APPLIED": ("FAILED", "RECONCILED_NOT_APPLIED"),
+        "INCONCLUSIVE": ("OUTCOME_UNKNOWN", "RECONCILIATION_INCONCLUSIVE"),
+    }
+    durable_status, result_code = status_map[reconciliation.outcome]
+    await deps.intents.mark_outcome(
+        idempotency_key=idempotency_key,
+        status=durable_status,
+        result_code=result_code,
+        result_summary=(
+            f"reconciliation={reconciliation.outcome} evidence={reconciliation.evidence_hash[:16]}"
+        ),
+    )
+    await deps.audit.append(
+        _audit_event(
+            state,
+            deps,
+            "ACTION_RECONCILED",
+            {
+                "action_attempt_id": attempt_id,
+                "idempotency_key": idempotency_key,
+                "outcome": reconciliation.outcome,
+                "result_code": result_code,
+                "evidence_hash": reconciliation.evidence_hash,
+            },
+        )
+    )
+
+    reconciliation_attempts = state.get("reconciliation_attempts", 0) + 1
+    update: dict[str, Any] = {
+        "current_node": "reconcile_uncertain_action",
+        "reconciliation": reconciliation.model_dump(mode="json"),
+        "reconciliation_attempts": reconciliation_attempts,
+        "status": "IN_PROGRESS",
+    }
+    if reconciliation.outcome == "INCONCLUSIVE":
+        if reconciliation_attempts >= state.get("max_reconciliation_attempts", 2):
+            update.update(set_error(state, "RECONCILIATION_EXHAUSTED"))
+        elif state.get("action_attempts", 0) >= state.get("max_action_attempts", 1):
+            # No retry path remains; do not spin reconciliation forever.
+            update.update(set_error(state, "RECONCILIATION_EXHAUSTED"))
+    elif reconciliation.outcome == "NOT_APPLIED" and state.get("action_attempts", 0) >= state.get(
+        "max_action_attempts", 1
+    ):
+        update.update(set_error(state, "RETRY_BUDGET_EXHAUSTED"))
+    return update
+
+
+async def prepare_retry(state: WorkflowState, deps: WorkflowDeps) -> dict[str, Any]:
+    """Re-evaluate policy and preconditions before any retry (PRD §8.2).
+
+    An approval consumed by the first attempt is *not* re-used: if the
+    policy requires approval again, the retry escalates rather than
+    bypassing the approval boundary on replay.
+    """
+    now = deps.clock.now()
+    if deadline_exceeded(state, now):
+        return set_error(state, "WORKFLOW_DEADLINE_EXCEEDED")
+    raw_candidate = state.get("candidate")
+    if raw_candidate is None:
+        return set_error(state, "RETRY_STATE_MISSING")
+    proposal = parse_action_proposal(raw_candidate)
+    incident = IncidentCreated.model_validate(state["incident"])
+    context = PolicyContext(
+        principal_id="workflow-worker",
+        environment=environment_or_unknown(incident.environment),
+        target_registered=True,
+        evidence_indicates_unhealthy=state.get("evidence_indicates_unhealthy", False),
+        retry_budget_available=state.get("action_attempts", 0)
+        < state.get("max_action_attempts", 1),
+        approval_satisfied=False,
+    )
+    decision = evaluate(proposal, context, deps.policy_snapshot, now=now)
+    if decision.outcome != "ALLOW":
         return {
-            "current_node": "reconcile_uncertain_action",
-            "verification": verification.model_dump(mode="json"),
-            "status": "IN_PROGRESS",
+            **set_error(state, "RETRY_DENIED_BY_POLICY"),
+            "policy_decision": decision.model_dump(mode="json"),
+            "policy_revalidated": True,
         }
-    return set_error(state, "RECONCILIATION_FAILED")
+    return {
+        "current_node": "prepare_retry",
+        "policy_decision": decision.model_dump(mode="json"),
+        "policy_revalidated": True,
+        "status": "IN_PROGRESS",
+    }
 
 
 async def verify_postcondition(state: WorkflowState, deps: WorkflowDeps) -> dict[str, Any]:
@@ -500,6 +645,7 @@ _NODE_FUNCTIONS: dict[str, NodeFn] = {
     "validate_approval": validate_approval,
     "record_action_intent": record_action_intent,
     "execute_action": execute_action,
+    "prepare_retry": prepare_retry,
     "reconcile_uncertain_action": reconcile_uncertain_action,
     "verify_postcondition": verify_postcondition,
     "update_itsm": update_itsm,
@@ -539,6 +685,7 @@ __all__ = [
     "execute_action",
     "finalize_audit",
     "normalize_incident",
+    "prepare_retry",
     "record_action_intent",
     "reconcile_uncertain_action",
     "request_approval",

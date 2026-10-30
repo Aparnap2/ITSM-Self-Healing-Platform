@@ -23,6 +23,8 @@ from itsm_agent.application.commands import (
     AuditPort,
     ExecutionLimits,
     ExecutorPort,
+    IntentStorePort,
+    ReconcilerPort,
     VerifierPort,
     WorkflowDeps,
 )
@@ -37,6 +39,7 @@ from itsm_agent.domain.events import (
 )
 from itsm_agent.domain.policies import default_policy_snapshot
 from itsm_agent.ports.model import TriageOutput
+from itsm_agent.simulators.infrastructure.reconciler import InfrastructureReconciler
 from itsm_agent.simulators.infrastructure.simulator import InfrastructureSimulator
 from itsm_agent.simulators.infrastructure.verifier import IndependentVerifier
 
@@ -82,8 +85,16 @@ class FakeDiagnostics:
 
 
 class SimExecutor(ExecutorPort):
-    def __init__(self, sim: InfrastructureSimulator) -> None:
+    def __init__(
+        self,
+        sim: InfrastructureSimulator,
+        *,
+        fault_mode: str = "transient_fail",
+        transient_failures: int = 0,
+    ) -> None:
         self.sim = sim
+        self.fault_mode = fault_mode
+        self.transient_failures = transient_failures
         self.calls: list[str] = []
 
     async def execute(self, proposal: Any, idempotency_key: str) -> ToolResult:
@@ -91,7 +102,11 @@ class SimExecutor(ExecutorPort):
         service = getattr(proposal, "service_name", "svc-a")
         env = getattr(proposal, "environment", "test")
         result = self.sim.restart_service(
-            service_name=service, environment=env, idempotency_key=idempotency_key
+            service_name=service,
+            environment=env,
+            idempotency_key=idempotency_key,
+            fault_mode=self.fault_mode,
+            transient_failures=self.transient_failures,
         )
         return ToolResult(
             action_attempt_id=uuid4(),
@@ -127,6 +142,56 @@ class SimVerifier(VerifierPort):
             evidence_id=uuid4(),
             verified_at=datetime.now(UTC),
             verifier_version=obs.verifier_version,
+        )
+
+
+class FakeIntentStore(IntentStorePort):
+    """In-memory idempotent intent store for simulator-backed tests."""
+
+    def __init__(self) -> None:
+        self._rows: dict[str, tuple[str, int]] = {}
+
+    async def record_intent(
+        self,
+        *,
+        incident_id: UUID,
+        workflow_id: UUID,
+        action_type: str,
+        resource_id: str,
+        idempotency_key: str,
+        proposal_hash: str,
+        adapter_name: str,
+        attempt_number: int,
+        recorded_at: datetime,
+    ) -> tuple[str, int]:
+        if idempotency_key in self._rows:
+            return self._rows[idempotency_key]
+        self._rows[idempotency_key] = ("INTENT_RECORDED", attempt_number)
+        return ("INTENT_RECORDED", attempt_number)
+
+    async def mark_outcome(
+        self,
+        *,
+        idempotency_key: str,
+        status: str,
+        result_code: str | None = None,
+        result_summary: str | None = None,
+    ) -> None:
+        if idempotency_key in self._rows:
+            att = self._rows[idempotency_key][1]
+            self._rows[idempotency_key] = (status, att)
+
+
+class SimReconciler(ReconcilerPort):
+    def __init__(self, sim: InfrastructureSimulator) -> None:
+        self.r = InfrastructureReconciler(sim)
+
+    async def reconcile(
+        self, proposal: Any, *, idempotency_key: str, action_attempt_id: UUID
+    ) -> Any:
+
+        return self.r.reconcile(
+            proposal, idempotency_key=idempotency_key, action_attempt_id=action_attempt_id
         )
 
 
@@ -228,9 +293,14 @@ def _state(incident: dict[str, Any]) -> WorkflowState:
         "approval_decision": None,
         "action_attempt_id": None,
         "idempotency_key": None,
+        "intent_status": None,
         "tool_result": None,
         "action_attempts": 0,
+        "reconciliation": None,
+        "reconciliation_attempts": 0,
         "verification": None,
+        "max_action_attempts": 1,
+        "max_reconciliation_attempts": 2,
         "model_attempts": 0,
         "tool_calls": 0,
         "deadline_at": None,
@@ -266,6 +336,8 @@ async def test_happy_path_resolves_with_audit_trail() -> None:
         diagnostics=FakeDiagnostics(),
         executor=executor,
         verifier=verifier,
+        reconciler=SimReconciler(sim),
+        intents=FakeIntentStore(),
         approvals=FakeApprovals(),
         audit=audit,
         clock=FakeClock(),
@@ -314,6 +386,8 @@ async def test_false_success_does_not_resolve() -> None:
         diagnostics=FakeDiagnostics(),
         executor=executor,
         verifier=verifier,
+        reconciler=SimReconciler(sim),
+        intents=FakeIntentStore(),
         approvals=FakeApprovals(),
         audit=audit,
         clock=FakeClock(),
@@ -467,6 +541,8 @@ async def test_audit_no_secrets_in_payloads() -> None:
         diagnostics=FakeDiagnostics(),
         executor=executor,
         verifier=verifier,
+        reconciler=SimReconciler(sim),
+        intents=FakeIntentStore(),
         approvals=FakeApprovals(),
         audit=audit,
         clock=FakeClock(),

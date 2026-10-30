@@ -173,6 +173,32 @@ class ToolResult(StrictModel):
     summary: Annotated[str, StringConstraints(max_length=1500)]
     observed_at: datetime
     evidence_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    #: Only a ``FAILED`` result the adapter can prove did not execute may be
+    #: retried (PRD §6.5 action contract). Never set for OUTCOME_UNKNOWN.
+    retryable: bool = False
+
+
+class ReconciliationResult(StrictModel):
+    """Outcome of querying authoritative target state after an uncertain action.
+
+    ``APPLIED``     — the intended postcondition is present; do not re-execute.
+    ``NOT_APPLIED`` — evidence proves the mutation did not occur; a policy-
+                      checked retry may be considered.
+    ``INCONCLUSIVE``— evidence is unavailable, stale, or contradictory; never
+                      authorizes a retry or a resolution.
+    """
+
+    reconciliation_id: UUID
+    action_attempt_id: UUID
+    idempotency_key: SafeIdentifier
+    outcome: Literal["APPLIED", "NOT_APPLIED", "INCONCLUSIVE"]
+    result_code: SafeIdentifier
+    observed_state: dict[str, str | int | float | bool | None] = Field(
+        default_factory=dict, max_length=50
+    )
+    evidence_hash: Sha256Hex
+    observed_at: datetime
+    reconciler_version: SafeIdentifier
 
 
 class VerificationResult(StrictModel):

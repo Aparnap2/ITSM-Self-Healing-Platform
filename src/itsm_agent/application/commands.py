@@ -18,6 +18,7 @@ from itsm_agent.domain.events import (
     AuditEvent,
     DiagnosticObservation,
     IncidentCreated,
+    ReconciliationResult,
     ToolResult,
     VerificationResult,
 )
@@ -46,6 +47,55 @@ class VerifierPort(Protocol):
     """Independent postcondition verification via a read-only path."""
 
     async def verify(self, incident_id: UUID, action_attempt_id: UUID) -> VerificationResult: ...
+
+
+@runtime_checkable
+class ReconcilerPort(Protocol):
+    """Authoritative target-state reconciliation for uncertain actions.
+
+    Must not return ``APPLIED`` or ``NOT_APPLIED`` without fresh evidence.
+    """
+
+    async def reconcile(
+        self,
+        proposal: object,
+        *,
+        idempotency_key: str,
+        action_attempt_id: UUID,
+    ) -> ReconciliationResult: ...
+
+
+@runtime_checkable
+class IntentStorePort(Protocol):
+    """Durable action-intent store (rule 10: intent before side effect)."""
+
+    async def record_intent(
+        self,
+        *,
+        incident_id: UUID,
+        workflow_id: UUID,
+        action_type: str,
+        resource_id: str,
+        idempotency_key: str,
+        proposal_hash: str,
+        adapter_name: str,
+        attempt_number: int,
+        recorded_at: datetime,
+    ) -> tuple[str, int]:
+        """Persist intent. Returns (durable status, attempt_number).
+
+        Replaying the same idempotency key returns the existing row without
+        overwriting it, so a crashed attempt resumes from durable state.
+        """
+
+    async def mark_outcome(
+        self,
+        *,
+        idempotency_key: str,
+        status: str,
+        result_code: str | None = None,
+        result_summary: str | None = None,
+    ) -> None: ...
 
 
 @runtime_checkable
@@ -86,6 +136,8 @@ class ExecutionLimits:
     max_model_attempts: int = 3
     max_tool_calls: int = 8
     max_action_attempts: int = 1
+    #: Bounded reconciliation passes before an uncertain outcome escalates.
+    max_reconciliation_attempts: int = 2
     deadline_seconds: float = 120.0
     approval_lifetime_seconds: float = 900.0
 
@@ -98,6 +150,8 @@ class WorkflowDeps:
     diagnostics: DiagnosticsPort
     executor: ExecutorPort
     verifier: VerifierPort
+    reconciler: ReconcilerPort
+    intents: IntentStorePort
     approvals: ApprovalPort
     audit: AuditPort
     clock: Clock

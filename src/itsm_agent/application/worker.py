@@ -23,6 +23,8 @@ from itsm_agent.domain.events import IncidentCreated
 from itsm_agent.domain.models import Incident, IncidentStatus
 from itsm_agent.ports.repositories import (
     IncidentRepository,
+    TerminalStateConflictError,
+    TerminalStateRepository,
     WorkflowStateRepository,
 )
 
@@ -43,6 +45,7 @@ async def process_event(
     deps: WorkflowDeps,
     incidents: IncidentRepository,
     workflow_states: WorkflowStateRepository,
+    terminal_state: TerminalStateRepository,
     clock_now: datetime,
 ) -> ProcessResult:
     """Process one accepted event end-to-end. Idempotent on external_event_id."""
@@ -99,9 +102,14 @@ async def process_event(
         "approval_decision": None,
         "action_attempt_id": None,
         "idempotency_key": None,
+        "intent_status": None,
         "tool_result": None,
         "action_attempts": 0,
+        "reconciliation": None,
+        "reconciliation_attempts": 0,
         "verification": None,
+        "max_action_attempts": deps.limits.max_action_attempts,
+        "max_reconciliation_attempts": deps.limits.max_reconciliation_attempts,
         "model_attempts": 0,
         "tool_calls": 0,
         "deadline_at": None,
@@ -119,19 +127,29 @@ async def process_event(
     current_node = str(final.get("current_node", ""))
     error_code = final.get("error_code")
     wf_status = "SUCCEEDED" if final_status == "RESOLVED" else final_status
-    await workflow_states.update(
-        workflow_id,
-        status=wf_status,
-        current_node=current_node,
-        attempt_count=int(final.get("action_attempts", 0)),
-        last_error_code=error_code,
-        finished=True,
-    )
-    await incidents.update_status(
-        incident_id,
-        status=final_status,
-        current_workflow_id=workflow_id,
-    )
+    try:
+        await terminal_state.finalize(
+            workflow_id=workflow_id,
+            incident_id=incident_id,
+            workflow_status=wf_status,
+            current_node=current_node,
+            attempt_count=int(final.get("action_attempts", 0)),
+            last_error_code=error_code,
+            incident_status=final_status,
+            resolution_summary=final.get("resolution_summary"),
+        )
+    except TerminalStateConflictError:
+        # A concurrent attempt already committed a terminal transition. Treat
+        # this delivery as a duplicate instead of re-running side effects.
+        committed = await incidents.get(incident_id)
+        if committed is not None:
+            return ProcessResult(
+                incident_id=incident_id,
+                workflow_id=workflow_id,
+                status=str(committed.status),
+                already_processed=True,
+            )
+        raise
     return ProcessResult(
         incident_id=incident_id,
         workflow_id=workflow_id,
@@ -167,6 +185,7 @@ async def consume_one(
     deps: WorkflowDeps,
     incidents: IncidentRepository,
     workflow_states: WorkflowStateRepository,
+    terminal_state: TerminalStateRepository,
     clock_now: Callable[[], datetime],
     max_deliver: int = 3,
     timeout_seconds: float = 1.0,
@@ -199,6 +218,7 @@ async def consume_one(
             deps=deps,
             incidents=incidents,
             workflow_states=workflow_states,
+            terminal_state=terminal_state,
             clock_now=clock_now(),
         )
     except Exception as exc:  # noqa: BLE001 — transient/unknown failure

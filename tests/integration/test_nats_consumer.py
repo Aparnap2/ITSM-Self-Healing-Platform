@@ -16,6 +16,7 @@ from itsm_agent.adapters.messaging.nats_bus import (
 from itsm_agent.adapters.persistence.ingestion_sink import PsycopgIngestionSink
 from itsm_agent.adapters.persistence.pool import PersistenceConfig, create_pool
 from itsm_agent.adapters.persistence.repositories import RepositoryBundle
+from itsm_agent.adapters.persistence.workflow_intents import WorkflowIntentStore
 from itsm_agent.application.commands import (
     ExecutionLimits,
     WorkflowDeps,
@@ -25,10 +26,12 @@ from itsm_agent.domain.events import IncidentCreated
 from itsm_agent.domain.policies import default_policy_snapshot
 from itsm_agent.simulators.infrastructure.simulator import InfrastructureSimulator
 from tests.integration.test_ingestion_loop import (
+    FakeApprovals,
     FakeClock,
     FakeDiagnostics,
     FakeModel,
     SimExecutor,
+    SimReconciler,
     SimVerifier,
 )
 
@@ -104,9 +107,9 @@ async def test_nats_consumer_processes_published_event(pg_dsn: str, nats_url: st
             diagnostics=FakeDiagnostics(),
             executor=SimExecutor(sim),
             verifier=SimVerifier(sim, "payments-api", "test"),
-            approvals=__import__(
-                "tests.integration.test_ingestion_loop", fromlist=["FakeApprovals"]
-            ).FakeApprovals(),
+            reconciler=SimReconciler(sim),
+            intents=WorkflowIntentStore(repos.action_intents),
+            approvals=FakeApprovals(),
             audit=PsycopgAuditPort(repos.audit),
             clock=FakeClock(),
             limits=ExecutionLimits(),
@@ -136,6 +139,7 @@ async def test_nats_consumer_processes_published_event(pg_dsn: str, nats_url: st
             deps=deps,
             incidents=repos.incidents,
             workflow_states=repos.workflow_state,
+            terminal_state=repos.terminal_state,
             clock_now=lambda: datetime.now(UTC),
             max_deliver=3,
             timeout_seconds=2.0,
@@ -186,9 +190,9 @@ async def test_nats_consumer_duplicate_delivery_harmless(pg_dsn: str, nats_url: 
             diagnostics=FakeDiagnostics(),
             executor=SimExecutor(sim),
             verifier=SimVerifier(sim, "payments-api", "test"),
-            approvals=__import__(
-                "tests.integration.test_ingestion_loop", fromlist=["FakeApprovals"]
-            ).FakeApprovals(),
+            reconciler=SimReconciler(sim),
+            intents=WorkflowIntentStore(repos.action_intents),
+            approvals=FakeApprovals(),
             audit=PsycopgAuditPort(repos.audit),
             clock=FakeClock(),
             limits=ExecutionLimits(),
@@ -217,6 +221,7 @@ async def test_nats_consumer_duplicate_delivery_harmless(pg_dsn: str, nats_url: 
             deps=deps,
             incidents=repos.incidents,
             workflow_states=repos.workflow_state,
+            terminal_state=repos.terminal_state,
             clock_now=lambda: datetime.now(UTC),
             max_deliver=3,
             timeout_seconds=2.0,
@@ -231,6 +236,7 @@ async def test_nats_consumer_duplicate_delivery_harmless(pg_dsn: str, nats_url: 
             deps=deps,
             incidents=repos.incidents,
             workflow_states=repos.workflow_state,
+            terminal_state=repos.terminal_state,
             clock_now=datetime.now(UTC),
         )
         assert result2.already_processed is True

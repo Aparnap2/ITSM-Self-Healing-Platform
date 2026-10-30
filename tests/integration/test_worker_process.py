@@ -17,6 +17,7 @@ from itsm_agent.adapters.messaging.outbox_relay import OutboxRelay
 from itsm_agent.adapters.persistence.ingestion_sink import PsycopgIngestionSink
 from itsm_agent.adapters.persistence.pool import PersistenceConfig, create_pool
 from itsm_agent.adapters.persistence.repositories import RepositoryBundle
+from itsm_agent.adapters.persistence.workflow_intents import WorkflowIntentStore
 from itsm_agent.application.commands import ExecutionLimits, WorkflowDeps
 from itsm_agent.domain.events import IncidentCreated
 from itsm_agent.domain.policies import default_policy_snapshot
@@ -27,6 +28,7 @@ from tests.integration.test_ingestion_loop import (
     FakeDiagnostics,
     FakeModel,
     SimExecutor,
+    SimReconciler,
     SimVerifier,
 )
 
@@ -171,6 +173,8 @@ async def test_crash_after_commit_is_idempotent(pg_dsn: str) -> None:
             diagnostics=FakeDiagnostics(),
             executor=SimExecutor(sim),
             verifier=SimVerifier(sim, "payments-api", "test"),
+            reconciler=SimReconciler(sim),
+            intents=WorkflowIntentStore(repos.action_intents),
             approvals=FakeApprovals(),
             audit=PsycopgAuditPort(repos.audit),
             clock=FakeClock(),
@@ -190,6 +194,7 @@ async def test_crash_after_commit_is_idempotent(pg_dsn: str) -> None:
             deps=deps,
             incidents=repos.incidents,
             workflow_states=repos.workflow_state,
+            terminal_state=repos.terminal_state,
             clock_now=datetime.now(UTC),
         )
         assert r1.already_processed is False
@@ -200,6 +205,7 @@ async def test_crash_after_commit_is_idempotent(pg_dsn: str) -> None:
             deps=deps,
             incidents=repos.incidents,
             workflow_states=repos.workflow_state,
+            terminal_state=repos.terminal_state,
             clock_now=datetime.now(UTC),
         )
         assert r2.already_processed is True

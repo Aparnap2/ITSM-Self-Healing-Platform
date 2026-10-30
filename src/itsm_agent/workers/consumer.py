@@ -25,12 +25,14 @@ from itsm_agent.adapters.messaging.nats_bus import (
 from itsm_agent.adapters.persistence.audit_port import PsycopgAuditPort
 from itsm_agent.adapters.persistence.pool import PersistenceConfig, create_pool
 from itsm_agent.adapters.persistence.repositories import RepositoryBundle
+from itsm_agent.adapters.persistence.workflow_intents import WorkflowIntentStore
 from itsm_agent.application.commands import (
     ExecutionLimits,
     WorkflowDeps,
 )
 from itsm_agent.application.worker import consume_one
 from itsm_agent.domain.policies import default_policy_snapshot
+from itsm_agent.simulators.infrastructure.reconciler import InfrastructureReconciler
 from itsm_agent.simulators.infrastructure.simulator import InfrastructureSimulator
 from itsm_agent.simulators.infrastructure.verifier import IndependentVerifier
 
@@ -138,6 +140,21 @@ class Worker:
                     verifier_version=obs.verifier_version,
                 )
 
+        from itsm_agent.application.commands import ReconcilerPort
+
+        class SimReconciler(ReconcilerPort):
+            def __init__(self, s: InfrastructureSimulator) -> None:
+                self.r = InfrastructureReconciler(s)
+
+            async def reconcile(
+                self, proposal: Any, *, idempotency_key: str, action_attempt_id: Any
+            ) -> Any:
+                return self.r.reconcile(
+                    proposal,
+                    idempotency_key=idempotency_key,
+                    action_attempt_id=action_attempt_id,
+                )
+
         from itsm_agent.application.commands import DiagnosticsPort
 
         class FakeDiagnostics(DiagnosticsPort):
@@ -195,6 +212,8 @@ class Worker:
             diagnostics=FakeDiagnostics(),
             executor=SimExecutor(sim),
             verifier=SimVerifier(sim),
+            reconciler=SimReconciler(sim),
+            intents=WorkflowIntentStore(self._repos.action_intents),
             approvals=FakeApprovals(),
             audit=PsycopgAuditPort(self._repos.audit),
             clock=FakeClock(),
@@ -224,6 +243,7 @@ class Worker:
                 deps=self._deps,
                 incidents=self._repos.incidents,
                 workflow_states=self._repos.workflow_state,
+                terminal_state=self._repos.terminal_state,
                 clock_now=lambda: datetime.now(UTC),
                 max_deliver=3,
                 timeout_seconds=2.0,
@@ -267,6 +287,7 @@ class Worker:
                         deps=_deps,
                         incidents=_repos.incidents,
                         workflow_states=_repos.workflow_state,
+                        terminal_state=_repos.terminal_state,
                         clock_now=lambda: datetime.now(UTC),
                         max_deliver=3,
                         timeout_seconds=1.0,

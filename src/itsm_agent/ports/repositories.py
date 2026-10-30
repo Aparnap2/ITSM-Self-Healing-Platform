@@ -246,11 +246,45 @@ class WorkflowStateRepository(Protocol):
     ) -> WorkflowState: ...
 
 
+class TerminalStateConflictError(RuntimeError):
+    """A terminal workflow/incident transition was rejected.
+
+    Raised when the workflow run is already finished or the incident already
+    holds a terminal status. Duplicate, concurrent, or stale deliveries are
+    rejected instead of silently overwriting committed business state.
+    """
+
+
+@runtime_checkable
+class TerminalStateRepository(Protocol):
+    """Atomic terminal transition for a workflow run and its incident.
+
+    A single transaction owns both writes and row-locks both aggregates so a
+    failure at any point leaves neither side committed. This is the only
+    supported way to move a workflow into a terminal status.
+    """
+
+    async def finalize(
+        self,
+        *,
+        workflow_id: UUID,
+        incident_id: UUID,
+        workflow_status: str,
+        current_node: str,
+        attempt_count: int,
+        last_error_code: str | None,
+        incident_status: str,
+        resolution_summary: str | None = None,
+    ) -> None: ...
+
+
 __all__ = [
     "OutboxEvent",
     "InboxReceipt",
     "DuplicateIdempotencyKeyError",
     "ApprovalNotPendingError",
+    "TerminalStateConflictError",
+    "TerminalStateRepository",
     "IncidentRepository",
     "InboxRepository",
     "OutboxRepository",

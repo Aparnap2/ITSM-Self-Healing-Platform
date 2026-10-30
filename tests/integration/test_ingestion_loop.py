@@ -12,6 +12,7 @@ from itsm_agent.adapters.persistence.audit_port import PsycopgAuditPort
 from itsm_agent.adapters.persistence.ingestion_sink import PsycopgIngestionSink
 from itsm_agent.adapters.persistence.pool import PersistenceConfig, create_pool
 from itsm_agent.adapters.persistence.repositories import RepositoryBundle
+from itsm_agent.adapters.persistence.workflow_intents import WorkflowIntentStore
 from itsm_agent.application.commands import (
     ExecutionLimits,
     ExecutorPort,
@@ -27,6 +28,7 @@ from itsm_agent.domain.events import (
 )
 from itsm_agent.domain.policies import default_policy_snapshot
 from itsm_agent.ports.model import TriageOutput
+from itsm_agent.simulators.infrastructure.reconciler import InfrastructureReconciler
 from itsm_agent.simulators.infrastructure.simulator import InfrastructureSimulator
 from itsm_agent.simulators.infrastructure.verifier import IndependentVerifier
 
@@ -63,14 +65,28 @@ class FakeDiagnostics:
 
 
 class SimExecutor(ExecutorPort):
-    def __init__(self, sim: InfrastructureSimulator) -> None:
+    def __init__(
+        self,
+        sim: InfrastructureSimulator,
+        *,
+        fault_mode: str = "transient_fail",
+        transient_failures: int = 0,
+    ) -> None:
         self.sim = sim
+        self.fault_mode = fault_mode
+        self.transient_failures = transient_failures
+        self.calls: list[str] = []
 
     async def execute(self, proposal: Any, idempotency_key: str) -> ToolResult:
+        self.calls.append(idempotency_key)
         service = getattr(proposal, "service_name", "payments-api")
         env = getattr(proposal, "environment", "test")
         result = self.sim.restart_service(
-            service_name=service, environment=env, idempotency_key=idempotency_key
+            service_name=service,
+            environment=env,
+            idempotency_key=idempotency_key,
+            fault_mode=self.fault_mode,
+            transient_failures=self.transient_failures,
         )
         return ToolResult(
             action_attempt_id=uuid4(),
@@ -123,6 +139,18 @@ class FakeApprovals:
 
     async def get_decision(self, approval_id: UUID) -> None:
         return None
+
+
+class SimReconciler:
+    def __init__(self, sim: InfrastructureSimulator) -> None:
+        self.r = InfrastructureReconciler(sim)
+
+    async def reconcile(
+        self, proposal: Any, *, idempotency_key: str, action_attempt_id: Any
+    ) -> Any:
+        return self.r.reconcile(
+            proposal, idempotency_key=idempotency_key, action_attempt_id=action_attempt_id
+        )
 
 
 class FakeClock:
@@ -190,6 +218,8 @@ async def test_ingestion_loop_resolves(pg_dsn: str) -> None:
             diagnostics=FakeDiagnostics(),
             executor=SimExecutor(sim),
             verifier=SimVerifier(sim, "payments-api", "test"),
+            reconciler=SimReconciler(sim),
+            intents=WorkflowIntentStore(repos.action_intents),
             approvals=FakeApprovals(),
             audit=PsycopgAuditPort(repos.audit),
             clock=FakeClock(),
@@ -203,6 +233,7 @@ async def test_ingestion_loop_resolves(pg_dsn: str) -> None:
             deps=deps,
             incidents=repos.incidents,
             workflow_states=repos.workflow_state,
+            terminal_state=repos.terminal_state,
             clock_now=datetime.now(UTC),
         )
         assert result.status == "RESOLVED"
@@ -227,6 +258,7 @@ async def test_ingestion_loop_resolves(pg_dsn: str) -> None:
             deps=deps,
             incidents=repos.incidents,
             workflow_states=repos.workflow_state,
+            terminal_state=repos.terminal_state,
             clock_now=datetime.now(UTC),
         )
         assert result2.already_processed is True

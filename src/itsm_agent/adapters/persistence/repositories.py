@@ -29,6 +29,7 @@ from itsm_agent.ports.repositories import (
     InboxReceipt,
     Incident,
     OutboxEvent,
+    TerminalStateConflictError,
     WorkflowState,
 )
 
@@ -348,6 +349,11 @@ class PsycopgActionIntentRepository(_BaseRepository):
                 """
                     UPDATE action_intents SET
                         status = %(status)s,
+                        started_at = CASE
+                            WHEN %(status)s = 'RUNNING'
+                            THEN COALESCE(started_at, %(now)s)
+                            ELSE started_at
+                        END,
                         result_code = %(result_code)s,
                         result_summary = %(result_summary)s,
                         result_evidence_id = %(result_evidence_id)s,
@@ -548,6 +554,93 @@ class PsycopgWorkflowStateRepository(_BaseRepository):
         return WorkflowState.model_validate(row)
 
 
+class PsycopgTerminalStateRepository(_BaseRepository):
+    """Atomic terminal transition (workflow run + incident) in one transaction.
+
+    Lock order is incident -> workflow_state on both paths; every writer uses
+    the same order so concurrent finalizers cannot deadlock. A workflow that is
+    already finished, or an incident already in a terminal status, raises
+    ``TerminalStateConflictError`` rather than overwriting committed state.
+    """
+
+    _TERMINAL_INCIDENT_STATUSES = ("RESOLVED", "ESCALATED", "REJECTED")
+
+    async def finalize(
+        self,
+        *,
+        workflow_id: UUID,
+        incident_id: UUID,
+        workflow_status: str,
+        current_node: str,
+        attempt_count: int,
+        last_error_code: str | None,
+        incident_status: str,
+        resolution_summary: str | None = None,
+        conn: AsyncConnection | None = None,
+    ) -> None:
+        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                "SELECT status FROM incidents WHERE id = %s FOR UPDATE",
+                (incident_id,),
+            )
+            incident_row = await cur.fetchone()
+            if incident_row is None:
+                raise LookupError(f"incident not found: {incident_id}")
+            if incident_row["status"] in self._TERMINAL_INCIDENT_STATUSES:
+                raise TerminalStateConflictError(
+                    f"incident {incident_id} already terminal: {incident_row['status']}"
+                )
+
+            await cur.execute(
+                "SELECT finished_at FROM workflow_state WHERE id = %s FOR UPDATE",
+                (workflow_id,),
+            )
+            workflow_row = await cur.fetchone()
+            if workflow_row is None:
+                raise LookupError(f"workflow state not found: {workflow_id}")
+            if workflow_row["finished_at"] is not None:
+                raise TerminalStateConflictError(f"workflow {workflow_id} already finished")
+
+            now = _utcnow()
+            await cur.execute(
+                """
+                UPDATE incidents SET
+                    status = %(status)s,
+                    resolution_summary = COALESCE(%(summary)s, resolution_summary),
+                    current_workflow_id = %(workflow_id)s,
+                    updated_at = %(now)s
+                WHERE id = %(id)s
+                """,
+                {
+                    "status": incident_status,
+                    "summary": resolution_summary,
+                    "workflow_id": workflow_id,
+                    "now": now,
+                    "id": incident_id,
+                },
+            )
+            await cur.execute(
+                """
+                UPDATE workflow_state SET
+                    status = %(status)s,
+                    current_node = %(node)s,
+                    attempt_count = %(attempts)s,
+                    last_error_code = %(error)s,
+                    updated_at = %(now)s,
+                    finished_at = %(now)s
+                WHERE id = %(id)s
+                """,
+                {
+                    "status": workflow_status,
+                    "node": current_node,
+                    "attempts": attempt_count,
+                    "error": last_error_code,
+                    "now": now,
+                    "id": workflow_id,
+                },
+            )
+
+
 class RepositoryBundle:
     """All repositories sharing one pool."""
 
@@ -559,3 +652,4 @@ class RepositoryBundle:
         self.approvals = PsycopgApprovalRepository(pool)
         self.audit = PsycopgAuditRepository(pool)
         self.workflow_state = PsycopgWorkflowStateRepository(pool)
+        self.terminal_state = PsycopgTerminalStateRepository(pool)
