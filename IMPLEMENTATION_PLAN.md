@@ -57,7 +57,7 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 - **Scope:** Batch consumer, checkpoints, idempotent projections, dead-letter, retry.
 - **Depends on:** Task 6
 
-### Task 8: AWS CloudTrail adapter (LocalStack) — ⏳ TODO
+### Task 8: AWS CloudTrail adapter (Moto) — ✅ DONE
 ### Task 9: PostgreSQL pgAudit adapter — ⏳ TODO
 ### Task 10: GitHub org audit adapter — ⏳ TODO
 ### Task 11: Identity + resource resolution — ⏳ TODO
