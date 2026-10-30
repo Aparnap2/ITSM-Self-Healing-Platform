@@ -19,7 +19,7 @@ from itsm_agent.adapters.messaging.nats_bus import (
     dispatch_once,
 )
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.fault_injection]
 
 MAX_DELIVER = 3
 

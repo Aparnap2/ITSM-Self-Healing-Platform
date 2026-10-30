@@ -42,7 +42,7 @@ from itsm_agent.ports.repositories import TerminalStateConflictError
 from itsm_agent.simulators.infrastructure.simulator import InfrastructureSimulator
 from itsm_agent.simulators.infrastructure.verifier import IndependentVerifier
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.fault_injection]
 
 
 class FakeModel:

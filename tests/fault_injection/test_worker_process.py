@@ -32,7 +32,7 @@ from tests.integration.test_ingestion_loop import (
     SimVerifier,
 )
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.fault_injection]
 
 
 async def _reset(pg_dsn: str, nats_url: str) -> None:

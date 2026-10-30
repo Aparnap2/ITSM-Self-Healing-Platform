@@ -19,7 +19,7 @@ from itsm_agent.adapters.messaging.nats_bus import (
 from itsm_agent.adapters.persistence.repositories import RepositoryBundle
 from itsm_agent.ports.repositories import ActionIntent, Incident
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.fault_injection]
 
 
 async def _seed_incident(repos: RepositoryBundle) -> Incident:
