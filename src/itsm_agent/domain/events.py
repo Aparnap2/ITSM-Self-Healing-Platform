@@ -77,6 +77,38 @@ class SourceEvent(StrictModel):
 
 
 # ---------------------------------------------------------------------------
+# 6.12 Investigation (Task 13) — selective agentic reasoning
+# ---------------------------------------------------------------------------
+
+
+class InvestigationRequest(StrictModel):
+    """Bounded request to investigate a finding."""
+
+    investigation_id: UUID
+    tenant_id: UUID
+    finding_id: UUID
+    evidence_snapshot_ids: list[UUID] = Field(default_factory=list, max_length=50)
+    question: Annotated[str, StringConstraints(max_length=1000)]
+    max_tool_calls: int = Field(default=5, ge=1, le=20)
+    max_model_calls: int = Field(default=2, ge=1, le=5)
+    deadline_seconds: float = 60.0
+
+
+class InvestigationProposal(StrictModel):
+    """Validated model output; evidence references must exist in snapshot."""
+
+    investigation_id: UUID
+    hypothesis: Annotated[str, StringConstraints(max_length=2000)]
+    supporting_evidence: list[UUID] = Field(default_factory=list, max_length=50)
+    contradicting_evidence: list[UUID] = Field(default_factory=list, max_length=50)
+    missing_evidence: list[str] = Field(default_factory=list, max_length=20)
+    uncertainty: Annotated[str, StringConstraints(max_length=1000)]
+    recommended_disposition: Literal["CONFIRM", "DISMISS", "NEEDS_MORE_EVIDENCE"]
+    model_version: SafeIdentifier
+    prompt_version: SafeIdentifier
+
+
+# ---------------------------------------------------------------------------
 # 6.1 Incident event
 # ---------------------------------------------------------------------------
 

@@ -62,7 +62,7 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 ### Task 10: GitHub org audit adapter — ✅ DONE
 ### Task 11: Identity + resource resolution — ⏳ TODO
 ### Task 12: Deterministic detection + coverage engine — ⏳ TODO
-### Task 13: Agentic investigation layer (read-only tools) — ⏳ TODO
+### Task 13: Agentic investigation layer (read-only tools) — ✅ DONE
 ### Task 14: Evidence reporting + reviewer workflow — ⏳ TODO
 ### Task 15: Security/privacy/multi-tenancy — ⏳ TODO
 ### Task 16: Reliability/observability/E2E + golden dataset — ⏳ TODO
