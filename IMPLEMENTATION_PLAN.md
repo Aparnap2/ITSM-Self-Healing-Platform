@@ -66,7 +66,7 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 ### Task 14: Evidence reporting + reviewer workflow — ⏳ TODO
 ### Task 15: Security/privacy/multi-tenancy — ⏳ TODO
 ### Task 16: Reliability/observability/E2E + golden dataset — ⏳ TODO
-### Task 17: Controlled pilot — ⏳ TODO
+### Task 17: Controlled pilot — ✅ DONE
 ### Task 18: Production readiness — ⏳ TODO
 
 ## Data mutability boundaries (per review)
