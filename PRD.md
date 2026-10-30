@@ -2,7 +2,15 @@
 
 ## Product Requirements Document (PRD)
 
-**Status:** Pivot specification (documentation phase)
+**Status:** Pivot slices implemented on `feat/access-audit-foundation`:
+frozen canonical event contract (`docs/event-contract.md`), source adapters
+(CloudTrail/Moto, pgAudit, GitHub), durable ingestion with outbox + NATS
+JetStream consumers and replay, identity resolution, deterministic detection
+and coverage, evidence reporting with reviewer decisions, and a controlled
+pilot scenario (per-task commits in IMPLEMENTATION_PLAN.md). Release
+qualification repair (Task CI-0: CI repair, security scan gates, independent
+acceptance verification) is in progress. Not production ready: acceptance
+verification is still pending and must not be claimed otherwise.
 **Product:** Event-Driven, Evidence-First Agentic Security Audit System
 **Deployment target:** Local Docker Compose first; no real enterprise environment required.
 **Primary demonstration:** Ingest security events from multiple sources, preserve

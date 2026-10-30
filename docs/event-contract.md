@@ -97,10 +97,8 @@ Two versions are tracked independently:
 - `source_schema_version`: version of the source system's event format.
 - `canonical_schema_version`: version of this normalized contract.
 
-
-- `schema_version` on every event (e.g., "1.0").
-- Backward-compatible additions only within a major version.
-- Breaking changes require new major version and migration plan.
+Backward-compatible additions only within a major version.
+Breaking changes require a new major version and migration plan.
 
 ## Strict Pydantic
 
