@@ -278,3 +278,58 @@ class IdentityMapping(StrictModel):
     provenance: str
     valid_from: datetime
     valid_to: datetime | None = None
+
+
+class AccessFact(StrictModel):
+    """Rebuildable normalized access fact derived from source events."""
+
+    id: UUID
+    tenant_id: UUID
+    source_event_id: UUID
+    principal_id: str | None = None
+    resource_id: str | None = None
+    action: str
+    permission_context: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    granted_at: datetime | None = None
+    observed_at: datetime
+    fact_hash: str
+
+
+class Finding(StrictModel):
+    """Deterministic detection result with evidence linkage."""
+
+    id: UUID
+    tenant_id: UUID
+    finding_type: str
+    severity: Severity
+    status: str = "OPEN"
+    title: str
+    description: str
+    detected_at: datetime
+    rule_version: str
+    risk_score: int = 0
+    outcome: str  # VIOLATION | SUSPICIOUS | COVERAGE_GAP | INCONCLUSIVE
+
+
+class EvidenceReference(StrictModel):
+    """Link between a finding and its supporting evidence."""
+
+    id: UUID
+    finding_id: UUID
+    source_event_id: UUID | None = None
+    access_fact_id: UUID | None = None
+    content_hash: str
+    excerpt: str | None = None
+    trust_level: str
+    collected_at: datetime
+
+
+class CoverageStatus(StrictModel):
+    """Source coverage monitoring state."""
+
+    id: UUID
+    tenant_id: UUID
+    source: str
+    last_event_time: datetime | None = None
+    expected_cadence_seconds: int | None = None
+    status: str = "UNKNOWN"
