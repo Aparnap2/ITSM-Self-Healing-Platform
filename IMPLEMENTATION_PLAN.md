@@ -81,7 +81,7 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 - **Verification gap:** the mapping-repository ingest path has no integration test in-repo; acceptance criteria are not independently verified.
 
 ### Task 12: Deterministic detection + coverage engine — 🟡 IMPLEMENTED (slice committed; independent acceptance verification pending)
-- **Commit:** 80f08e3 — `migrations/004_detection.sql` (annotated "(Task 12)": access_facts, findings, evidence_references, coverage_status), `src/itsm_agent/detection/engine.py`, `src/itsm_agent/domain/models.py` (finding/access-fact additions), `tests/unit/test_detection.py`.
+- **Commit:** 80f08e3 (base) + Task 12.8 approval-evidence detection in ee55c3a — `src/itsm_agent/domain/models.py` (`ApprovalEvidence`), `src/itsm_agent/detection/engine.py` (`detect_approval_violation` + aliases, extended `run_detection`), `tests/unit/test_approval_detection.py` (16 cases: valid/missing/expired/revoked/denied/mismatch/coverage-gap/unknown-identity/cross-tenant/timezone/dict-input/source_coverage/aliases).
 - **Verification gap:** unit tests exist, no integration/e2e detection run is independently verified; acceptance criteria pending Task CI-0 evidence.
 
 ### Task 13: Agentic investigation layer (read-only tools) — ✅ DONE
