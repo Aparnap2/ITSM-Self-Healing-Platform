@@ -39,7 +39,7 @@ NATS_URL = os.environ.get("ITSM_TEST_NATS_URL", "nats://localhost:4222")
 
 #: When truthy, unreachable services fail the run instead of skipping it.
 #: CI sets ``ITSM_TEST_STRICT=1`` so a missing local service is a red job.
-STRICT = bool(os.environ.get("ITSM_TEST_STRICT"))
+STRICT = os.environ.get("ITSM_TEST_STRICT") == "1"
 
 #: Full list of application tables from ``migrations/*.sql``. Truncating
 #: all of them guarantees cross-test isolation; a new migration must add
