@@ -23,7 +23,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from itsm_agent.domain.events import SourceEvent
-from itsm_agent.domain.models import IdentityMapping, ReviewDecision
+from itsm_agent.domain.models import Finding, IdentityMapping, ReviewDecision
 from itsm_agent.ports.repositories import (
     ActionIntent,
     ApprovalNotPendingError,
@@ -722,22 +722,6 @@ class PsycopgReviewDecisionRepository(_BaseRepository):
         ]
 
 
-class RepositoryBundle:
-    """All repositories sharing one pool."""
-
-    def __init__(self, pool: AsyncConnectionPool[AsyncConnection]) -> None:
-        self.incidents = PsycopgIncidentRepository(pool)
-        self.inbox = PsycopgInboxRepository(pool)
-        self.outbox = PsycopgOutboxRepository(pool)
-        self.action_intents = PsycopgActionIntentRepository(pool)
-        self.approvals = PsycopgApprovalRepository(pool)
-        self.audit = PsycopgAuditRepository(pool)
-        self.workflow_state = PsycopgWorkflowStateRepository(pool)
-        self.terminal_state = PsycopgTerminalStateRepository(pool)
-        self.source_events = PsycopgSourceEventRepository(pool)
-        self.source_checkpoints = PsycopgSourceCheckpointRepository(pool)
-        self.identity_mappings = PsycopgIdentityMappingRepository(pool)
-        self.review_decisions = PsycopgReviewDecisionRepository(pool)
 
 
 class PsycopgSourceEventRepository(_BaseRepository):
@@ -842,6 +826,186 @@ def _source_event_from_row(row: dict[str, Any]) -> SourceEvent:
         payload_hash=row["payload_hash"],
         raw_evidence_reference=row["raw_evidence_reference"],
         correlation_metadata=row["correlation_metadata"] or {},
+    )
+
+
+class PsycopgFindingRepository(_BaseRepository):
+    async def upsert(self, finding: Finding, *, conn: AsyncConnection | None = None) -> Finding:
+        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                INSERT INTO findings (
+                    id, tenant_id, finding_type, severity, status, title,
+                    description, detected_at, rule_version, risk_score, outcome
+                ) VALUES (
+                    %(id)s, %(tenant_id)s, %(finding_type)s, %(severity)s,
+                    %(status)s, %(title)s, %(description)s, %(detected_at)s,
+                    %(rule_version)s, %(risk_score)s, %(outcome)s
+                )
+                ON CONFLICT (tenant_id, finding_type, title) DO NOTHING
+                RETURNING id
+                """,
+                {
+                    "id": finding.id,
+                    "tenant_id": finding.tenant_id,
+                    "finding_type": finding.finding_type,
+                    "severity": str(finding.severity),
+                    "status": finding.status,
+                    "title": finding.title,
+                    "description": finding.description,
+                    "detected_at": finding.detected_at,
+                    "rule_version": finding.rule_version,
+                    "risk_score": finding.risk_score,
+                    "outcome": finding.outcome,
+                },
+            )
+            row = await cur.fetchone()
+            if row is not None:
+                return finding
+            # Conflict: fetch the existing finding id.
+            await cur.execute(
+                """
+                SELECT id FROM findings
+                WHERE tenant_id = %s AND finding_type = %s AND title = %s
+                """,
+                (finding.tenant_id, finding.finding_type, finding.title),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return finding
+            return finding.model_copy(update={"id": row["id"]})
+
+    async def list_for_tenant(
+        self, tenant_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> list[Finding]:
+        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                "SELECT * FROM findings WHERE tenant_id = %s ORDER BY detected_at, id",
+                (tenant_id,),
+            )
+            rows = await cur.fetchall()
+        return [_finding_from_row(r) for r in rows]
+
+    async def count_for_tenant(
+        self, tenant_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> int:
+        async with self._session(conn) as c, c.cursor() as cur:
+            await cur.execute("SELECT count(*) FROM findings WHERE tenant_id = %s", (tenant_id,))
+            row = await cur.fetchone()
+        return int(row[0]) if row else 0
+
+
+class PsycopgProcessingRecordRepository(_BaseRepository):
+    async def claim(
+        self,
+        *,
+        tenant_id: UUID,
+        source: str,
+        event_id: UUID,
+        processing_version: str,
+        conn: AsyncConnection | None = None,
+    ) -> tuple[str, UUID | None]:
+        """Claim a processing slot.
+
+        Returns (status, record_id) where status is one of:
+        - 'NEW'      : this caller created the record; proceed with processing.
+        - 'COMPLETED': already processed; do not re-process.
+        - 'PROCESSING': another worker is processing; caller should retry later.
+        - 'FAILED'   : previous attempt failed; caller may retry (record reset to PROCESSING).
+        """
+        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                INSERT INTO processing_records (
+                    id, tenant_id, source, event_id, processing_version, status
+                ) VALUES (%s, %s, %s, %s, %s, 'PROCESSING')
+                ON CONFLICT (tenant_id, source, event_id, processing_version) DO NOTHING
+                RETURNING id
+                """,
+                (uuid4(), tenant_id, source, event_id, processing_version),
+            )
+            row = await cur.fetchone()
+            if row is not None:
+                return "NEW", row["id"]
+            await cur.execute(
+                """
+                SELECT id, status FROM processing_records
+                WHERE tenant_id = %s AND source = %s AND event_id = %s
+                  AND processing_version = %s
+                """,
+                (tenant_id, source, event_id, processing_version),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return "PROCESSING", None
+            rid = row["id"]
+            status = row["status"]
+            if status == "COMPLETED":
+                return "COMPLETED", rid
+            if status == "PROCESSING":
+                return "PROCESSING", rid
+            if status == "FAILED":
+                await cur.execute(
+                    """
+                    UPDATE processing_records
+                    SET status = 'PROCESSING', started_at = now(), last_error = NULL
+                    WHERE id = %s
+                    """,
+                    (rid,),
+                )
+                return "FAILED", rid
+        return "PROCESSING", None
+
+    async def complete(
+        self,
+        record_id: UUID,
+        finding_ids: list[UUID],
+        *,
+        conn: AsyncConnection | None = None,
+    ) -> None:
+        async with self._session(conn) as c:  # noqa: SIM117
+            await c.execute(
+                """
+                UPDATE processing_records
+                SET status = 'COMPLETED', completed_at = %s, finding_ids = %s
+                WHERE id = %s
+                """,
+                (_utcnow(), finding_ids, record_id),
+            )
+
+    async def fail(
+        self,
+        record_id: UUID,
+        error: str,
+        *,
+        conn: AsyncConnection | None = None,
+    ) -> None:
+        async with self._session(conn) as c:  # noqa: SIM117
+            await c.execute(
+                """
+                UPDATE processing_records
+                SET status = 'FAILED', last_error = %s
+                WHERE id = %s
+                """,
+                (error[:2000], record_id),
+            )
+
+
+def _finding_from_row(row: dict[str, Any]) -> Finding:
+    from itsm_agent.domain.models import Finding, Severity
+
+    return Finding(
+        id=row["id"],
+        tenant_id=row["tenant_id"],
+        finding_type=row["finding_type"],
+        severity=Severity(row["severity"]),
+        status=row["status"],
+        title=row["title"],
+        description=row["description"],
+        detected_at=row["detected_at"],
+        rule_version=row["rule_version"],
+        risk_score=row["risk_score"],
+        outcome=row["outcome"],
     )
 
 
@@ -980,3 +1144,23 @@ class PsycopgIdentityMappingRepository(_BaseRepository):
             )
             for r in rows
         ]
+
+class RepositoryBundle:
+    """All repositories sharing one pool."""
+
+    def __init__(self, pool: AsyncConnectionPool[AsyncConnection]) -> None:
+        self.incidents = PsycopgIncidentRepository(pool)
+        self.inbox = PsycopgInboxRepository(pool)
+        self.outbox = PsycopgOutboxRepository(pool)
+        self.action_intents = PsycopgActionIntentRepository(pool)
+        self.approvals = PsycopgApprovalRepository(pool)
+        self.audit = PsycopgAuditRepository(pool)
+        self.workflow_state = PsycopgWorkflowStateRepository(pool)
+        self.terminal_state = PsycopgTerminalStateRepository(pool)
+        self.source_events = PsycopgSourceEventRepository(pool)
+        self.source_checkpoints = PsycopgSourceCheckpointRepository(pool)
+        self.identity_mappings = PsycopgIdentityMappingRepository(pool)
+        self.review_decisions = PsycopgReviewDecisionRepository(pool)
+        self.findings = PsycopgFindingRepository(pool)
+        self.processing_records = PsycopgProcessingRecordRepository(pool)
+
