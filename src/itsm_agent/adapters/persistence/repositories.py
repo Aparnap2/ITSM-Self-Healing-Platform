@@ -722,8 +722,6 @@ class PsycopgReviewDecisionRepository(_BaseRepository):
         ]
 
 
-
-
 class PsycopgSourceEventRepository(_BaseRepository):
     async def insert(
         self, event: SourceEvent, *, conn: AsyncConnection | None = None
@@ -1145,6 +1143,7 @@ class PsycopgIdentityMappingRepository(_BaseRepository):
             for r in rows
         ]
 
+
 class RepositoryBundle:
     """All repositories sharing one pool."""
 
@@ -1163,4 +1162,3 @@ class RepositoryBundle:
         self.review_decisions = PsycopgReviewDecisionRepository(pool)
         self.findings = PsycopgFindingRepository(pool)
         self.processing_records = PsycopgProcessingRecordRepository(pool)
-
