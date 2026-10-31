@@ -28,8 +28,9 @@ from itsm_agent.detection.engine import (
     detect_coverage_gap,
     run_detection,
 )
-from itsm_agent.domain.events import SourceEvent
+from itsm_agent.domain.events import InvestigationProposal, InvestigationRequest, SourceEvent
 from itsm_agent.domain.models import ApprovalEvidence, EvidenceReference, Severity
+from itsm_agent.investigations.orchestrator import run_investigation
 from itsm_agent.reporting.evidence_bundle import build_evidence_bundle
 
 pytestmark = pytest.mark.scenarios
@@ -321,3 +322,97 @@ def test_approval_evidence_end_to_end_scenario() -> None:
     assert missing_findings[0].outcome == "SUSPICIOUS"
     # Tenant isolation: the finding belongs to this tenant.
     assert missing_findings[0].tenant_id == tenant
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_investigation_and_reviewer_decision() -> None:
+    """End-to-end: detection -> bounded investigation -> evidence bundle -> review.
+
+    Offline (FakeModel): a privileged event is detected, investigated with a
+    bounded read-only evidence fetch, validated against the evidence snapshot,
+    and folded into a reproducible evidence bundle carrying a reviewer decision.
+    """
+    tenant = uuid4()
+    ct_rec = _ct_record(
+        eventSource="sts.amazonaws.com",
+        eventName="AssumeRole",
+        eventID="e-e2e-inv-1",
+        readOnly=False,
+        requestParameters={"roleArn": "arn:aws:iam::123:role/Admin"},
+    )
+    events = _build_events(tenant, ct_rec, _gh_record())
+    findings = run_detection(events)
+    assert len(findings) == 1
+    finding = findings[0]
+
+    evidence_ids = [events[1].event_id]
+    request = InvestigationRequest(
+        investigation_id=uuid4(),
+        tenant_id=tenant,
+        finding_id=finding.id,
+        evidence_snapshot_ids=evidence_ids,
+        question="Why did this privileged action occur?",
+        max_tool_calls=3,
+        max_model_calls=1,
+        deadline_seconds=10.0,
+    )
+    proposal = InvestigationProposal(
+        investigation_id=request.investigation_id,
+        hypothesis="Privileged AssumeRole without matching approval evidence.",
+        supporting_evidence=evidence_ids,
+        contradicting_evidence=[],
+        missing_evidence=[],
+        uncertainty="low",
+        recommended_disposition="CONFIRM",
+        model_version="test-model-v1",
+        prompt_version="test-prompt-v1",
+    )
+
+    class FakeModel:
+        def __init__(self, p: InvestigationProposal) -> None:
+            self.p = p
+            self.calls = 0
+
+        async def investigate(
+            self, req: InvestigationRequest, evidence: dict[UUID, str]
+        ) -> InvestigationProposal:
+            self.calls += 1
+            return self.p
+
+    model = FakeModel(proposal)
+
+    async def fetcher(ids: list[UUID]) -> dict[UUID, str]:
+        return {i: "redacted cloudtrail excerpt" for i in ids}
+
+    result = await run_investigation(request, fetch_evidence=fetcher, model=model)
+    assert result.recommended_disposition == "CONFIRM"
+    assert model.calls == 1
+    # Evidence references must resolve against the snapshot.
+    assert all(r in request.evidence_snapshot_ids for r in result.supporting_evidence)
+
+    ref = EvidenceReference(
+        id=uuid4(),
+        finding_id=finding.id,
+        source_event_id=events[1].event_id,
+        content_hash=events[1].payload_hash,
+        trust_level="SIMULATOR_OBSERVATION",
+        collected_at=SCENARIO_NOW,
+    )
+    bundle = build_evidence_bundle(
+        finding,
+        [ref],
+        review_decisions=[
+            {
+                "reviewer": "analyst-1",
+                "decision": "ACCEPT",
+                "rationale": "Confirmed by investigation " + str(result.investigation_id),
+                "decided_at": SCENARIO_NOW.isoformat(),
+            }
+        ],
+    )
+    assert len(bundle["bundle_hash"]) == 64
+    assert bundle["evidence"][0]["source_event_id"] == str(events[1].event_id)
+    assert bundle["review_decisions"][0]["decision"] == "ACCEPT"
+    # Reproducibility: re-running with the same inputs yields the same hash.
+    bundle2 = build_evidence_bundle(finding, [ref], review_decisions=bundle["review_decisions"])
+    assert bundle2["bundle_hash"] == bundle["bundle_hash"]
