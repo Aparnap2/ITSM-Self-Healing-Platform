@@ -4,6 +4,13 @@
 # of defence. Deterministic tests never require network, Ollama, or
 # GROQ_API_KEY (PRD §9.3).
 #
+# Suite contract (CI-0): every job's pytest selector must collect non-zero
+# tests — zero-collected selection exits code 5 and fails the job. All
+# service-backed jobs set ITSM_TEST_STRICT=1 so unreachable services FAIL
+# instead of silently skipping (tests read ITSM_TEST_PG_DSN /
+# ITSM_TEST_NATS_URL; the worker also accepts ITSM_POSTGRES_DSN/ITSM_NATS_URL
+# and DATABASE_URL/NATS_URL fallbacks — see src/itsm_agent/workers/consumer.py).
+#
 # All third-party actions are pinned to commit SHAs, not tags.
 
 name: CI
@@ -70,6 +77,48 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # --------------------------------------------------------------------------
+  # Supply chain (CI-0): dependency vulnerabilities, SAST, SBOM
+  # --------------------------------------------------------------------------
+  supply-chain:
+    name: Supply Chain (pip-audit, bandit, SBOM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [lint, typecheck]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev
+      - name: SAST scan (bandit, must exit 0)
+        run: uv run bandit -q -c pyproject.toml -r src
+      - name: Dependency vulnerability audit (pip-audit)
+        run: |
+          uv export --frozen --format requirements-txt --no-emit-project -o ci-requirements.txt
+          uv run pip-audit --disable-pip -r ci-requirements.txt
+      - name: Create reports directory
+        run: mkdir -p reports
+        if: always()
+      - name: Generate SBOM (CycloneDX over source tree)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: cyclonedx
+          output: reports/sbom.cyclonedx.json
+      - name: Upload SBOM
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom
+          path: reports/sbom.cyclonedx.json
+          if-no-files-found: ignore
+
+  # --------------------------------------------------------------------------
   # Deterministic test suites — no network, no LLM, no Ollama
   # --------------------------------------------------------------------------
   unit-tests:
@@ -89,7 +138,43 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --frozen --extra dev
       - name: Run unit tests
-        run: uv run pytest -m unit
+        run: |
+          mkdir -p reports
+          uv run pytest -m unit --junitxml=reports/unit-junit.xml
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unit-junit
+          path: reports/unit-junit.xml
+          if-no-files-found: ignore
+
+  contract-tests:
+    name: Contract Tests (simulators, offline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [lint, typecheck]
+    env:
+      PYTHONHASHSEED: "0"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev
+      - name: Run contract tests
+        run: |
+          mkdir -p reports
+          uv run pytest -m contract --junitxml=reports/contract-junit.xml
+      - name: Upload contract test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: contract-junit
+          path: reports/contract-junit.xml
+          if-no-files-found: ignore
 
   security-invariants:
     name: Security Invariant Tests
@@ -107,16 +192,25 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --frozen --extra dev
       - name: Run security invariant tests
-        run: uv run pytest -m security
+        run: |
+          mkdir -p reports
+          uv run pytest -m security --junitxml=reports/security-junit.xml
+      - name: Upload security test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: security-junit
+          path: reports/security-junit.xml
+          if-no-files-found: ignore
 
   # --------------------------------------------------------------------------
-  # Build — validate compose config and (once the app slice lands) the image
+  # Build — validate compose config, build and scan the application image
   # --------------------------------------------------------------------------
   build:
     name: Build & Compose Config
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: [unit-tests, security-invariants]
+    timeout-minutes: 20
+    needs: [unit-tests, security-invariants, contract-tests]
     env:
       # Ephemeral, test-only value so `docker compose config` can interpolate.
       POSTGRES_PASSWORD: ci-config-check-password
@@ -131,6 +225,16 @@ jobs:
           else
             echo "SKIP: Dockerfile not present yet (application slice pending)."
           fi
+      - name: Container image scan (trivy, vuln + secret)
+        if: hashFiles('Dockerfile') != ''
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: itsm-api:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: "os,library"
+          severity: "CRITICAL,HIGH"
 
   # --------------------------------------------------------------------------
   # Integration — real Postgres + NATS + Mockoon simulator, mocked LLM
@@ -141,11 +245,15 @@ jobs:
     timeout-minutes: 20
     needs: [build]
     env:
-      DATABASE_URL: postgresql://itsm:itsm_test_password@localhost:5432/itsm_test
-      NATS_URL: nats://localhost:4222
-      ITSM_API_BASE_URL: http://localhost:3001
-      IDENTITY_API_BASE_URL: http://localhost:3001
-      INFRA_API_BASE_URL: http://localhost:3001
+      # Exact names the test fixtures read (tests/conftest.py). Must match the
+      # service credentials below; mismatch previously caused silent skips.
+      ITSM_TEST_PG_DSN: postgresql://itsm:itsm_test_password@localhost:5432/itsm_test
+      ITSM_TEST_NATS_URL: nats://localhost:4222
+      # Unreachable services are a hard FAIL, never a green-with-skips job.
+      ITSM_TEST_STRICT: "1"
+      ITSM_MOCKOON_ITSM_BASE_URL: http://localhost:3001
+      ITSM_MOCKOON_IDENTITY_BASE_URL: http://localhost:3001
+      ITSM_MOCKOON_INFRASTRUCTURE_BASE_URL: http://localhost:3001
       PYTHONHASHSEED: "0"
     services:
       postgres:
@@ -245,18 +353,107 @@ jobs:
         run: docker rm -f itsm-mockoon-ci || true
 
   # --------------------------------------------------------------------------
-  # Scenarios — 24-scenario evaluation harness (deterministic fault injection)
+  # Fault injection — worker crash, redelivery, DLQ, uncertain outcomes
   # --------------------------------------------------------------------------
-  scenarios:
-    name: Scenario Harness
+  fault-injection-tests:
+    name: Fault Injection Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [integration-tests]
+    needs: [build]
     env:
+      ITSM_TEST_PG_DSN: postgresql://itsm:itsm_test_password@localhost:5432/itsm_test
+      ITSM_TEST_NATS_URL: nats://localhost:4222
+      ITSM_TEST_STRICT: "1"
+      ITSM_MOCKOON_ITSM_BASE_URL: http://localhost:3001
+      ITSM_MOCKOON_IDENTITY_BASE_URL: http://localhost:3001
+      ITSM_MOCKOON_INFRASTRUCTURE_BASE_URL: http://localhost:3001
       PYTHONHASHSEED: "0"
-      ITSM_API_BASE_URL: http://localhost:3001
-      IDENTITY_API_BASE_URL: http://localhost:3001
-      INFRA_API_BASE_URL: http://localhost:3001
+    services:
+      postgres:
+        image: postgres:16.10-alpine
+        env:
+          POSTGRES_USER: itsm
+          POSTGRES_PASSWORD: itsm_test_password
+          POSTGRES_DB: itsm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U itsm -d itsm_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      nats:
+        image: nats:2.12.10-alpine
+        ports:
+          - 4222:4222
+        volumes:
+          - ${{ github.workspace }}/ci/nats.conf:/etc/nats/nats-server.conf:ro
+        options: >-
+          --health-cmd "wget -q -O - http://localhost:8222/healthz"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev
+      - name: Apply migrations (guarded)
+        run: |
+          set -e
+          shopt -s nullglob
+          files=(migrations/*.sql)
+          if [ ${#files[@]} -ne 0 ]; then
+            for f in "${files[@]}"; do
+              PGPASSWORD=itsm_test_password psql -h localhost -U itsm \
+                -d itsm_test -v ON_ERROR_STOP=1 -f "$f"
+            done
+          fi
+      - name: Run fault injection tests
+        run: |
+          mkdir -p reports
+          uv run pytest -m fault_injection --junitxml=reports/fault-injection-junit.xml
+      - name: Upload fault injection test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fault-injection-junit
+          path: reports/fault-injection-junit.xml
+          if-no-files-found: ignore
+
+  # --------------------------------------------------------------------------
+  # E2E — offline pipeline scenarios plus live-stack end-to-end checks
+  # --------------------------------------------------------------------------
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [build]
+    env:
+      ITSM_TEST_PG_DSN: postgresql://itsm:itsm_test_password@localhost:5432/itsm_test
+      ITSM_TEST_NATS_URL: nats://localhost:4222
+      ITSM_TEST_STRICT: "1"
+      ITSM_MOCKOON_ITSM_BASE_URL: http://localhost:3001
+      ITSM_MOCKOON_IDENTITY_BASE_URL: http://localhost:3001
+      ITSM_MOCKOON_INFRASTRUCTURE_BASE_URL: http://localhost:3001
+      PYTHONHASHSEED: "0"
+    services:
+      postgres:
+        image: postgres:16.10-alpine
+        env:
+          POSTGRES_USER: itsm
+          POSTGRES_PASSWORD: itsm_test_password
+          POSTGRES_DB: itsm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U itsm -d itsm_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
@@ -267,7 +464,7 @@ jobs:
         run: uv sync --frozen --extra dev
       - name: Start Mockoon simulator
         run: |
-          docker run -d --name itsm-mockoon-ci \
+          docker run -d --name itsm-mockoon-e2e \
             -p 3001:3001 \
             -v "$PWD/simulators/mockoon/mockoon.json:/home/mockoon/data/mockoon.json:ro" \
             mockoon/cli:9.5.0 \
@@ -285,8 +482,52 @@ jobs:
             sleep 1
           done
           echo "Simulator not ready within 30s."
-          docker logs --tail 100 itsm-mockoon-ci || true
+          docker logs --tail 100 itsm-mockoon-e2e || true
           exit 1
+      - name: Apply migrations (guarded)
+        run: |
+          set -e
+          shopt -s nullglob
+          files=(migrations/*.sql)
+          if [ ${#files[@]} -ne 0 ]; then
+            for f in "${files[@]}"; do
+              PGPASSWORD=itsm_test_password psql -h localhost -U itsm \
+                -d itsm_test -v ON_ERROR_STOP=1 -f "$f"
+            done
+          fi
+      - name: Run e2e tests
+        run: |
+          mkdir -p reports
+          uv run pytest -m e2e --junitxml=reports/e2e-junit.xml
+      - name: Upload e2e test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-junit
+          path: reports/e2e-junit.xml
+          if-no-files-found: ignore
+      - name: Cleanup simulator container
+        if: always()
+        run: docker rm -f itsm-mockoon-e2e || true
+
+  # --------------------------------------------------------------------------
+  # Scenarios — deterministic evaluation harness (offline slice; grows later)
+  # --------------------------------------------------------------------------
+  scenarios:
+    name: Scenario Harness
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [integration-tests]
+    env:
+      PYTHONHASHSEED: "0"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev
       - name: Run scenario harness
         run: |
           mkdir -p reports
@@ -296,8 +537,5 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: scenario-reports
-          path: reports/
+          path: reports/scenarios-junit.xml
           if-no-files-found: ignore
-      - name: Cleanup simulator container
-        if: always()
-        run: docker rm -f itsm-mockoon-ci || true
