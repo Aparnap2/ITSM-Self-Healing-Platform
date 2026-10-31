@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -293,6 +293,80 @@ class AccessFact(StrictModel):
     granted_at: datetime | None = None
     observed_at: datetime
     fact_hash: str
+
+
+class ApprovalEvidence(StrictModel):
+    """Approval evidence considered by deterministic detection (Task 12.8).
+
+    Flexible input contract: fields accept the common naming variants used by
+    approval stores (approver/approver_id, action/action_type, resource/target,
+    valid_from/issued_at/requested_at, valid_to/expires_at, status/decision).
+    Unknown fields are ignored so callers can pass richer records.
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    id: UUID = Field(default_factory=uuid4)
+    tenant_id: UUID
+    approver_id: str | None = None
+    approver: str | None = None
+    action: str | None = None
+    action_type: str | None = None
+    event_type: str | None = None
+    resource_id: str | None = None
+    resource: str | None = None
+    target: str | None = None
+    target_id: str | None = None
+    scope: dict[str, object] = Field(default_factory=dict)
+    parameters: dict[str, object] = Field(default_factory=dict)
+    context: dict[str, object] = Field(default_factory=dict)
+    status: str = "APPROVED"
+    decision: str | None = None
+    outcome: str | None = None
+    actor_id: str | None = None
+    subject: str | None = None
+    principal_id: str | None = None
+    valid_from: datetime | None = None
+    valid_from_at: datetime | None = None
+    issued_at: datetime | None = None
+    requested_at: datetime | None = None
+    created_at: datetime | None = None
+    decided_at: datetime | None = None
+    valid_to: datetime | None = None
+    valid_until: datetime | None = None
+    expires_at: datetime | None = None
+    expiry: datetime | None = None
+    source: str = "approval-system"
+    provenance: str = "approval record"
+
+    def resolved_approver(self) -> str | None:
+        return self.approver_id or self.approver
+
+    def resolved_action(self) -> str | None:
+        return self.action or self.action_type or self.event_type
+
+    def resolved_resource(self) -> str | None:
+        return self.resource_id or self.resource or self.target or self.target_id
+
+    def resolved_actor(self) -> str | None:
+        return self.actor_id or self.subject or self.principal_id
+
+    def resolved_status(self) -> str:
+        raw = (self.status or self.decision or self.outcome or "APPROVED").upper()
+        return raw
+
+    def resolved_valid_from(self) -> datetime | None:
+        return (
+            self.valid_from
+            or self.valid_from_at
+            or self.issued_at
+            or self.requested_at
+            or self.created_at
+            or self.decided_at
+        )
+
+    def resolved_valid_to(self) -> datetime | None:
+        return self.valid_to or self.valid_until or self.expires_at or self.expiry
 
 
 class Finding(StrictModel):
