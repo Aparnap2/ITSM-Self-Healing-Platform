@@ -269,17 +269,6 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-      nats:
-        image: nats:2.12.10-alpine
-        ports:
-          - 4222:4222
-        volumes:
-          - ${{ github.workspace }}/ci/nats.conf:/etc/nats/nats-server.conf:ro
-        options: >-
-          --health-cmd "wget -q -O - http://localhost:8222/healthz"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
@@ -291,6 +280,15 @@ jobs:
 
       # Mockoon runs as a docker run step (not a service) so we control the
       # CLI flags explicitly; GitHub Actions services cannot override args.
+      - name: Start NATS simulator
+        run: |
+          docker run -d --name itsm-nats-ci \
+            -p 4222:4222 \
+            -p 8222:8222 \
+            -v "$PWD/ci/nats.conf:/etc/nats/nats-server.conf:ro" \
+            nats:2.12.10-alpine \
+            -c /etc/nats/nats-server.conf
+
       - name: Start Mockoon simulator
         run: |
           docker run -d --name itsm-mockoon-ci \
@@ -306,7 +304,7 @@ jobs:
           set -e
           for i in $(seq 1 30); do
             if pg_isready -h localhost -U itsm -d itsm_test >/dev/null 2>&1 \
-              && nc -z 127.0.0.1 4222 >/dev/null 2>&1 \
+              && wget -q -O - http://127.0.0.1:8222/healthz >/dev/null 2>&1 \
               && curl -sf http://127.0.0.1:3001/health >/dev/null 2>&1; then
               echo "All services ready after ${i}s."
               exit 0
@@ -350,7 +348,7 @@ jobs:
 
       - name: Cleanup simulator container
         if: always()
-        run: docker rm -f itsm-mockoon-ci || true
+        run: docker rm -f itsm-mockoon-ci itsm-nats-ci || true
 
   # --------------------------------------------------------------------------
   # Fault injection — worker crash, redelivery, DLQ, uncertain outcomes
@@ -382,17 +380,6 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-      nats:
-        image: nats:2.12.10-alpine
-        ports:
-          - 4222:4222
-        volumes:
-          - ${{ github.workspace }}/ci/nats.conf:/etc/nats/nats-server.conf:ro
-        options: >-
-          --health-cmd "wget -q -O - http://localhost:8222/healthz"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
@@ -401,6 +388,31 @@ jobs:
           enable-cache: true
       - name: Install locked dependencies
         run: uv sync --frozen --extra dev
+      - name: Start NATS simulator
+        run: |
+          docker run -d --name itsm-nats-fi \
+            -p 4222:4222 \
+            -p 8222:8222 \
+            -v "$PWD/ci/nats.conf:/etc/nats/nats-server.conf:ro" \
+            nats:2.12.10-alpine \
+            -c /etc/nats/nats-server.conf
+
+      - name: Wait for services (bounded, 30s)
+        run: |
+          set -e
+          for i in $(seq 1 30); do
+            if pg_isready -h localhost -U itsm -d itsm_test >/dev/null 2>&1 \
+              && wget -q -O - http://127.0.0.1:8222/healthz >/dev/null 2>&1; then
+              echo "All services ready after ${i}s."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Services not ready within 30s."
+          docker ps -a
+          docker logs --tail 100 itsm-nats-fi || true
+          exit 1
+
       - name: Apply migrations (guarded)
         run: |
           set -e
@@ -423,6 +435,10 @@ jobs:
           name: fault-injection-junit
           path: reports/fault-injection-junit.xml
           if-no-files-found: ignore
+
+      - name: Cleanup simulator container
+        if: always()
+        run: docker rm -f itsm-nats-fi || true
 
   # --------------------------------------------------------------------------
   # E2E — offline pipeline scenarios plus live-stack end-to-end checks
