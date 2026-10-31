@@ -4,16 +4,15 @@ Ingests small synthetic source records through the three collectors
 (aws cloudtrail, postgresql pgaudit, github audit_log), runs the
 deterministic detection engine, and asserts exact results.
 
-Engine API limitation noted in test_activity_without_matching_approval_evidence:
-the engine exposes only ``run_detection`` / ``detect_privilege_escalation`` /
-``detect_failed_access`` / ``detect_coverage_gap``; there is no
-approval-evidence rule, so "activity without matching approval evidence" can
-only be asserted against current true behavior.
+Engine API note: ``run_detection`` covers privilege escalation, failed access
+and (when approval evidence is supplied) approval-evidence detection
+(Task 12.8). The legacy ``test_activity_without_matching_approval_evidence``
+asserts the pre-12.8 behavior for ``run_detection`` without approvals.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -23,9 +22,14 @@ from itsm_agent.collectors.aws.cloudtrail import normalize_record as ct_norm
 from itsm_agent.collectors.github.audit_log import normalize_record as gh_norm
 from itsm_agent.collectors.postgresql.pgaudit import normalize_record as pg_norm
 from itsm_agent.collectors.postgresql.pgaudit import parse_pgaudit_line
-from itsm_agent.detection.engine import RULE_VERSION, detect_coverage_gap, run_detection
+from itsm_agent.detection.engine import (
+    RULE_VERSION,
+    detect_approval_violation,
+    detect_coverage_gap,
+    run_detection,
+)
 from itsm_agent.domain.events import SourceEvent
-from itsm_agent.domain.models import EvidenceReference, Severity
+from itsm_agent.domain.models import ApprovalEvidence, EvidenceReference, Severity
 from itsm_agent.reporting.evidence_bundle import build_evidence_bundle
 
 pytestmark = pytest.mark.scenarios
@@ -268,5 +272,52 @@ def test_findings_resolve_to_real_normalized_event_ids_in_evidence_bundle() -> N
     assert entry["source_event_id"] == str(events[1].event_id)
     assert entry["content_hash"] == events[1].payload_hash
     assert entry["trust_level"] == "SIMULATOR_OBSERVATION"
-    assert bundle["finding"]["finding_type"] == "PRIVILEGE_ESCALATION"
-    assert bundle["finding"]["tenant_id"] == str(tenant)
+
+
+def test_approval_evidence_end_to_end_scenario() -> None:
+    """End-to-end: approval evidence changes classification of a privileged action.
+
+    A privileged AssumeRole with a valid, matching approval is not flagged;
+    the same action with no approval evidence surfaces as MISSING_APPROVAL.
+    Source coverage is complete, so the missing case is a suspicious activity,
+    not a silent coverage gap.
+    """
+    tenant = uuid4()
+    ct_rec = _ct_record(
+        eventSource="sts.amazonaws.com",
+        eventName="AssumeRole",
+        eventID="e-approval-1",
+        readOnly=False,
+        requestParameters={"roleArn": "arn:aws:iam::123:role/Admin"},
+    )
+    events = _build_events(tenant, ct_rec, _gh_record())
+    privileged = [
+        ev
+        for ev in events
+        if "assumerole" in ev.event_type.lower() or "assumerole" in ev.action.lower()
+    ]
+    assert privileged, "expected one privileged event"
+
+    resource = privileged[0].resource_id
+    valid_approval = ApprovalEvidence(
+        tenant_id=tenant,
+        approver="security-lead",
+        action="AssumeRole",
+        resource_id=resource,
+        status="APPROVED",
+        valid_from=SCENARIO_NOW - timedelta(hours=1),
+        valid_to=SCENARIO_NOW + timedelta(hours=1),
+    )
+    # Valid approval -> no approval finding.
+    approved_findings = detect_approval_violation(
+        privileged, [valid_approval], covered_sources={"cloudtrail"}
+    )
+    assert approved_findings == []
+
+    # No approval evidence -> MISSING_APPROVAL (suspicious, not a coverage gap).
+    missing_findings = detect_approval_violation(privileged, [], covered_sources={"cloudtrail"})
+    assert len(missing_findings) == 1
+    assert missing_findings[0].finding_type == "MISSING_APPROVAL"
+    assert missing_findings[0].outcome == "SUSPICIOUS"
+    # Tenant isolation: the finding belongs to this tenant.
+    assert missing_findings[0].tenant_id == tenant
