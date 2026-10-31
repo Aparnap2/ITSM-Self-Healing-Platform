@@ -43,7 +43,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Install locked dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --reinstall-package itsm-agent
       - name: Ruff format check
         run: uv run ruff format --check .
       - name: Ruff lint
@@ -60,7 +60,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Install locked dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --reinstall-package itsm-agent
       - name: mypy strict
         run: uv run mypy src tests
 
@@ -93,7 +93,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Install locked dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --reinstall-package itsm-agent
       - name: SAST scan (bandit, must exit 0)
         run: uv run bandit -q -c pyproject.toml -r src
       - name: Dependency vulnerability audit (pip-audit)
@@ -136,7 +136,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Install locked dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --reinstall-package itsm-agent
       - name: Run unit tests
         run: |
           mkdir -p reports
@@ -163,7 +163,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Install locked dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --reinstall-package itsm-agent
       - name: Run contract tests
         run: |
           mkdir -p reports
@@ -190,7 +190,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Install locked dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --reinstall-package itsm-agent
       - name: Run security invariant tests
         run: |
           mkdir -p reports
@@ -276,7 +276,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Install locked dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --reinstall-package itsm-agent
 
       # Mockoon runs as a docker run step (not a service) so we control the
       # CLI flags explicitly; GitHub Actions services cannot override args.
@@ -387,7 +387,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Install locked dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --reinstall-package itsm-agent
       - name: Start NATS simulator
         run: |
           docker run -d --name itsm-nats-fi \
@@ -477,7 +477,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Install locked dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --reinstall-package itsm-agent
       - name: Start Mockoon simulator
         run: |
           docker run -d --name itsm-mockoon-e2e \
@@ -543,7 +543,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Install locked dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --reinstall-package itsm-agent
       - name: Run scenario harness
         run: |
           mkdir -p reports
