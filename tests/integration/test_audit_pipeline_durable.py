@@ -58,8 +58,7 @@ async def test_source_event_processed_once_under_redelivery(pg_dsn: str, nats_ur
     try:
         async with pool.connection() as conn:
             await conn.execute(
-                "TRUNCATE source_events, event_inbox, outbox, "
-                "findings, processing_records CASCADE"
+                "TRUNCATE source_events, event_inbox, outbox, findings, processing_records CASCADE"
             )
         tenant = uuid.uuid4()
         ev = normalize_record(_ct_record(tenant, f"evt-{uuid.uuid4().hex}"), tenant)
@@ -107,8 +106,7 @@ async def test_full_nats_round_trip_persists_finding(pg_dsn: str, nats_url: str)
     try:
         async with pool.connection() as conn:
             await conn.execute(
-                "TRUNCATE source_events, event_inbox, outbox, "
-                "findings, processing_records CASCADE"
+                "TRUNCATE source_events, event_inbox, outbox, findings, processing_records CASCADE"
             )
         # Reset streams.
         import contextlib
@@ -188,8 +186,7 @@ async def test_unknown_event_is_quarantined(pg_dsn: str, nats_url: str) -> None:
     try:
         async with pool.connection() as conn:
             await conn.execute(
-                "TRUNCATE source_events, event_inbox, outbox, "
-                "findings, processing_records CASCADE"
+                "TRUNCATE source_events, event_inbox, outbox, findings, processing_records CASCADE"
             )
         # Build an event that was never ingested.
         tenant = uuid.uuid4()
@@ -222,8 +219,7 @@ async def test_tenant_mismatch_rejected(pg_dsn: str, nats_url: str) -> None:
     try:
         async with pool.connection() as conn:
             await conn.execute(
-                "TRUNCATE source_events, event_inbox, outbox, "
-                "findings, processing_records CASCADE"
+                "TRUNCATE source_events, event_inbox, outbox, findings, processing_records CASCADE"
             )
         t1, t2 = uuid.uuid4(), uuid.uuid4()
         ev = normalize_record(_ct_record(t1, f"evt-{uuid.uuid4().hex}"), t1)
@@ -252,8 +248,7 @@ async def test_two_tenants_identical_event_ids_isolated(pg_dsn: str, nats_url: s
     try:
         async with pool.connection() as conn:
             await conn.execute(
-                "TRUNCATE source_events, event_inbox, outbox, "
-                "findings, processing_records CASCADE"
+                "TRUNCATE source_events, event_inbox, outbox, findings, processing_records CASCADE"
             )
         t1, t2 = uuid.uuid4(), uuid.uuid4()
         shared_event_id = f"evt-{uuid.uuid4().hex}"
@@ -264,13 +259,19 @@ async def test_two_tenants_identical_event_ids_isolated(pg_dsn: str, nats_url: s
         assert (await sink.accept_source_event(e2)).value == "ACCEPTED"
         repos = RepositoryBundle(pool)
         await process_source_event(
-            event=e1, pool=pool, findings_repo=repos.findings,
-            processing_repo=repos.processing_records, covered_sources={"cloudtrail"},
+            event=e1,
+            pool=pool,
+            findings_repo=repos.findings,
+            processing_repo=repos.processing_records,
+            covered_sources={"cloudtrail"},
             clock_now=lambda: datetime.now(UTC),
         )
         await process_source_event(
-            event=e2, pool=pool, findings_repo=repos.findings,
-            processing_repo=repos.processing_records, covered_sources={"cloudtrail"},
+            event=e2,
+            pool=pool,
+            findings_repo=repos.findings,
+            processing_repo=repos.processing_records,
+            covered_sources={"cloudtrail"},
             clock_now=lambda: datetime.now(UTC),
         )
         assert await repos.findings.count_for_tenant(t1) >= 1
