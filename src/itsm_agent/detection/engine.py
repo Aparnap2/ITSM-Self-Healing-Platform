@@ -227,10 +227,7 @@ def _approval_matches_event(ap: dict[str, object], ev: SourceEvent) -> bool:
             return False
     # Resource dimension.
     ap_resource = (
-        ap.get("resource_id")
-        or ap.get("resource")
-        or ap.get("target")
-        or ap.get("target_id")
+        ap.get("resource_id") or ap.get("resource") or ap.get("target") or ap.get("target_id")
     )
     if ap_resource is not None:
         s = str(ap_resource).strip()
