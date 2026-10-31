@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS findings (
     id                  UUID PRIMARY KEY,
     tenant_id           UUID NOT NULL,
     finding_type        TEXT NOT NULL,
-    severity            TEXT NOT NULL CHECK (severity IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
+    severity            TEXT NOT NULL CHECK (severity IN ('P1', 'P2', 'P3', 'P4')),
     status              TEXT NOT NULL CHECK (status IN ('OPEN', 'INVESTIGATING', 'CONFIRMED', 'FALSE_POSITIVE', 'RESOLVED', 'ESCALATED')),
     title               TEXT NOT NULL,
     description         TEXT NOT NULL,
