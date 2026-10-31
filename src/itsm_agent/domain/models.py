@@ -5,7 +5,7 @@ Pure domain: stdlib + pydantic only. No I/O, no LangGraph, no vendor SDKs.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Literal
 from uuid import UUID, uuid4
@@ -396,6 +396,19 @@ class EvidenceReference(StrictModel):
     excerpt: str | None = None
     trust_level: str
     collected_at: datetime
+
+
+class ReviewDecision(StrictModel):
+    """Append-only reviewer decision on a finding (Task 14)."""
+
+    id: UUID = Field(default_factory=uuid4)
+    tenant_id: UUID
+    finding_id: UUID
+    reviewer_id: str
+    decision: Literal["CONFIRMED", "FALSE_POSITIVE", "ACCEPTED_RISK", "NEEDS_MORE_EVIDENCE"]
+    decided_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    rationale: str
+    evidence_pack_ref: str | None = None
 
 
 class CoverageStatus(StrictModel):

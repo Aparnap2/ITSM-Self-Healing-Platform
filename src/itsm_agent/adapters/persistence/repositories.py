@@ -23,7 +23,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from itsm_agent.domain.events import SourceEvent
-from itsm_agent.domain.models import IdentityMapping
+from itsm_agent.domain.models import IdentityMapping, ReviewDecision
 from itsm_agent.ports.repositories import (
     ActionIntent,
     ApprovalNotPendingError,
@@ -646,6 +646,82 @@ class PsycopgTerminalStateRepository(_BaseRepository):
             )
 
 
+class PsycopgReviewDecisionRepository(_BaseRepository):
+    async def record(
+        self, decision: ReviewDecision, *, conn: AsyncConnection | None = None
+    ) -> ReviewDecision:
+        async with self._session(conn) as c, c.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO review_decisions (
+                    id, tenant_id, finding_id, reviewer_id, decision,
+                    decided_at, rationale, evidence_pack_ref
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    decision.id,
+                    decision.tenant_id,
+                    decision.finding_id,
+                    decision.reviewer_id,
+                    decision.decision,
+                    decision.decided_at,
+                    decision.rationale,
+                    decision.evidence_pack_ref,
+                ),
+            )
+        return decision
+
+    async def list_for_finding(
+        self, tenant_id: UUID, finding_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> list[ReviewDecision]:
+        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT * FROM review_decisions
+                WHERE tenant_id = %s AND finding_id = %s
+                ORDER BY decided_at, id
+                """,
+                (tenant_id, finding_id),
+            )
+            rows = await cur.fetchall()
+        return [
+            ReviewDecision(
+                id=r["id"],
+                tenant_id=r["tenant_id"],
+                finding_id=r["finding_id"],
+                reviewer_id=r["reviewer_id"],
+                decision=r["decision"],
+                decided_at=r["decided_at"],
+                rationale=r["rationale"],
+                evidence_pack_ref=r["evidence_pack_ref"],
+            )
+            for r in rows
+        ]
+
+    async def list_for_tenant(
+        self, tenant_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> list[ReviewDecision]:
+        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                "SELECT * FROM review_decisions WHERE tenant_id = %s ORDER BY decided_at, id",
+                (tenant_id,),
+            )
+            rows = await cur.fetchall()
+        return [
+            ReviewDecision(
+                id=r["id"],
+                tenant_id=r["tenant_id"],
+                finding_id=r["finding_id"],
+                reviewer_id=r["reviewer_id"],
+                decision=r["decision"],
+                decided_at=r["decided_at"],
+                rationale=r["rationale"],
+                evidence_pack_ref=r["evidence_pack_ref"],
+            )
+            for r in rows
+        ]
+
+
 class RepositoryBundle:
     """All repositories sharing one pool."""
 
@@ -661,6 +737,7 @@ class RepositoryBundle:
         self.source_events = PsycopgSourceEventRepository(pool)
         self.source_checkpoints = PsycopgSourceCheckpointRepository(pool)
         self.identity_mappings = PsycopgIdentityMappingRepository(pool)
+        self.review_decisions = PsycopgReviewDecisionRepository(pool)
 
 
 class PsycopgSourceEventRepository(_BaseRepository):
