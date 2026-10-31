@@ -1,21 +1,17 @@
-# ITSM Self-Healing Platform
+# Event-Driven, Evidence-First Agentic Security Audit System
 
-A headless, event-driven IT operations agent: it consumes incident
-events, gathers diagnostic evidence, proposes a bounded remediation,
-passes it through deterministic deny-by-default policy enforcement,
-executes only allowlisted tools, independently verifies the actual
-resulting state, and records an auditable outcome — resolving an
-incident only when verification passes.
+A headless, event-driven security audit platform: it ingests security events
+from AWS CloudTrail, pgAudit, GitHub, and identity/approval sources,
+preserves immutable evidence, runs deterministic detection and policy
+evaluation, selectively invokes bounded agentic investigation, and produces
+an auditable compliance-evidence report — without claiming certification.
 
-**The point:** agentic reasoning inside deterministic operational
-boundaries. The LLM proposes; policy code authorizes; adapters execute;
-an independent verifier establishes success.
+**The point:** agentic reasoning inside deterministic audit boundaries. The
+LLM proposes and explains; policy code authorizes; adapters execute; an
+independent verifier establishes success.
 
 ## Status
-
-Skeleton phase — architecture and repository structure only. No business
-logic is implemented yet. See `PRD.md` for the full specification and
-`docs/architecture.md` for boundaries and import rules.
+Implementation in progress (pivot). See `PRD.md` and `docs/`.
 
 ## Stack
 
@@ -25,6 +21,18 @@ Mockoon (deterministic HTTP simulators) · Moto (AWS API simulator) ·
 Ollama (optional local LLM) · OpenTelemetry / Prometheus.
 
 Headless by design: no UI, no dashboard.
+
+## Running the worker
+
+Set ITSM_POSTGRES_DSN and ITSM_NATS_URL, then run:
+
+    python -m itsm_agent.workers.consumer
+
+Environment: ITSM_POSTGRES_DSN/DATABASE_URL, ITSM_NATS_URL/NATS_URL,
+ITSM_WORKER_CONCURRENCY (default 4), ITSM_WORKER_SHUTDOWN_TIMEOUT (default 30),
+ITSM_SIMULATOR_SEED (default 42). The worker subscribes to itsm.events.> on the
+ITSM_EVENTS stream (durable consumer itsm-workflow), ACKs only after durable
+processing, NAKs transient failures, dead-letters poison messages.
 
 ## Repository layout
 

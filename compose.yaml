@@ -1,0 +1,231 @@
+# =============================================================================
+# ITSM self-healing platform — local development & acceptance stack (PRD §11)
+#
+# Ownership: DEVOPS slice. Application services (api, worker) reference a
+# Dockerfile owned by the application agents; until that file exists the
+# infrastructure services below run standalone (see docs/runbooks/
+# SOP-01-start-environment.md).
+#
+# Security rules encoded here:
+#   - Every image is version-pinned (no :latest).
+#   - Every published port is bound to 127.0.0.1 only.
+#   - POSTGRES_PASSWORD has NO default: compose fails closed if unset.
+#   - LocalStack is quarantined behind the "localstack" profile (ADR-0003);
+#     Moto (in-process, via pytest) remains the default AWS simulator.
+# =============================================================================
+
+name: itsm
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — durable business state, source of truth (PRD §3)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-itsm}
+      POSTGRES_USER: ${POSTGRES_USER:-itsm}
+      # Fail closed: no default password. Provide POSTGRES_PASSWORD in .env.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (see .env.example)}
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # ---------------------------------------------------------------------------
+  # NATS + JetStream — asynchronous event backbone (PRD §3)
+  # Monitor port 8222 exposes /healthz for the healthcheck and inspection.
+  # JetStream state is stored on a named volume; `make compose-reset` wipes it.
+  # ---------------------------------------------------------------------------
+  nats:
+    image: nats:2.12.10-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports:
+      - "127.0.0.1:${NATS_HOST_PORT:-4222}:4222"
+      - "127.0.0.1:${NATS_MONITOR_HOST_PORT:-8222}:8222"
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 3s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # ---------------------------------------------------------------------------
+  # Mockoon — deterministic external API simulator (ITSM / identity / infra).
+  # Contract: simulators/mockoon/README.md. Config mounted read-only.
+  # Admin API disabled to keep the mock surface minimal.
+  # ---------------------------------------------------------------------------
+  mockoon:
+    image: mockoon/cli:9.5.0
+    # Image ENTRYPOINT is `mockoon-cli start`; flags only (per upstream docs).
+    command:
+      - --data
+      - /home/mockoon/data/mockoon.json
+      - --port
+      - "3001"
+      - --disable-admin-api
+    volumes:
+      - ./simulators/mockoon/mockoon.json:/home/mockoon/data/mockoon.json:ro
+    ports:
+      - "127.0.0.1:${MOCKOON_HOST_PORT:-3001}:3001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:3001/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # ---------------------------------------------------------------------------
+  # OpenTelemetry Collector — OTLP receiver -> Prometheus exporter + debug.
+  # No healthcheck: the contrib image ships no HTTP client; readiness is
+  # implied by `service_started` (documented in SOP-01).
+  # ---------------------------------------------------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.164.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./observability/otel/config.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317" # OTLP gRPC
+      - "127.0.0.1:4318:4318" # OTLP HTTP
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  # ---------------------------------------------------------------------------
+  # Prometheus — scrapes the collector's Prometheus exporter (8889), the
+  # collector's own metrics (8888), and the application /metrics endpoints.
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9090/-/healthy"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # ---------------------------------------------------------------------------
+  # Application services (api + worker).
+  # NOTE(devops): the Dockerfile and start commands are owned by the
+  # application slice. This compose file wires networking, env, and
+  # dependencies; adjust `command:` here only if the worker needs a
+  # different entrypoint than the image CMD.
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-itsm}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (see .env.example)}@postgres:5432/${POSTGRES_DB:-itsm}
+      NATS_URL: nats://nats:4222
+      ITSM_API_BASE_URL: http://mockoon:3001
+      IDENTITY_API_BASE_URL: http://mockoon:3001
+      INFRA_API_BASE_URL: http://mockoon:3001
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      mockoon:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-itsm}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (see .env.example)}@postgres:5432/${POSTGRES_DB:-itsm}
+      NATS_URL: nats://nats:4222
+      ITSM_API_BASE_URL: http://mockoon:3001
+      IDENTITY_API_BASE_URL: http://mockoon:3001
+      INFRA_API_BASE_URL: http://mockoon:3001
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      mockoon:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    command: ["python", "-m", "itsm_agent.workers.consumer"]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # ---------------------------------------------------------------------------
+  # LocalStack — QUARANTINED (ADR-0003). Opt-in only via:
+  #   docker compose --profile localstack up -d localstack
+  # License/plan terms must be verified before any use beyond local
+  # evaluation. Moto (in-process) remains the default AWS simulator.
+  # ---------------------------------------------------------------------------
+  localstack:
+    image: localstack/localstack:4.14.0
+    profiles: ["localstack"]
+    environment:
+      LOCALSTACK_SERVICES: s3
+      DEFAULT_REGION: us-east-1
+    ports:
+      - "127.0.0.1:4566:4566"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+volumes:
+  postgres-data:
+  nats-data:
