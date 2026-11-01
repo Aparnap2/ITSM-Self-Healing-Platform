@@ -873,6 +873,22 @@ class PsycopgFindingRepository(_BaseRepository):
                 return finding
             return finding.model_copy(update={"id": row["id"]})
 
+    async def get(
+        self,
+        tenant_id: UUID,
+        finding_id: UUID,
+        *,
+        conn: AsyncConnection | None = None,
+    ) -> Finding | None:
+        """Fetch a single finding, scoped to its tenant (cross-tenant returns None)."""
+        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                "SELECT * FROM findings WHERE tenant_id = %s AND id = %s",
+                (tenant_id, finding_id),
+            )
+            row = await cur.fetchone()
+        return _finding_from_row(row) if row is not None else None
+
     async def list_for_tenant(
         self, tenant_id: UUID, *, conn: AsyncConnection | None = None
     ) -> list[Finding]:

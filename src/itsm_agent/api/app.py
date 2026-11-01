@@ -14,6 +14,15 @@ from fastapi.responses import PlainTextResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from itsm_agent.api import security
+from itsm_agent.api.routes.findings import (
+    DecisionsStore,
+    FindingsDeps,
+    FindingsReader,
+    configure_findings,
+)
+from itsm_agent.api.routes.findings import (
+    router as findings_router,
+)
 from itsm_agent.api.routes.ingestion import (
     IngestionDeps,
     IngestionSink,
@@ -30,6 +39,8 @@ def create_app(
     *,
     settings: Settings,
     sink: IngestionSink,
+    findings_repo: FindingsReader | None = None,
+    review_decisions_repo: DecisionsStore | None = None,
 ) -> FastAPI:
     """Build the API app with the given durable ingestion sink."""
     app = FastAPI(
@@ -54,6 +65,15 @@ def create_app(
         )
     )
     app.include_router(ingestion_router)
+
+    if findings_repo is not None and review_decisions_repo is not None:
+        configure_findings(
+            FindingsDeps(
+                findings_repo=findings_repo,
+                review_decisions_repo=review_decisions_repo,
+            )
+        )
+        app.include_router(findings_router)
 
     @app.exception_handler(security.SecurityRejection)
     async def security_rejection_handler(
