@@ -60,6 +60,7 @@ TABLES = (
     "evidence_references",
     "coverage_status",
     "review_decisions",
+    "processing_records",
 )
 
 
