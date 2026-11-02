@@ -45,7 +45,9 @@ Source: `src/itsm_agent/privacy/retention.py`,
   - deletes only rebuildable derived projections (`access_facts`);
   - is idempotent per `(erase_request_id, data_class, record_id)`;
   - never cascades into findings or reviewer decisions.
-- Tombstones, requests and holds are themselves tenant-isolated by RLS.
+- Erasure requests and tombstones are tenant-isolated by RLS. Legal holds and
+  per-tenant policy overrides are filtered by `tenant_id` in queries but are
+  not yet under RLS.
 
 ## Redaction
 

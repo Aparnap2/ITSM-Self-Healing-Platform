@@ -217,4 +217,5 @@ Authorization happens before any write: an under-privileged or cross-tenant
 | `ee55c3a` | Approval-evidence detection (`detect_approval_violation`) and outcome semantics |
 | `ca9ce88` | `api/routes/findings.py`, `create_app(..., findings_repo=..., review_decisions_repo=...)`, `PsycopgFindingRepository.get` |
 | `babcbc0` | `tests/unit/test_findings_api.py`, `tests/integration/test_findings_api.py` (real PostgreSQL) |
-| security-boundary slice | `api/auth.py`, `api/rbac.py`, migrations 007–009, RLS/tenant plumbing, retention, authenticated API tests |
+| `cedd0f4` | `api/auth.py`, `api/rbac.py`, migrations 007–009, RLS/tenant plumbing, retention, authenticated API tests |
+| `27b90db` | Static SQL for outbox claim/count and inbox dedup (bandit B608) |
