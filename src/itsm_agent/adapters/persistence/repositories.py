@@ -202,23 +202,17 @@ class PsycopgInboxRepository(_BaseRepository):
         duplicates race on the constraint, so exactly one caller sees NEW. A
         tenant-less caller falls back to the legacy global key (pre-tenant
         rows only)."""
-        # The dedup namespace is the tenant when one is supplied, and the
-        # legacy global namespace only for pre-tenant rows. Using an explicit
-        # conflict target keeps the two partial unique indexes apart.
-        conflict_clause = (
-            "ON CONFLICT (source_system, external_event_id) WHERE tenant_id IS NULL DO NOTHING"
-            if tenant_id is None
-            else "ON CONFLICT (tenant_id, source_system, external_event_id) "
-            "WHERE tenant_id IS NOT NULL DO NOTHING"
-        )
+        # Targetless ON CONFLICT DO NOTHING catches whichever partial unique
+        # index applies: the tenant-scoped key for tenant rows, or the legacy
+        # global key for pre-tenant rows. No SQL is built from variables.
         async with self._session(conn) as c, c.cursor() as cur:
             await cur.execute(
-                f"""
+                """
                 INSERT INTO event_inbox (
                     id, tenant_id, source_system, external_event_id, payload_hash, status
                 )
                 VALUES (%s, %s, %s, %s, %s, 'RECEIVED')
-                {conflict_clause}
+                ON CONFLICT DO NOTHING
                 """,
                 (uuid4(), tenant_id, source_system, external_event_id, payload_hash),
             )
@@ -311,25 +305,24 @@ class PsycopgOutboxRepository(_BaseRepository):
         keeps the system/legacy behaviour of claiming across all tenants.
         """
         lease_until = _utcnow() + timedelta(seconds=lease_seconds)
-        tenant_filter = "AND tenant_id = %(tenant_id)s" if tenant_id is not None else ""
-        params: dict[str, object] = {"lease": lease_until, "limit": limit}
-        if tenant_id is not None:
-            params["tenant_id"] = tenant_id
         async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
             await cur.execute(
-                f"""
+                """
                     UPDATE outbox SET attempts = attempts + 1, next_attempt_at = %(lease)s
                     WHERE id IN (
                         SELECT id FROM outbox
                         WHERE status = 'pending' AND next_attempt_at <= now()
-                        {tenant_filter}
+                          AND (
+                              %(tenant_id)s::uuid IS NULL
+                              OR tenant_id = %(tenant_id)s
+                          )
                         ORDER BY created_at, id
                         LIMIT %(limit)s
                         FOR UPDATE SKIP LOCKED
                     )
                     RETURNING *
                     """,
-                params,
+                {"lease": lease_until, "limit": limit, "tenant_id": tenant_id},
             )
             rows = await cur.fetchall()
         return [OutboxEvent.model_validate(r) for r in rows]
@@ -377,11 +370,14 @@ class PsycopgOutboxRepository(_BaseRepository):
     async def count_pending(
         self, *, tenant_id: UUID | None = None, conn: AsyncConnection | None = None
     ) -> int:
-        tenant_filter = " AND tenant_id = %s" if tenant_id is not None else ""
-        params: tuple[object, ...] = (tenant_id,) if tenant_id is not None else ()
         async with self._session_for(tenant_id, conn) as c, c.cursor() as cur:
             await cur.execute(
-                f"SELECT count(*) FROM outbox WHERE status = 'pending'{tenant_filter}", params
+                """
+                SELECT count(*) FROM outbox
+                 WHERE status = 'pending'
+                   AND (%s::uuid IS NULL OR tenant_id = %s)
+                """,
+                (tenant_id, tenant_id),
             )
             row = await cur.fetchone()
         return int(row[0]) if row else 0

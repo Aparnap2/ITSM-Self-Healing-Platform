@@ -33,7 +33,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-TOKEN_VERSION = "v1"
+TOKEN_VERSION = "v1"  # nosec B105 - wire-format version, not a credential
 DEFAULT_ISSUER = "itsm-audit"
 DEFAULT_TOKEN_TTL_SECONDS = 900
 MAX_TOKEN_LENGTH = 4096
