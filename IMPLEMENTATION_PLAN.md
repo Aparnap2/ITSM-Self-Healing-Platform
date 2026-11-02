@@ -121,7 +121,7 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 - **Commit:** 7b08f21 — `docs/production-readiness.md` (docs-only slice).
 - **Verification gap:** the doc itself lists unwired gates ("Run pip-audit / safety in CI (to be wired)") and unverified license terms (LocalStack, ADR-0012). The system is not production ready and must not be claimed as such.
 
-### Task 19: Security boundaries for the reviewer surface — ✅ IMPLEMENTED (evidence below)
+### Task 19: Security boundaries for the reviewer surface — ✅ IMPLEMENTED (CI green)
 - **Scope:** authenticated reviewer identity, RBAC, database-level tenant isolation, retention/erasure semantics, and tenant-scoped transport.
 - **Implementation:**
   - `src/itsm_agent/api/auth.py` — `Principal`, `Role`, `TokenAuthenticator` (HMAC-SHA256 bearer), `mint_token`; fail-closed on missing/malformed/forged/expired/wrong-issuer credentials.
@@ -135,6 +135,8 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
   - `src/itsm_agent/privacy/retention.py` + `PsycopgRetentionRepository` — pure erasure planning, tombstones, derived-fact deletion, legal-hold blocking.
 - **Tests:** `tests/unit/test_auth_rbac.py`, `tests/unit/test_retention.py`, updated offline findings API tests; `tests/integration/test_rls_tenant_isolation.py` (dedicated `NOBYPASSRLS` role, pool-reuse leak, worker context, relay claim+ack), `tests/integration/test_retention.py`, `tests/integration/test_review_decisions.py`, tenant-scoped inbox dedup.
 - **Verification gap:** the HMAC implementation is a replaceable placeholder (no rotation/revocation/OIDC); no RLS startup assertion; no retention scheduler; incident/approval tables remain outside RLS. Independent acceptance review pending.
+- **Commits:** cedd0f4 (slice), 27b90db (static SQL for bandit B608/B105).
+- **CI evidence:** run 41384900517 on 27b90db — all 12 jobs green (lint, secret scan, mypy strict, supply chain, security invariants, unit, contract, build, e2e, integration, fault injection, scenario).
 
 ### Task CI-0: Release Qualification Repair — ✅ ACCEPTED (CI run 41271007745 green; PR draft, unmerged)
 - **Scope:**
@@ -155,7 +157,7 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 - Append-only trigger applies only to immutable tables, not projections.
 
 ## Known Risks / Gotchas
-- Pivot work plus the durable audit pipeline and security-boundary slices are committed on `feat/access-audit-foundation` (through Task 19). CI run 41271007745 was green on 98e83ef; the security-boundary slice requires a fresh CI run. The remaining release step is PR review and squash-merge; the branch/PR is still draft and unmerged.
+- Pivot work plus the durable audit pipeline and security-boundary slices are committed on `feat/access-audit-foundation` (through Task 19). CI run 41384900517 is fully green on 27b90db (security-boundary slice included). The remaining release step is PR review and squash-merge; the branch/PR is still draft and unmerged.
 - RLS is only as strong as the runtime role: a superuser or `BYPASSRLS` role silently disables it. CI/local `itsm` is a superuser, so RLS tests create a dedicated constrained role.
 - LocalStack license terms must be verified before use (ADR-0012).
 - Hypothesis not installed; add to dev deps if approved.
