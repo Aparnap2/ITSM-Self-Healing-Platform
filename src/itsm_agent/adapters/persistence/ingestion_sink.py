@@ -19,7 +19,9 @@ from itsm_agent.adapters.persistence.repositories import (
     PsycopgInboxRepository,
     PsycopgOutboxRepository,
     PsycopgSourceEventRepository,
+    PsycopgTenantRepository,
 )
+from itsm_agent.adapters.persistence.tenant import tenant_transaction
 from itsm_agent.api.routes.ingestion import SinkOutcome
 from itsm_agent.domain.events import IncidentCreated, SourceEvent
 from itsm_agent.ports.repositories import InboxReceipt
@@ -73,16 +75,19 @@ class PsycopgSourceEventSink:
         self._inbox = PsycopgInboxRepository(pool)
         self._source_events = PsycopgSourceEventRepository(pool)
         self._outbox = PsycopgOutboxRepository(pool)
+        self._tenants = PsycopgTenantRepository(pool)
 
     async def accept_source_event(self, event: SourceEvent) -> SinkOutcome:
         source_system = event.source
         external_event_id = event.idempotency_key
         try:
-            async with self._pool.connection() as conn, conn.transaction():
+            async with tenant_transaction(self._pool, event.tenant_id) as conn:
+                await self._tenants.ensure(event.tenant_id, conn=conn)
                 receipt = await self._inbox.try_record(
                     source_system=source_system,
                     external_event_id=external_event_id,
                     payload_hash=event.payload_hash,
+                    tenant_id=event.tenant_id,
                     conn=conn,
                 )
                 if receipt is InboxReceipt.DUPLICATE:
@@ -92,6 +97,7 @@ class PsycopgSourceEventSink:
                     event_type="SourceEventIngested",
                     aggregate_id=event.event_id,
                     payload=event.model_dump(mode="json"),
+                    tenant_id=event.tenant_id,
                     conn=conn,
                 )
             return SinkOutcome.ACCEPTED

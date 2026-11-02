@@ -6,13 +6,19 @@ Contract notes:
   required for the fail-closed audit contract and transactional outbox.
 - Without ``conn``, each method runs in its own pooled transaction.
 - ``DuplicateIdempotencyKeyError`` / ``ApprovalNotPendingError`` fail closed.
+- Tenant-scoped methods establish the RLS context themselves via
+  ``_tenant_session``. Passing ``conn=`` means the CALLER owns the transaction
+  and MUST already have opened it with
+  :func:`itsm_agent.adapters.persistence.tenant.tenant_transaction` (or
+  otherwise set ``itsm.tenant_id`` transaction-locally); ``_tenant_session``
+  then yields that connection unchanged and does not re-scope it.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -22,6 +28,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
+from itsm_agent.adapters.persistence.tenant import tenant_transaction
 from itsm_agent.domain.events import SourceEvent
 from itsm_agent.domain.models import Finding, IdentityMapping, ReviewDecision
 from itsm_agent.ports.repositories import (
@@ -36,6 +43,15 @@ from itsm_agent.ports.repositories import (
     SourceCheckpoint,
     TerminalStateConflictError,
     WorkflowState,
+)
+from itsm_agent.privacy.retention import (
+    DEFAULT_POLICIES,
+    DataClass,
+    ErasureRequest,
+    ErasureTombstone,
+    ExpiryAction,
+    LegalHold,
+    RetentionPolicy,
 )
 
 
@@ -54,6 +70,31 @@ class _BaseRepository:
         else:
             async with self._pool.connection() as pooled, pooled.transaction():
                 yield pooled
+
+    @asynccontextmanager
+    async def _tenant_session(
+        self, tenant_id: UUID, conn: AsyncConnection | None
+    ) -> AsyncIterator[AsyncConnection]:
+        """Yield a connection with ``itsm.tenant_id`` set transaction-locally.
+
+        ``conn is not None`` means the caller owns the transaction and MUST have
+        established the tenant context itself (``tenant_transaction``); the
+        connection is yielded unchanged. Otherwise a pooled transaction is
+        opened with the RLS context set before yielding.
+        """
+        if conn is not None:
+            yield conn
+        else:
+            async with tenant_transaction(self._pool, tenant_id) as scoped:
+                yield scoped
+
+    def _session_for(
+        self, tenant_id: UUID | None, conn: AsyncConnection | None
+    ) -> AbstractAsyncContextManager[AsyncConnection]:
+        """Select a tenant-scoped session when a tenant is given, else a plain one."""
+        if tenant_id is None:
+            return self._session(conn)
+        return self._tenant_session(tenant_id, conn)
 
 
 class PsycopgIncidentRepository(_BaseRepository):
@@ -153,19 +194,33 @@ class PsycopgInboxRepository(_BaseRepository):
         source_system: str,
         external_event_id: str,
         payload_hash: str,
+        tenant_id: UUID | None = None,
         conn: AsyncConnection | None = None,
     ) -> InboxReceipt:
-        """Dedup gate: INSERT ... ON CONFLICT DO NOTHING on the unique
-        (source_system, external_event_id) constraint. Concurrent duplicates
-        race on the constraint, so exactly one caller sees NEW."""
+        """Dedup gate: INSERT ... ON CONFLICT DO NOTHING on the tenant-scoped
+        unique key ``(tenant_id, source_system, external_event_id)``. Concurrent
+        duplicates race on the constraint, so exactly one caller sees NEW. A
+        tenant-less caller falls back to the legacy global key (pre-tenant
+        rows only)."""
+        # The dedup namespace is the tenant when one is supplied, and the
+        # legacy global namespace only for pre-tenant rows. Using an explicit
+        # conflict target keeps the two partial unique indexes apart.
+        conflict_clause = (
+            "ON CONFLICT (source_system, external_event_id) WHERE tenant_id IS NULL DO NOTHING"
+            if tenant_id is None
+            else "ON CONFLICT (tenant_id, source_system, external_event_id) "
+            "WHERE tenant_id IS NOT NULL DO NOTHING"
+        )
         async with self._session(conn) as c, c.cursor() as cur:
             await cur.execute(
-                """
-                INSERT INTO event_inbox (id, source_system, external_event_id, payload_hash, status)
-                VALUES (%s, %s, %s, %s, 'RECEIVED')
-                ON CONFLICT (source_system, external_event_id) DO NOTHING
+                f"""
+                INSERT INTO event_inbox (
+                    id, tenant_id, source_system, external_event_id, payload_hash, status
+                )
+                VALUES (%s, %s, %s, %s, %s, 'RECEIVED')
+                {conflict_clause}
                 """,
-                (uuid4(), source_system, external_event_id, payload_hash),
+                (uuid4(), tenant_id, source_system, external_event_id, payload_hash),
             )
             inserted = cur.rowcount == 1
         return InboxReceipt.NEW if inserted else InboxReceipt.DUPLICATE
@@ -210,6 +265,7 @@ class PsycopgOutboxRepository(_BaseRepository):
         event_type: str,
         aggregate_id: UUID,
         payload: dict[str, object],
+        tenant_id: UUID | None = None,
         conn: AsyncConnection | None = None,
     ) -> OutboxEvent:
         """Must be called inside the SAME transaction as the business state
@@ -224,11 +280,12 @@ class PsycopgOutboxRepository(_BaseRepository):
         async with self._session(conn) as c:  # noqa: SIM117
             await c.execute(
                 """
-                INSERT INTO outbox (id, event_type, aggregate_id, payload, created_at)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO outbox (id, tenant_id, event_type, aggregate_id, payload, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 """,
                 (
                     event.id,
+                    tenant_id,
                     event.event_type,
                     event.aggregate_id,
                     Jsonb(event.payload),
@@ -238,35 +295,54 @@ class PsycopgOutboxRepository(_BaseRepository):
         return event
 
     async def claim_pending(
-        self, limit: int = 10, *, lease_seconds: float = 60.0, conn: AsyncConnection | None = None
+        self,
+        limit: int = 10,
+        *,
+        lease_seconds: float = 60.0,
+        tenant_id: UUID | None = None,
+        conn: AsyncConnection | None = None,
     ) -> list[OutboxEvent]:
         """Claim pending rows with FOR UPDATE SKIP LOCKED (multi-relay safe).
         Claim bumps attempts and pushes next_attempt_at forward as a lease so
-        a crashed relay's rows become claimable again after the lease expires."""
+        a crashed relay's rows become claimable again after the lease expires.
+
+        When ``tenant_id`` is given the claim runs under that tenant's RLS
+        context (and filters explicitly, as defense in depth). When omitted it
+        keeps the system/legacy behaviour of claiming across all tenants.
+        """
         lease_until = _utcnow() + timedelta(seconds=lease_seconds)
-        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+        tenant_filter = "AND tenant_id = %(tenant_id)s" if tenant_id is not None else ""
+        params: dict[str, object] = {"lease": lease_until, "limit": limit}
+        if tenant_id is not None:
+            params["tenant_id"] = tenant_id
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
             await cur.execute(
-                """
+                f"""
                     UPDATE outbox SET attempts = attempts + 1, next_attempt_at = %(lease)s
                     WHERE id IN (
                         SELECT id FROM outbox
                         WHERE status = 'pending' AND next_attempt_at <= now()
+                        {tenant_filter}
                         ORDER BY created_at, id
                         LIMIT %(limit)s
                         FOR UPDATE SKIP LOCKED
                     )
                     RETURNING *
                     """,
-                {"lease": lease_until, "limit": limit},
+                params,
             )
             rows = await cur.fetchall()
         return [OutboxEvent.model_validate(r) for r in rows]
 
     async def mark_published(
-        self, outbox_event_id: UUID, *, conn: AsyncConnection | None = None
+        self,
+        outbox_event_id: UUID,
+        *,
+        tenant_id: UUID | None = None,
+        conn: AsyncConnection | None = None,
     ) -> None:
         """Call ONLY after broker acknowledgement (ADR-0002)."""
-        async with self._session(conn) as c:  # noqa: SIM117
+        async with self._session_for(tenant_id, conn) as c:  # noqa: SIM117
             await c.execute(
                 """
                 UPDATE outbox
@@ -283,10 +359,11 @@ class PsycopgOutboxRepository(_BaseRepository):
         *,
         backoff_seconds: float = 5.0,
         max_attempts: int = 10,
+        tenant_id: UUID | None = None,
         conn: AsyncConnection | None = None,
     ) -> None:
         next_at = _utcnow() + timedelta(seconds=backoff_seconds)
-        async with self._session(conn) as c:  # noqa: SIM117
+        async with self._session_for(tenant_id, conn) as c:  # noqa: SIM117
             await c.execute(
                 """
                 UPDATE outbox
@@ -297,9 +374,15 @@ class PsycopgOutboxRepository(_BaseRepository):
                 (error[:2000], next_at, max_attempts, outbox_event_id),
             )
 
-    async def count_pending(self, *, conn: AsyncConnection | None = None) -> int:
-        async with self._session(conn) as c, c.cursor() as cur:
-            await cur.execute("SELECT count(*) FROM outbox WHERE status = 'pending'")
+    async def count_pending(
+        self, *, tenant_id: UUID | None = None, conn: AsyncConnection | None = None
+    ) -> int:
+        tenant_filter = " AND tenant_id = %s" if tenant_id is not None else ""
+        params: tuple[object, ...] = (tenant_id,) if tenant_id is not None else ()
+        async with self._session_for(tenant_id, conn) as c, c.cursor() as cur:
+            await cur.execute(
+                f"SELECT count(*) FROM outbox WHERE status = 'pending'{tenant_filter}", params
+            )
             row = await cur.fetchone()
         return int(row[0]) if row else 0
 
@@ -650,7 +733,7 @@ class PsycopgReviewDecisionRepository(_BaseRepository):
     async def record(
         self, decision: ReviewDecision, *, conn: AsyncConnection | None = None
     ) -> ReviewDecision:
-        async with self._session(conn) as c, c.cursor() as cur:
+        async with self._session_for(decision.tenant_id, conn) as c, c.cursor() as cur:
             await cur.execute(
                 """
                 INSERT INTO review_decisions (
@@ -674,7 +757,7 @@ class PsycopgReviewDecisionRepository(_BaseRepository):
     async def list_for_finding(
         self, tenant_id: UUID, finding_id: UUID, *, conn: AsyncConnection | None = None
     ) -> list[ReviewDecision]:
-        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 """
                 SELECT * FROM review_decisions
@@ -701,7 +784,7 @@ class PsycopgReviewDecisionRepository(_BaseRepository):
     async def list_for_tenant(
         self, tenant_id: UUID, *, conn: AsyncConnection | None = None
     ) -> list[ReviewDecision]:
-        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 "SELECT * FROM review_decisions WHERE tenant_id = %s ORDER BY decided_at, id",
                 (tenant_id,),
@@ -726,7 +809,7 @@ class PsycopgSourceEventRepository(_BaseRepository):
     async def insert(
         self, event: SourceEvent, *, conn: AsyncConnection | None = None
     ) -> SourceEvent:
-        async with self._session(conn) as c, c.cursor() as cur:
+        async with self._session_for(event.tenant_id, conn) as c, c.cursor() as cur:
             await cur.execute(
                 """
                 INSERT INTO source_events (
@@ -778,8 +861,26 @@ class PsycopgSourceEventRepository(_BaseRepository):
     async def get(
         self, event_id: UUID, *, conn: AsyncConnection | None = None
     ) -> SourceEvent | None:
+        """System-scoped lookup by id (no tenant context).
+
+        Tenant-scoped callers MUST use :meth:`get_for_tenant` so RLS applies.
+        """
         async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
             await cur.execute("SELECT * FROM source_events WHERE id = %s", (event_id,))
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return _source_event_from_row(row)
+
+    async def get_for_tenant(
+        self, tenant_id: UUID, event_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> SourceEvent | None:
+        """Tenant-scoped lookup: returns None for another tenant's event."""
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                "SELECT * FROM source_events WHERE tenant_id = %s AND id = %s",
+                (tenant_id, event_id),
+            )
             row = await cur.fetchone()
         if row is None:
             return None
@@ -788,7 +889,7 @@ class PsycopgSourceEventRepository(_BaseRepository):
     async def get_by_idempotency(
         self, tenant_id: UUID, idempotency_key: str, *, conn: AsyncConnection | None = None
     ) -> SourceEvent | None:
-        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 "SELECT * FROM source_events WHERE tenant_id = %s AND idempotency_key = %s",
                 (tenant_id, idempotency_key),
@@ -829,7 +930,8 @@ def _source_event_from_row(row: dict[str, Any]) -> SourceEvent:
 
 class PsycopgFindingRepository(_BaseRepository):
     async def upsert(self, finding: Finding, *, conn: AsyncConnection | None = None) -> Finding:
-        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+        tenant_id = finding.tenant_id
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 """
                 INSERT INTO findings (
@@ -881,7 +983,7 @@ class PsycopgFindingRepository(_BaseRepository):
         conn: AsyncConnection | None = None,
     ) -> Finding | None:
         """Fetch a single finding, scoped to its tenant (cross-tenant returns None)."""
-        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 "SELECT * FROM findings WHERE tenant_id = %s AND id = %s",
                 (tenant_id, finding_id),
@@ -892,7 +994,7 @@ class PsycopgFindingRepository(_BaseRepository):
     async def list_for_tenant(
         self, tenant_id: UUID, *, conn: AsyncConnection | None = None
     ) -> list[Finding]:
-        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 "SELECT * FROM findings WHERE tenant_id = %s ORDER BY detected_at, id",
                 (tenant_id,),
@@ -903,7 +1005,7 @@ class PsycopgFindingRepository(_BaseRepository):
     async def count_for_tenant(
         self, tenant_id: UUID, *, conn: AsyncConnection | None = None
     ) -> int:
-        async with self._session(conn) as c, c.cursor() as cur:
+        async with self._session_for(tenant_id, conn) as c, c.cursor() as cur:
             await cur.execute("SELECT count(*) FROM findings WHERE tenant_id = %s", (tenant_id,))
             row = await cur.fetchone()
         return int(row[0]) if row else 0
@@ -927,7 +1029,7 @@ class PsycopgProcessingRecordRepository(_BaseRepository):
         - 'PROCESSING': another worker is processing; caller should retry later.
         - 'FAILED'   : previous attempt failed; caller may retry (record reset to PROCESSING).
         """
-        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 """
                 INSERT INTO processing_records (
@@ -975,9 +1077,10 @@ class PsycopgProcessingRecordRepository(_BaseRepository):
         record_id: UUID,
         finding_ids: list[UUID],
         *,
+        tenant_id: UUID,
         conn: AsyncConnection | None = None,
     ) -> None:
-        async with self._session(conn) as c:  # noqa: SIM117
+        async with self._session_for(tenant_id, conn) as c:  # noqa: SIM117
             await c.execute(
                 """
                 UPDATE processing_records
@@ -992,9 +1095,10 @@ class PsycopgProcessingRecordRepository(_BaseRepository):
         record_id: UUID,
         error: str,
         *,
+        tenant_id: UUID,
         conn: AsyncConnection | None = None,
     ) -> None:
-        async with self._session(conn) as c:  # noqa: SIM117
+        async with self._session_for(tenant_id, conn) as c:  # noqa: SIM117
             await c.execute(
                 """
                 UPDATE processing_records
@@ -1027,7 +1131,7 @@ class PsycopgSourceCheckpointRepository(_BaseRepository):
     async def get(
         self, tenant_id: UUID, source: str, *, conn: AsyncConnection | None = None
     ) -> SourceCheckpoint | None:
-        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 "SELECT * FROM source_checkpoints WHERE tenant_id = %s AND source = %s",
                 (tenant_id, source),
@@ -1052,7 +1156,7 @@ class PsycopgSourceCheckpointRepository(_BaseRepository):
         *,
         conn: AsyncConnection | None = None,
     ) -> None:
-        async with self._session(conn) as c, c.cursor() as cur:
+        async with self._session_for(tenant_id, conn) as c, c.cursor() as cur:
             await cur.execute(
                 """
                 INSERT INTO source_checkpoints (
@@ -1071,7 +1175,7 @@ class PsycopgIdentityMappingRepository(_BaseRepository):
     async def upsert(
         self, mapping: IdentityMapping, *, conn: AsyncConnection | None = None
     ) -> IdentityMapping:
-        async with self._session(conn) as c, c.cursor() as cur:
+        async with self._session_for(mapping.tenant_id, conn) as c, c.cursor() as cur:
             await cur.execute(
                 """
                 INSERT INTO identity_mappings (
@@ -1108,7 +1212,7 @@ class PsycopgIdentityMappingRepository(_BaseRepository):
         conn: AsyncConnection | None = None,
     ) -> list[IdentityMapping]:
         when = at if at is not None else datetime.now(tz=UTC)
-        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 """
                 SELECT * FROM identity_mappings
@@ -1137,7 +1241,7 @@ class PsycopgIdentityMappingRepository(_BaseRepository):
     async def list_by_internal(
         self, tenant_id: UUID, internal_identity_id: UUID, *, conn: AsyncConnection | None = None
     ) -> list[IdentityMapping]:
-        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 "SELECT * FROM identity_mappings "
                 "WHERE tenant_id = %s AND internal_identity_id = %s",
@@ -1160,6 +1264,264 @@ class PsycopgIdentityMappingRepository(_BaseRepository):
         ]
 
 
+class PsycopgTenantRepository(_BaseRepository):
+    """Tenant registry used to provision RLS context and to enumerate tenants."""
+
+    async def ensure(
+        self, tenant_id: UUID, *, name: str | None = None, conn: AsyncConnection | None = None
+    ) -> None:
+        """Idempotently register a tenant (safe to call on every ingestion)."""
+        async with self._session(conn) as c:  # noqa: SIM117
+            await c.execute(
+                "INSERT INTO tenants (id, name) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING",
+                (tenant_id, name),
+            )
+
+    async def list_tenant_ids(self, *, conn: AsyncConnection | None = None) -> list[UUID]:
+        """All tenant ids, oldest-key ordering; used to drive the scoped relay."""
+        async with self._session(conn) as c, c.cursor() as cur:
+            await cur.execute("SELECT id FROM tenants ORDER BY id")
+            rows = await cur.fetchall()
+        return [row[0] for row in rows]
+
+
+class PsycopgRetentionRepository(_BaseRepository):
+    """Tenant-scoped retention, legal hold and erasure bookkeeping.
+
+    Never mutates append-only evidence: erasure of raw payloads is recorded as
+    a tombstone preserving the integrity hash. Only derived projections are
+    deleted.
+    """
+
+    async def record_request(
+        self, request: ErasureRequest, *, conn: AsyncConnection | None = None
+    ) -> ErasureRequest:
+        async with self._tenant_session(request.tenant_id, conn) as c:
+            await c.execute(
+                """
+                INSERT INTO erasure_requests (
+                    id, tenant_id, requested_by, reason, data_classes, status, requested_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    request.id,
+                    request.tenant_id,
+                    request.requested_by,
+                    request.reason,
+                    [str(dc) for dc in request.data_classes],
+                    request.status,
+                    request.requested_at,
+                ),
+            )
+        return request
+
+    async def complete_request(
+        self,
+        tenant_id: UUID,
+        request_id: UUID,
+        *,
+        status: str,
+        conn: AsyncConnection | None = None,
+    ) -> None:
+        if status not in {"COMPLETED", "BLOCKED"}:
+            raise ValueError("status must be COMPLETED or BLOCKED")
+        async with self._tenant_session(tenant_id, conn) as c:
+            await c.execute(
+                """
+                UPDATE erasure_requests
+                   SET status = %s, completed_at = %s
+                 WHERE id = %s AND tenant_id = %s
+                """,
+                (status, _utcnow(), request_id, tenant_id),
+            )
+
+    async def tombstone_raw_evidence(
+        self,
+        tenant_id: UUID,
+        *,
+        older_than: datetime,
+        erase_request_id: UUID,
+        detail: str = "raw payload erased under retention policy",
+        conn: AsyncConnection | None = None,
+    ) -> int:
+        """Record tombstones for raw evidence older than the cutoff.
+
+        Idempotent per (request, record): a second run inserts nothing.
+        ``source_events`` itself is never touched (append-only trigger).
+        """
+        async with self._tenant_session(tenant_id, conn) as c, c.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO erasure_tombstones (
+                    id, tenant_id, data_class, record_id, integrity_hash, detail,
+                    erase_request_id, erased_at
+                )
+                SELECT gen_random_uuid(), se.tenant_id, %s, se.id, se.payload_hash, %s, %s, now()
+                  FROM source_events se
+                 WHERE se.tenant_id = %s
+                   AND se.observed_at < %s
+                   AND se.raw_evidence_reference IS NOT NULL
+                   AND NOT EXISTS (
+                        SELECT 1 FROM erasure_tombstones t
+                         WHERE t.erase_request_id = %s
+                           AND t.data_class = %s
+                           AND t.record_id = se.id
+                   )
+                """,
+                (
+                    DataClass.RAW_EVIDENCE.value,
+                    detail,
+                    erase_request_id,
+                    tenant_id,
+                    older_than,
+                    erase_request_id,
+                    DataClass.RAW_EVIDENCE.value,
+                ),
+            )
+            inserted = cur.rowcount
+        return int(inserted)
+
+    async def delete_derived_facts(
+        self,
+        tenant_id: UUID,
+        *,
+        older_than: datetime,
+        conn: AsyncConnection | None = None,
+    ) -> int:
+        """Delete rebuildable derived projections older than the cutoff."""
+        async with self._tenant_session(tenant_id, conn) as c, c.cursor() as cur:
+            await cur.execute(
+                "DELETE FROM access_facts WHERE tenant_id = %s AND observed_at < %s",
+                (tenant_id, older_than),
+            )
+            deleted = cur.rowcount
+        return int(deleted)
+
+    async def add_tombstone(
+        self,
+        *,
+        tenant_id: UUID,
+        data_class: DataClass,
+        record_id: UUID | None,
+        integrity_hash: str,
+        erase_request_id: UUID,
+        detail: str | None = None,
+        conn: AsyncConnection | None = None,
+    ) -> UUID:
+        tombstone_id = uuid4()
+        async with self._tenant_session(tenant_id, conn) as c:
+            await c.execute(
+                """
+                INSERT INTO erasure_tombstones (
+                    id, tenant_id, data_class, record_id, integrity_hash, detail,
+                    erase_request_id, erased_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    tombstone_id,
+                    tenant_id,
+                    data_class.value,
+                    record_id,
+                    integrity_hash,
+                    detail,
+                    erase_request_id,
+                    _utcnow(),
+                ),
+            )
+        return tombstone_id
+
+    async def list_tombstones(
+        self,
+        tenant_id: UUID,
+        *,
+        erase_request_id: UUID | None = None,
+        conn: AsyncConnection | None = None,
+    ) -> list[ErasureTombstone]:
+        query = """
+            SELECT id, tenant_id, data_class, record_id, integrity_hash, detail,
+                   erase_request_id, erased_at
+              FROM erasure_tombstones
+             WHERE tenant_id = %s
+        """
+        params: list[object] = [tenant_id]
+        if erase_request_id is not None:
+            query += " AND erase_request_id = %s"
+            params.append(erase_request_id)
+        query += " ORDER BY erased_at, id"
+        async with (
+            self._tenant_session(tenant_id, conn) as c,
+            c.cursor(row_factory=dict_row) as cur,
+        ):
+            await cur.execute(query, params)
+            rows = await cur.fetchall()
+        return [
+            ErasureTombstone(
+                id=row["id"],
+                tenant_id=row["tenant_id"],
+                data_class=DataClass(row["data_class"]),
+                record_id=row["record_id"],
+                integrity_hash=row["integrity_hash"],
+                detail=row["detail"],
+                erase_request_id=row["erase_request_id"],
+                erased_at=row["erased_at"],
+            )
+            for row in rows
+        ]
+
+    async def active_holds(
+        self, tenant_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> list[LegalHold]:
+        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT id, tenant_id, data_class, reason, placed_by, placed_at, released_at
+                  FROM legal_holds
+                 WHERE tenant_id = %s AND released_at IS NULL
+                 ORDER BY placed_at
+                """,
+                (tenant_id,),
+            )
+            rows = await cur.fetchall()
+        return [
+            LegalHold(
+                id=row["id"],
+                tenant_id=row["tenant_id"],
+                data_class=DataClass(row["data_class"]) if row["data_class"] else None,
+                reason=row["reason"],
+                placed_by=row["placed_by"],
+                placed_at=row["placed_at"],
+                released_at=row["released_at"],
+            )
+            for row in rows
+        ]
+
+    async def effective_policies(
+        self, tenant_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> tuple[RetentionPolicy, ...]:
+        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT tenant_id, data_class, retention_days, on_expiry
+                  FROM retention_policies
+                 WHERE tenant_id IS NULL OR tenant_id = %s
+                 ORDER BY tenant_id NULLS LAST, data_class
+                """,
+                (tenant_id,),
+            )
+            rows = await cur.fetchall()
+        if not rows:
+            return DEFAULT_POLICIES
+        return tuple(
+            RetentionPolicy(
+                tenant_id=row["tenant_id"],
+                data_class=DataClass(row["data_class"]),
+                retention_days=row["retention_days"],
+                on_expiry=ExpiryAction(row["on_expiry"]),
+            )
+            for row in rows
+        )
+
+
 class RepositoryBundle:
     """All repositories sharing one pool."""
 
@@ -1178,3 +1540,5 @@ class RepositoryBundle:
         self.review_decisions = PsycopgReviewDecisionRepository(pool)
         self.findings = PsycopgFindingRepository(pool)
         self.processing_records = PsycopgProcessingRecordRepository(pool)
+        self.tenants = PsycopgTenantRepository(pool)
+        self.retention = PsycopgRetentionRepository(pool)

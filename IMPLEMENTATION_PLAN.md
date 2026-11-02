@@ -5,12 +5,13 @@ _Last updated: 2026-11-01 by agent (durable pipeline, findings/reviewer HTTP sur
 Pivot the ITSM self-healing platform into an event-driven, evidence-first agentic security audit system (AWS + PostgreSQL + GitHub + identity/approvals), preserving the completed Phase 1/2 work on branch `checkpoint/pre-audit-pivot-phase-1-2` (commit 18af41e).
 
 ## Status
-- Total tasks: 19 (pivot Tasks 1-18 + release-qualification Task CI-0)
-- Completed: 10 (Tasks 1-5, 7, 8, 9, 10, 13 — implemented and tested in-repo, evidence cited below)
+- Total tasks: 20 (pivot Tasks 1-18 + release-qualification Task CI-0 + security-boundary Task 19)
+- Completed: 11 (Tasks 1-5, 7, 8, 9, 10, 13, 19 — implemented and tested in-repo, evidence cited below)
 - Newly completed: durable audit pipeline slice (Phase 7) — outbox → NATS JetStream → durable detection consumer → PostgreSQL findings + `processing_records`; commits 0a80cb2, f7bff8a, 00d11a9, 98e83ef (see Task 7 integration closure below).
+- Newly completed: security-boundary slice (Task 19) — authenticated reviewer API, RBAC, PostgreSQL RLS tenant isolation, retention/erasure tombstones, tenant-scoped inbox dedup and relay acknowledgement.
 - 🟡 IMPLEMENTED (slice committed; independent acceptance verification pending): 8 (Tasks 6, 11, 12, 14, 15, 16, 17, 18)
 - Remaining: 0 (no unimplemented pivot tasks)
-- In progress: 0 (Task 14 HTTP reviewer surface committed in ca9ce88/babcbc0; full local suite 193 passed under ITSM_TEST_STRICT=1)
+- In progress: 0 (full local suite: 246 passed, 0 skipped under ITSM_TEST_STRICT=1 on real PostgreSQL + NATS)
 - Task CI-0: ✅ ACCEPTED — CI run 41271007745 is fully green on commit 98e83ef; the branch/PR remains draft and unmerged.
 - Current branch: feat/access-audit-foundation
 
@@ -101,11 +102,12 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 - **Commit:** 371dffb — `ReviewDecision` model (`src/itsm_agent/domain/models.py`), `PsycopgReviewDecisionRepository` in `src/itsm_agent/adapters/persistence/repositories.py` (insert-only `record`, tenant-scoped `list_for_finding`), exports in `adapters/persistence/__init__.py`, and `tests/integration/test_review_decisions.py` (3 tests: record + list, tenant isolation, append-only).
 - **Commit:** ca9ce88 — reviewer HTTP surface `src/itsm_agent/api/routes/findings.py` (`GET /v1/findings`, `GET /v1/findings/{id}`, `POST`/`GET /v1/findings/{id}/decisions`; tenant required on every route; cross-tenant = 404), `create_app(findings_repo=..., review_decisions_repo=...)` wiring in `src/itsm_agent/api/app.py` (router mounted only when both repositories are supplied), and `PsycopgFindingRepository.get(tenant_id, finding_id)`. Dependencies are narrow protocols (`FindingsReader`, `DecisionsStore`) so the surface is testable offline.
 - **Commit:** babcbc0 — `tests/unit/test_findings_api.py` (10 offline tests: tenant-scoped list, detail + decisions, cross-tenant 404 on read and POST with zero writes, 422 validation, 503 unconfigured, append-only, global-deps isolation) and `tests/integration/test_findings_api.py` (7 real-PostgreSQL tests: isolation, decision durability across an app rebuild, repository `get` scoping, append-only duplicates). Contract documented in `docs/findings-api.md`.
-- **Verification gap:** reviewer workflow beyond the `review_decisions` table, bundle builder, repository, and HTTP surface is not independently acceptance-reviewed; authenticating the reviewer identity (approval binding, RBAC) is still missing. Independent acceptance review pending (CI run 41271007745 green; HTTP surface committed in ca9ce88 with 17 new tests in babcbc0).
+- **Security-boundary follow-up (Task 19):** reviewer identity now comes from a verified bearer credential, RBAC gates every route and decision type, and `reviewer_id` is rejected in the request body. Independent acceptance review of the full workflow remains pending.
 
 ### Task 15: Security/privacy/multi-tenancy — 🟡 IMPLEMENTED (slice committed; independent acceptance verification pending)
 - **Commit:** 994818e — `src/itsm_agent/privacy/redaction.py`, `tests/unit/test_redaction.py`, `tests/integration/test_tenant_isolation.py` (additions), `docs/security-boundaries.md`.
-- **Verification gap:** redaction and tenant isolation have tests in-repo, but retention and the full multi-tenancy scope are not independently verified.
+- **Task 19 follow-up:** PostgreSQL RLS (enabled + forced) on all tenant-owned audit tables, transaction-local tenant context, tenant-scoped inbox uniqueness, retention/legal-hold/erasure tombstones, and a constrained-role RLS test suite. Docs updated to state enforced vs. missing guarantees.
+- **Verification gap:** redaction rules remain source-specific; retention has no scheduler/object-storage lifecycle; RLS covers the audit domain only (not incidents/approvals/action intents).
 
 ### Task 16: Reliability/observability/E2E + golden dataset — 🟡 IMPLEMENTED (slice committed; independent acceptance verification pending)
 - **Commit:** 89aac14 — `docs/observability.md`, `tests/e2e/test_multi_source_audit.py`.
@@ -118,6 +120,21 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 ### Task 18: Production readiness — 🟡 IMPLEMENTED (slice committed; independent acceptance verification pending)
 - **Commit:** 7b08f21 — `docs/production-readiness.md` (docs-only slice).
 - **Verification gap:** the doc itself lists unwired gates ("Run pip-audit / safety in CI (to be wired)") and unverified license terms (LocalStack, ADR-0012). The system is not production ready and must not be claimed as such.
+
+### Task 19: Security boundaries for the reviewer surface — ✅ IMPLEMENTED (evidence below)
+- **Scope:** authenticated reviewer identity, RBAC, database-level tenant isolation, retention/erasure semantics, and tenant-scoped transport.
+- **Implementation:**
+  - `src/itsm_agent/api/auth.py` — `Principal`, `Role`, `TokenAuthenticator` (HMAC-SHA256 bearer), `mint_token`; fail-closed on missing/malformed/forged/expired/wrong-issuer credentials.
+  - `src/itsm_agent/api/rbac.py` — explicit `Permission` allowlist, `ROLE_PERMISSIONS`, `DECISION_PERMISSIONS`, deny-by-default authorization.
+  - `src/itsm_agent/api/routes/findings.py` — bearer required on every route; requested tenant must be a principal membership; actor taken from the credential; `extra="forbid"` decision body; authorization before any write.
+  - `migrations/007_tenant_isolation.sql` — `tenants` registry, `evidence_references.tenant_id` + composite tenant-bound FKs, RLS `ENABLE` + `FORCE` + `tenant_isolation` policy on 11 audit tables.
+  - `migrations/008_retention_erasure.sql` — retention policies, legal holds, erasure requests, erasure tombstones with RLS.
+  - `migrations/009_tenant_scoped_inbox.sql` — dedup namespace scoped to the tenant (legacy global key kept for NULL-tenant rows).
+  - `src/itsm_agent/adapters/persistence/tenant.py` — `tenant_transaction` (`set_config(..., is_local=true)`).
+  - Repositories, ingestion sink, audit consumer and outbox relay — tenant-scoped sessions, `get_for_tenant`, tenant-aware outbox claim/ack, worker tenant context.
+  - `src/itsm_agent/privacy/retention.py` + `PsycopgRetentionRepository` — pure erasure planning, tombstones, derived-fact deletion, legal-hold blocking.
+- **Tests:** `tests/unit/test_auth_rbac.py`, `tests/unit/test_retention.py`, updated offline findings API tests; `tests/integration/test_rls_tenant_isolation.py` (dedicated `NOBYPASSRLS` role, pool-reuse leak, worker context, relay claim+ack), `tests/integration/test_retention.py`, `tests/integration/test_review_decisions.py`, tenant-scoped inbox dedup.
+- **Verification gap:** the HMAC implementation is a replaceable placeholder (no rotation/revocation/OIDC); no RLS startup assertion; no retention scheduler; incident/approval tables remain outside RLS. Independent acceptance review pending.
 
 ### Task CI-0: Release Qualification Repair — ✅ ACCEPTED (CI run 41271007745 green; PR draft, unmerged)
 - **Scope:**
@@ -138,7 +155,8 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 - Append-only trigger applies only to immutable tables, not projections.
 
 ## Known Risks / Gotchas
-- Pivot work plus the durable audit pipeline slice (Tasks 6-18, docs) is committed through babcbc0 on `feat/access-audit-foundation`; CI run 41271007745 is fully green on 98e83ef and the reviewer HTTP surface has since landed (ca9ce88 + tests babcbc0). The remaining release step is PR review and squash-merge; the branch/PR is still draft and unmerged.
+- Pivot work plus the durable audit pipeline and security-boundary slices are committed on `feat/access-audit-foundation` (through Task 19). CI run 41271007745 was green on 98e83ef; the security-boundary slice requires a fresh CI run. The remaining release step is PR review and squash-merge; the branch/PR is still draft and unmerged.
+- RLS is only as strong as the runtime role: a superuser or `BYPASSRLS` role silently disables it. CI/local `itsm` is a superuser, so RLS tests create a dedicated constrained role.
 - LocalStack license terms must be verified before use (ADR-0012).
 - Hypothesis not installed; add to dev deps if approved.
 - docker-compose.test.yml not yet created.
@@ -146,4 +164,4 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 - No external task tracker; this file is the single source of truth.
 
 ## Recommended next slice
-Priority 3 from the reviewer's ordering: **security boundaries for the reviewer surface** — authenticated reviewer identity (so `reviewer_id` is derived from a verified principal, not client input), RBAC for who may confirm/false-positive findings, PostgreSQL row-level security (or a session-bound tenant) so tenant scoping is enforced below the query layer, and retention/erasure enforcement for findings, evidence references and decisions. Until that lands, the findings API is deliberately unauthenticated and must stay bound to a trusted network. Merge remains the outstanding release step (PR #9 draft, unmerged). Contract for the current surface: `docs/findings-api.md`.
+Next gaps, in order: (1) replace the HMAC placeholder with an OIDC/mTLS `Authenticator`, add key rotation/revocation and a management path for principals/roles; (2) assert at startup that the runtime database role is `NOBYPASSRLS`/non-superuser, and extend RLS to incident/approval/action tables; (3) add a retention scheduler and object-storage lifecycle integration; (4) pagination/filtering and a finding status-transition contract; (5) a packaged API/consumer/relay entrypoint. Merge remains the outstanding release step (PR #9 draft, unmerged). Contracts: `docs/findings-api.md`, `docs/security-boundaries.md`, `docs/privacy-retention.md`.

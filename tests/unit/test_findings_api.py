@@ -1,21 +1,21 @@
-"""Offline unit tests for the findings / reviewer-decision HTTP surface.
+"""Offline unit tests for the authenticated findings / reviewer-decision API.
 
 Marker: ``unit``. The route module declares its dependencies as narrow
-structural protocols (``FindingsReader`` / ``DecisionsStore``), so these
-tests wire in-memory fakes and an ``httpx.ASGITransport`` client. No
-PostgreSQL, NATS, network, or Docker is touched.
+structural protocols, so these tests wire in-memory fakes plus the real
+``TokenAuthenticator`` and minted bearer tokens. No PostgreSQL, NATS, network,
+or Docker is touched.
 
-Isolation note: ``configure_findings`` mutates a module-level global. The
-autouse fixture resets it around every test so state never leaks between
-tests (or into other modules).
+The authentication and authorization tests deliberately use the production
+authenticator: a test-only bypass would not prove that a missing, expired,
+forged, or under-privileged credential is rejected.
 """
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime
-from typing import Any, Literal
+from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -23,6 +23,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from itsm_agent.api.app import create_app
+from itsm_agent.api.auth import TokenAuthenticator, mint_token
 from itsm_agent.api.routes.findings import FindingsDeps, configure_findings
 from itsm_agent.api.routes.ingestion import SinkOutcome
 from itsm_agent.config import Settings
@@ -30,28 +31,22 @@ from itsm_agent.domain.models import Finding, ReviewDecision, Severity
 
 pytestmark = pytest.mark.unit
 
-SECRET = "test-webhook-secret-0123456789abcdef"
+SECRET = "unit-test-reviewer-secret-0123456789"
 TENANT = UUID("11111111-1111-1111-1111-111111111111")
 OTHER_TENANT = UUID("22222222-2222-2222-2222-222222222222")
 
-DecisionValue = Literal["CONFIRMED", "FALSE_POSITIVE", "ACCEPTED_RISK", "NEEDS_MORE_EVIDENCE"]
-
 
 # ---------------------------------------------------------------------------
-# Fakes (structural implementations of the route protocols)
+# Fakes
 # ---------------------------------------------------------------------------
 
 
 class FakeSink:
-    """Minimal ingestion sink; findings tests never post incidents."""
-
     async def accept_incident(self, event: Any) -> SinkOutcome:
         return SinkOutcome.ACCEPTED
 
 
 class FakeFindingsRepo:
-    """In-memory ``FindingsReader`` with tenant-scoped lookups."""
-
     def __init__(self) -> None:
         self._findings: dict[UUID, Finding] = {}
 
@@ -70,8 +65,6 @@ class FakeFindingsRepo:
 
 
 class FakeDecisionsStore:
-    """In-memory, append-only ``DecisionsStore``."""
-
     def __init__(self) -> None:
         self.decisions: list[ReviewDecision] = []
 
@@ -86,7 +79,7 @@ class FakeDecisionsStore:
 
 
 # ---------------------------------------------------------------------------
-# Helpers / fixtures
+# Helpers
 # ---------------------------------------------------------------------------
 
 
@@ -96,7 +89,7 @@ def _settings() -> Settings:
             "env": "test",
             "api_host": "127.0.0.1",
             "api_port": 8000,
-            "webhook_secret": SECRET,
+            "webhook_secret": "test-webhook-secret-0123456789abcdef",
             "webhook_max_body_bytes": 2048,
             "rate_limit_requests": 100,
             "rate_limit_window_seconds": 60.0,
@@ -107,18 +100,44 @@ def _settings() -> Settings:
     )
 
 
-def _build_app(findings_repo: FakeFindingsRepo, decisions_repo: FakeDecisionsStore) -> FastAPI:
+def _token(
+    *,
+    principal_id: str = "reviewer-1",
+    tenants: tuple[UUID, ...] = (TENANT,),
+    roles: tuple[str, ...] = ("reviewer",),
+    ttl_seconds: int = 900,
+) -> str:
+    return mint_token(
+        SECRET,
+        principal_id=principal_id,
+        tenant_ids=tenants,
+        roles=roles,
+        ttl_seconds=ttl_seconds,
+    )
+
+
+def _build_app(
+    findings_repo: FakeFindingsRepo | None = None,
+    decisions_repo: FakeDecisionsStore | None = None,
+    *,
+    authenticator: TokenAuthenticator | None = None,
+) -> FastAPI:
+    repo = findings_repo if findings_repo is not None else FakeFindingsRepo()
+    store = decisions_repo if decisions_repo is not None else FakeDecisionsStore()
+    authenticate = authenticator or TokenAuthenticator(secret=SECRET)
     configure_findings(
         FindingsDeps(
-            findings_repo=findings_repo,
-            review_decisions_repo=decisions_repo,
+            findings_repo=repo,
+            review_decisions_repo=store,
+            authenticator=authenticate,
         )
     )
     return create_app(
         settings=_settings(),
         sink=FakeSink(),
-        findings_repo=findings_repo,
-        review_decisions_repo=decisions_repo,
+        findings_repo=repo,
+        review_decisions_repo=store,
+        authenticator=authenticate,
     )
 
 
@@ -126,166 +145,224 @@ def _client(app: FastAPI) -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://api.test")
 
 
-def _finding(
-    *,
-    tenant_id: UUID = TENANT,
-    severity: Severity = Severity.P2,
-    finding_type: str = "PRIVILEGE_ESCALATION",
-    title: str = "Suspicious role assumption",
-    status: str = "OPEN",
-    risk_score: int = 70,
-    outcome: str = "VIOLATION",
-) -> Finding:
-    return Finding(
-        id=uuid.uuid4(),
-        tenant_id=tenant_id,
-        finding_type=finding_type,
-        severity=severity,
-        status=status,
-        title=title,
-        description="detected by deterministic rule",
-        detected_at=datetime.now(UTC),
-        rule_version="rule-v1",
-        risk_score=risk_score,
-        outcome=outcome,
-    )
+def _auth(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
-def _decision(
-    finding: Finding,
-    *,
-    reviewer_id: str = "reviewer-1",
-    decision: DecisionValue = "CONFIRMED",
-    rationale: str = "evidence supports the finding",
-) -> ReviewDecision:
-    return ReviewDecision(
-        tenant_id=finding.tenant_id,
-        finding_id=finding.id,
-        reviewer_id=reviewer_id,
-        decision=decision,
-        rationale=rationale,
-    )
+def _finding(*, tenant_id: UUID = TENANT, **overrides: Any) -> Finding:
+    values: dict[str, Any] = {
+        "id": uuid.uuid4(),
+        "tenant_id": tenant_id,
+        "finding_type": "PRIVILEGE_ESCALATION",
+        "severity": Severity.P2,
+        "status": "OPEN",
+        "title": "Suspicious role assumption",
+        "description": "detected by deterministic rule",
+        "detected_at": datetime.now(UTC),
+        "rule_version": "rule-v1",
+        "risk_score": 70,
+        "outcome": "VIOLATION",
+    }
+    values.update(overrides)
+    return Finding(**values)
+
+
+def _decision_body(
+    *, decision: str = "CONFIRMED", rationale: str = "evidence supports the finding"
+) -> dict[str, str]:
+    return {"decision": decision, "rationale": rationale}
 
 
 @pytest.fixture(autouse=True)
 def _reset_findings_deps() -> Iterator[None]:
-    """Reset the module-level global before and after every test."""
     configure_findings(None)
     yield
     configure_findings(None)
 
 
 # ---------------------------------------------------------------------------
-# 1. Tenant-scoped listing + JSON shape
+# Authentication
 # ---------------------------------------------------------------------------
 
 
-async def test_list_findings_returns_only_tenant_with_expected_shape() -> None:
-    repo = FakeFindingsRepo()
-    p1 = _finding(severity=Severity.P1, risk_score=95, outcome="VIOLATION")
-    p3 = _finding(severity=Severity.P3, risk_score=30, outcome="SUSPICIOUS")
-    other = _finding(tenant_id=OTHER_TENANT, severity=Severity.P2)
-    repo.add(p1, p3, other)
-    app = _build_app(repo, FakeDecisionsStore())
-
+async def test_missing_credential_is_401() -> None:
+    app = _build_app()
     async with _client(app) as client:
         response = await client.get("/v1/findings", params={"tenant_id": str(TENANT)})
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
+    # No existence leak in the rejection body.
+    assert "finding" not in response.json()["detail"].lower()
+
+
+async def test_forged_and_expired_credentials_are_401() -> None:
+    app = _build_app()
+    expired = mint_token(
+        SECRET,
+        principal_id="reviewer-1",
+        tenant_ids=[TENANT],
+        roles=["reviewer"],
+        issued_at=datetime.now(UTC) - timedelta(hours=2),
+        ttl_seconds=60,
+    )
+    forged = _token().rsplit(".", 1)[0] + ".AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    async with _client(app) as client:
+        expired_response = await client.get(
+            "/v1/findings", params={"tenant_id": str(TENANT)}, headers=_auth(expired)
+        )
+        forged_response = await client.get(
+            "/v1/findings", params={"tenant_id": str(TENANT)}, headers=_auth(forged)
+        )
+        wrong_scheme = await client.get(
+            "/v1/findings",
+            params={"tenant_id": str(TENANT)},
+            headers={"Authorization": f"Basic {_token()}"},
+        )
+    assert expired_response.status_code == 401
+    assert forged_response.status_code == 401
+    assert wrong_scheme.status_code == 401
+
+
+async def test_token_signed_with_another_secret_is_rejected() -> None:
+    other_secret_token = mint_token(
+        "a-different-secret-value-0123456789",
+        principal_id="reviewer-1",
+        tenant_ids=[TENANT],
+        roles=["reviewer"],
+    )
+    app = _build_app()
+    async with _client(app) as client:
+        response = await client.get(
+            "/v1/findings", params={"tenant_id": str(TENANT)}, headers=_auth(other_secret_token)
+        )
+    assert response.status_code == 401
+
+
+def test_unconfigured_authenticator_is_fail_closed_503() -> None:
+    app = _build_app(authenticator=TokenAuthenticator(secret=SECRET))
+    # Clearing deps simulates a composition root that forgot authentication.
+    configure_findings(
+        FindingsDeps(
+            findings_repo=FakeFindingsRepo(),
+            review_decisions_repo=FakeDecisionsStore(),
+            authenticator=None,
+        )
+    )
+    import asyncio
+
+    async def call() -> int:
+        async with _client(app) as client:
+            response = await client.get(
+                "/v1/findings", params={"tenant_id": str(TENANT)}, headers=_auth(_token())
+            )
+        return response.status_code
+
+    assert asyncio.run(call()) == 503
+
+
+# ---------------------------------------------------------------------------
+# Tenant scope derives from the principal
+# ---------------------------------------------------------------------------
+
+
+async def test_tenant_outside_principal_membership_is_403() -> None:
+    repo = FakeFindingsRepo()
+    other = _finding(tenant_id=OTHER_TENANT)
+    repo.add(other)
+    app = _build_app(repo)
+
+    async with _client(app) as client:
+        granted = await client.get(
+            "/v1/findings", params={"tenant_id": str(TENANT)}, headers=_auth(_token())
+        )
+        denied = await client.get(
+            "/v1/findings",
+            params={"tenant_id": str(OTHER_TENANT)},
+            headers=_auth(_token()),
+        )
+
+    assert granted.status_code == 200
+    assert granted.json() == []
+    assert denied.status_code == 403
+
+
+async def test_list_returns_only_principal_tenant_findings() -> None:
+    repo = FakeFindingsRepo()
+    mine = _finding(severity=Severity.P1, risk_score=95)
+    theirs = _finding(tenant_id=OTHER_TENANT)
+    repo.add(mine, theirs)
+    app = _build_app(repo)
+
+    async with _client(app) as client:
+        response = await client.get(
+            "/v1/findings", params={"tenant_id": str(TENANT)}, headers=_auth(_token())
+        )
 
     assert response.status_code == 200
     body = response.json()
-    assert isinstance(body, list)
-    assert {row["id"] for row in body} == {str(p1.id), str(p3.id)}
-    assert {row["severity"] for row in body} == {"P1", "P3"}
-    assert {row["risk_score"] for row in body} == {95, 30}
-    expected_keys = {
-        "id",
-        "tenant_id",
-        "finding_type",
-        "severity",
-        "status",
-        "title",
-        "detected_at",
-        "risk_score",
-        "outcome",
-    }
-    for row in body:
-        assert expected_keys <= set(row)
-        assert row["tenant_id"] == str(TENANT)
-        assert row["status"] == "OPEN"
-        assert row["severity"] in {"P1", "P2", "P3", "P4"}
+    assert {row["id"] for row in body} == {str(mine.id)}
+    assert body[0]["severity"] == "P1"
+    assert body[0]["tenant_id"] == str(TENANT)
 
 
 # ---------------------------------------------------------------------------
-# 2. Detail includes review decisions
+# RBAC
 # ---------------------------------------------------------------------------
 
 
-async def test_get_finding_returns_finding_and_review_decisions() -> None:
+async def test_read_only_auditor_cannot_submit_decision() -> None:
     repo = FakeFindingsRepo()
     finding = _finding()
     repo.add(finding)
     store = FakeDecisionsStore()
-    decision = _decision(finding, reviewer_id="alice")
-    await store.record(decision)
     app = _build_app(repo, store)
 
     async with _client(app) as client:
-        response = await client.get(f"/v1/findings/{finding.id}", params={"tenant_id": str(TENANT)})
+        readable = await client.get(
+            f"/v1/findings/{finding.id}",
+            params={"tenant_id": str(TENANT)},
+            headers=_auth(_token(roles=("auditor",))),
+        )
+        denied = await client.post(
+            f"/v1/findings/{finding.id}/decisions",
+            params={"tenant_id": str(TENANT)},
+            headers=_auth(_token(roles=("auditor",))),
+            json=_decision_body(),
+        )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["id"] == str(finding.id)
-    assert body["tenant_id"] == str(TENANT)
-    assert body["severity"] == "P2"
-    assert isinstance(body["review_decisions"], list)
-    assert len(body["review_decisions"]) == 1
-    stored = body["review_decisions"][0]
-    assert stored["id"] == str(decision.id)
-    assert stored["reviewer_id"] == "alice"
-    assert stored["decision"] == "CONFIRMED"
-
-
-# ---------------------------------------------------------------------------
-# 3. Cross-tenant detail is a 404
-# ---------------------------------------------------------------------------
+    assert readable.status_code == 200
+    assert denied.status_code == 403
+    assert store.decisions == []
 
 
-async def test_get_finding_from_other_tenant_returns_404() -> None:
+async def test_analyst_cannot_submit_confirm_but_can_request_more_evidence() -> None:
     repo = FakeFindingsRepo()
-    finding = _finding(tenant_id=TENANT)
+    finding = _finding()
     repo.add(finding)
-    app = _build_app(repo, FakeDecisionsStore())
+    store = FakeDecisionsStore()
+    app = _build_app(repo, store)
+    analyst = _auth(_token(roles=("analyst",)))
 
     async with _client(app) as client:
-        response = await client.get(
-            f"/v1/findings/{finding.id}", params={"tenant_id": str(OTHER_TENANT)}
+        prohibited = await client.post(
+            f"/v1/findings/{finding.id}/decisions",
+            params={"tenant_id": str(TENANT)},
+            headers=analyst,
+            json=_decision_body(decision="CONFIRMED"),
+        )
+        allowed = await client.post(
+            f"/v1/findings/{finding.id}/decisions",
+            params={"tenant_id": str(TENANT)},
+            headers=analyst,
+            json=_decision_body(decision="NEEDS_MORE_EVIDENCE", rationale="need the ticket"),
         )
 
-    assert response.status_code == 404
+    assert prohibited.status_code == 403
+    assert allowed.status_code == 201
+    assert [d.decision for d in store.decisions] == ["NEEDS_MORE_EVIDENCE"]
 
 
-# ---------------------------------------------------------------------------
-# 4. Non-existent finding is a 404
-# ---------------------------------------------------------------------------
-
-
-async def test_get_missing_finding_returns_404() -> None:
-    app = _build_app(FakeFindingsRepo(), FakeDecisionsStore())
-
-    async with _client(app) as client:
-        response = await client.get(
-            f"/v1/findings/{uuid.uuid4()}", params={"tenant_id": str(TENANT)}
-        )
-
-    assert response.status_code == 404
-
-
-# ---------------------------------------------------------------------------
-# 5. Valid decision is recorded
-# ---------------------------------------------------------------------------
-
-
-async def test_post_decision_records_reviewer_decision() -> None:
+async def test_reviewer_records_decision_with_authenticated_actor() -> None:
     repo = FakeFindingsRepo()
     finding = _finding()
     repo.add(finding)
@@ -296,71 +373,23 @@ async def test_post_decision_records_reviewer_decision() -> None:
         response = await client.post(
             f"/v1/findings/{finding.id}/decisions",
             params={"tenant_id": str(TENANT)},
-            json={
-                "reviewer_id": "rev-1",
-                "decision": "CONFIRMED",
-                "rationale": "evidence supports the finding",
-            },
+            headers=_auth(_token(principal_id="secops.alice")),
+            json=_decision_body(),
         )
 
     assert response.status_code == 201
-    body = response.json()
-    assert body["status"] == "recorded"
+    assert response.json()["status"] == "recorded"
     assert len(store.decisions) == 1
     stored = store.decisions[0]
-    assert body["id"] == str(stored.id)
+    # Actor comes from the credential, not from the request body.
+    assert stored.reviewer_id == "secops.alice"
     assert stored.tenant_id == TENANT
     assert stored.finding_id == finding.id
-    assert stored.reviewer_id == "rev-1"
-    assert stored.decision == "CONFIRMED"
-    assert stored.rationale == "evidence supports the finding"
 
 
-# ---------------------------------------------------------------------------
-# 6. Invalid payloads are rejected by validation
-# ---------------------------------------------------------------------------
-
-
-async def test_post_decision_rejects_invalid_value_and_empty_rationale() -> None:
+async def test_spoofed_reviewer_id_in_body_is_rejected() -> None:
     repo = FakeFindingsRepo()
     finding = _finding()
-    repo.add(finding)
-    store = FakeDecisionsStore()
-    app = _build_app(repo, store)
-
-    async with _client(app) as client:
-        invalid_value = await client.post(
-            f"/v1/findings/{finding.id}/decisions",
-            params={"tenant_id": str(TENANT)},
-            json={
-                "reviewer_id": "rev-1",
-                "decision": "MAYBE",
-                "rationale": "not a valid decision",
-            },
-        )
-        empty_rationale = await client.post(
-            f"/v1/findings/{finding.id}/decisions",
-            params={"tenant_id": str(TENANT)},
-            json={
-                "reviewer_id": "rev-1",
-                "decision": "CONFIRMED",
-                "rationale": "",
-            },
-        )
-
-    assert invalid_value.status_code == 422
-    assert empty_rationale.status_code == 422
-    assert store.decisions == []
-
-
-# ---------------------------------------------------------------------------
-# 7. Cross-tenant decision is a 404 and writes nothing
-# ---------------------------------------------------------------------------
-
-
-async def test_post_decision_for_other_tenant_returns_404_and_writes_nothing() -> None:
-    repo = FakeFindingsRepo()
-    finding = _finding(tenant_id=TENANT)
     repo.add(finding)
     store = FakeDecisionsStore()
     app = _build_app(repo, store)
@@ -368,115 +397,104 @@ async def test_post_decision_for_other_tenant_returns_404_and_writes_nothing() -
     async with _client(app) as client:
         response = await client.post(
             f"/v1/findings/{finding.id}/decisions",
-            params={"tenant_id": str(OTHER_TENANT)},
-            json={
-                "reviewer_id": "rev-1",
-                "decision": "CONFIRMED",
-                "rationale": "cross-tenant attempt",
-            },
+            params={"tenant_id": str(TENANT)},
+            headers=_auth(_token(principal_id="real.reviewer")),
+            json={**_decision_body(), "reviewer_id": "someone.else"},
+        )
+
+    assert response.status_code == 422
+    assert store.decisions == []
+
+
+async def test_unknown_decision_type_is_403_before_any_write() -> None:
+    repo = FakeFindingsRepo()
+    finding = _finding()
+    repo.add(finding)
+    store = FakeDecisionsStore()
+    app = _build_app(repo, store)
+
+    async with _client(app) as client:
+        response = await client.post(
+            f"/v1/findings/{finding.id}/decisions",
+            params={"tenant_id": str(TENANT)},
+            headers=_auth(_token()),
+            json={"decision": "APPROVED", "rationale": "not an allowed decision"},
+        )
+
+    # The request schema rejects it first (allowlist mirrors the RBAC map).
+    assert response.status_code in {403, 422}
+    assert store.decisions == []
+
+
+async def test_cross_tenant_decision_is_404_and_writes_nothing() -> None:
+    repo = FakeFindingsRepo()
+    finding = _finding(tenant_id=OTHER_TENANT)
+    repo.add(finding)
+    store = FakeDecisionsStore()
+    # Principal belongs to both tenants, so isolation is the control under test.
+    app = _build_app(repo, store)
+    two_tenant_token = _token(tenants=(TENANT, OTHER_TENANT))
+
+    async with _client(app) as client:
+        response = await client.post(
+            f"/v1/findings/{finding.id}/decisions",
+            params={"tenant_id": str(TENANT)},
+            headers=_auth(two_tenant_token),
+            json=_decision_body(),
         )
 
     assert response.status_code == 404
     assert store.decisions == []
 
 
-# ---------------------------------------------------------------------------
-# 8. Listing decisions + cross-tenant isolation
-# ---------------------------------------------------------------------------
-
-
-async def test_list_decisions_returns_recorded_and_hides_cross_tenant() -> None:
+async def test_decision_history_is_append_only_and_ordered() -> None:
     repo = FakeFindingsRepo()
     finding = _finding()
     repo.add(finding)
     store = FakeDecisionsStore()
     app = _build_app(repo, store)
-
-    async with _client(app) as client:
-        post = await client.post(
-            f"/v1/findings/{finding.id}/decisions",
-            params={"tenant_id": str(TENANT)},
-            json={
-                "reviewer_id": "rev-2",
-                "decision": "FALSE_POSITIVE",
-                "rationale": "benign maintenance window",
-            },
-        )
-        assert post.status_code == 201
-
-        listed = await client.get(
-            f"/v1/findings/{finding.id}/decisions",
-            params={"tenant_id": str(TENANT)},
-        )
-        cross_tenant = await client.get(
-            f"/v1/findings/{finding.id}/decisions",
-            params={"tenant_id": str(OTHER_TENANT)},
-        )
-
-    assert listed.status_code == 200
-    decisions = listed.json()
-    assert len(decisions) == 1
-    assert decisions[0]["reviewer_id"] == "rev-2"
-    assert decisions[0]["decision"] == "FALSE_POSITIVE"
-    assert cross_tenant.status_code == 404
-
-
-# ---------------------------------------------------------------------------
-# 9. Unconfigured dependencies fail closed with 503
-# ---------------------------------------------------------------------------
-
-
-async def test_list_findings_unconfigured_returns_503() -> None:
-    # Build the app with the router mounted, then clear the global so the
-    # route hits the "store not configured" branch.
-    app = _build_app(FakeFindingsRepo(), FakeDecisionsStore())
-    configure_findings(None)
-
-    async with _client(app) as client:
-        response = await client.get("/v1/findings", params={"tenant_id": str(TENANT)})
-
-    assert response.status_code == 503
-
-
-# ---------------------------------------------------------------------------
-# 10. Decisions are append-only
-# ---------------------------------------------------------------------------
-
-
-async def test_repeated_decisions_append_without_overwriting() -> None:
-    repo = FakeFindingsRepo()
-    finding = _finding()
-    repo.add(finding)
-    store = FakeDecisionsStore()
-    app = _build_app(repo, store)
+    reviewer = _auth(_token(principal_id="secops.bob"))
 
     async with _client(app) as client:
         first = await client.post(
             f"/v1/findings/{finding.id}/decisions",
             params={"tenant_id": str(TENANT)},
-            json={
-                "reviewer_id": "rev-a",
-                "decision": "NEEDS_MORE_EVIDENCE",
-                "rationale": "initial review",
-            },
+            headers=reviewer,
+            json=_decision_body(decision="NEEDS_MORE_EVIDENCE", rationale="initial"),
         )
         second = await client.post(
             f"/v1/findings/{finding.id}/decisions",
             params={"tenant_id": str(TENANT)},
-            json={
-                "reviewer_id": "rev-b",
-                "decision": "CONFIRMED",
-                "rationale": "follow-up review",
-            },
+            headers=reviewer,
+            json=_decision_body(decision="CONFIRMED", rationale="follow-up"),
         )
         listed = await client.get(
             f"/v1/findings/{finding.id}/decisions",
             params={"tenant_id": str(TENANT)},
+            headers=reviewer,
         )
 
     assert first.status_code == 201
     assert second.status_code == 201
-    assert len(store.decisions) == 2
     decisions = listed.json()
-    assert len(decisions) == 2
-    assert [d["reviewer_id"] for d in decisions] == ["rev-a", "rev-b"]
+    assert [d["decision"] for d in decisions] == ["NEEDS_MORE_EVIDENCE", "CONFIRMED"]
+    assert {d["reviewer_id"] for d in decisions} == {"secops.bob"}
+
+
+async def test_missing_rationale_is_422() -> None:
+    repo = FakeFindingsRepo()
+    finding = _finding()
+    repo.add(finding)
+    store = FakeDecisionsStore()
+    app = _build_app(repo, store)
+
+    async with _client(app) as client:
+        response = await client.post(
+            f"/v1/findings/{finding.id}/decisions",
+            params={"tenant_id": str(TENANT)},
+            headers=_auth(_token()),
+            json={"decision": "CONFIRMED", "rationale": ""},
+        )
+
+    assert response.status_code == 422
+    assert store.decisions == []

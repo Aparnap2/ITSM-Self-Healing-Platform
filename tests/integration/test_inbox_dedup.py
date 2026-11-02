@@ -69,6 +69,37 @@ async def test_concurrent_duplicate_delivery_exactly_one_wins(repos: RepositoryB
     )
 
 
+async def test_event_ids_are_deduplicated_per_tenant_not_globally(
+    repos: RepositoryBundle,
+) -> None:
+    """One tenant cannot burn another tenant's dedup namespace."""
+    tenant_a, tenant_b = uuid4(), uuid4()
+    event_id = f"evt-{uuid4().hex}"
+
+    first_a = await repos.inbox.try_record(
+        source_system="cloudtrail",
+        external_event_id=event_id,
+        payload_hash="c" * 64,
+        tenant_id=tenant_a,
+    )
+    first_b = await repos.inbox.try_record(
+        source_system="cloudtrail",
+        external_event_id=event_id,
+        payload_hash="c" * 64,
+        tenant_id=tenant_b,
+    )
+    duplicate_a = await repos.inbox.try_record(
+        source_system="cloudtrail",
+        external_event_id=event_id,
+        payload_hash="d" * 64,
+        tenant_id=tenant_a,
+    )
+
+    assert first_a is InboxReceipt.NEW
+    assert first_b is InboxReceipt.NEW
+    assert duplicate_a is InboxReceipt.DUPLICATE
+
+
 async def test_audit_events_are_append_only(repos: RepositoryBundle, pg_dsn: str) -> None:
     event = AuditEvent(
         id=uuid4(),

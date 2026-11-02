@@ -10,11 +10,42 @@
   addressable; in that case it points to the original with a hash.
 - `payload_hash` is computed over the redacted payload as stored (after
   redaction), so verification matches the retained copy.
-- Retention expiry: when raw evidence expires, the canonical event remains with
-  `raw_evidence_reference` marked `expired` and `payload_hash` retained for
-  integrity; findings referencing expired evidence are flagged
-  `evidence_expired`.
-- Deletion follows legal-hold policy; append-only audit records are not deleted.
+- `source_events` is append-only: a database trigger rejects `UPDATE` and
+  `DELETE`. Retention therefore **cannot** rewrite `raw_evidence_reference` or
+  delete the canonical event.
+
+## Retention and erasure (implemented)
+
+Source: `src/itsm_agent/privacy/retention.py`,
+`migrations/008_retention_erasure.sql`, and
+`PsycopgRetentionRepository` in
+`src/itsm_agent/adapters/persistence/repositories.py`.
+
+| Data class | Default retention | On expiry |
+|---|---|---|
+| `RAW_EVIDENCE` | 90 days | `ANONYMIZE` (record a tombstone) |
+| `CANONICAL_EVENT` | 2555 days | `RETAIN` |
+| `DERIVED_PROJECTION` | 90 days | `DELETE_DERIVED` |
+| `FINDING` | 2555 days | `RETAIN` |
+| `INVESTIGATION` | 365 days | `RETAIN` |
+| `REVIEW_DECISION` | 2555 days | `RETAIN` |
+| `OPERATIONAL_LOG` | 30 days | `DELETE_DERIVED` |
+
+- A tenant may override a default per data class (`retention_policies`).
+- `plan_erasure` is pure and deterministic: it computes per-class cutoffs and
+  actions, and blocks the whole request if an active legal hold covers any
+  requested class.
+- An unknown data class/policy fails closed to `RETAIN`.
+- Erasure execution:
+  - records an `erasure_requests` row (tenant-scoped, status
+    `REQUESTED`/`BLOCKED`/`COMPLETED`);
+  - writes `erasure_tombstones` for expired raw evidence **without touching
+    the append-only `source_events` row** — the tombstone keeps
+    `record_id`, `integrity_hash` (`payload_hash`), class, request id and time;
+  - deletes only rebuildable derived projections (`access_facts`);
+  - is idempotent per `(erase_request_id, data_class, record_id)`;
+  - never cascades into findings or reviewer decisions.
+- Tombstones, requests and holds are themselves tenant-isolated by RLS.
 
 ## Redaction
 
@@ -23,12 +54,6 @@
 - PII is minimized and redacted unless required for audit; retention follows
   policy.
 - Raw payloads are referenced, not inlined, in canonical events.
-
-## Retention
-
-- Canonical events retained per configured retention period.
-- Raw evidence retained separately with its own lifecycle.
-- Audit events are append-only; deletion follows legal hold policy.
 
 ## PII
 
@@ -48,5 +73,11 @@
 
 ## Known limitations
 
-- Retention periods are configurable; defaults are conservative.
+- Retention has **no scheduler**. Erasure is invoked programmatically (and
+  tested); expiry is not enforced automatically by a worker.
+- `RAW_EVIDENCE` erasure records a tombstone but does not delete an object
+  from external object storage. Lifecycle rules on the bucket are still
+  required and are not managed by this repository.
+- Findings and reviewer decisions are retained by default; anonymization of
+  their free-text fields is not implemented.
 - Redaction rules are source-specific and may miss novel patterns.

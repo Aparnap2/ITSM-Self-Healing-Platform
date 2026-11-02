@@ -49,6 +49,18 @@ Proven by tests running against real PostgreSQL and NATS JetStream (not mocks):
   this path.
 - **Append-only review** — reviewer decisions are insert-only and
   tenant-scoped, and survive an API process restart.
+- **Authenticated reviewer boundary** — bearer-token verification, RBAC
+  (`auditor` / `analyst` / `reviewer` / `admin`), tenant-membership checks, and
+  actor provenance taken from the credential (never the request body). Tested
+  offline and against real PostgreSQL.
+- **Database-enforced tenant isolation** — PostgreSQL row-level security
+  (enabled *and* forced) on every tenant-owned table, keyed on a
+  transaction-local context. Missing context sees zero rows; pooled
+  connections cannot leak a tenant across transactions.
+- **Retention and erasure semantics** — append-only evidence is never
+  rewritten: expiry records a tombstone that preserves the integrity hash,
+  while only rebuildable derived projections are deleted. Legal holds block
+  execution.
 
 At-least-once delivery only. There is no exactly-once claim anywhere in this
 repository: PostgreSQL is canonical, NATS is transport, and consumers must
@@ -56,10 +68,15 @@ be idempotent.
 
 ### Explicitly not done yet
 
-- No authentication or authorization on the reviewer API; no reviewer
-  identity verification, RBAC, or PostgreSQL row-level security.
-- No retention/erasure enforcement, no pagination, no finding status
-  transitions (decisions are append-only annotations).
+- The HMAC bearer implementation is a minimal replacement point, not an IdP:
+  no key rotation, revocation, or server-side role freshness. A real OIDC/mTLS
+  `Authenticator` is still required for production.
+- Retention has no scheduler or object-storage lifecycle integration; erasure
+  is invoked programmatically.
+- No pagination, no finding status transitions (decisions are append-only
+  annotations), and no management API for principals, roles, or tenants.
+- Tenant RLS covers the audit domain (`source_events` → findings/decisions),
+  not the legacy incident/approval/action tables.
 - No packaged API server or audit-consumer process entrypoint — both are
   composed programmatically and exercised by the test suites.
 - The Jira Service Management adapter is not implemented; Mockoon remains
@@ -137,25 +154,30 @@ belongs to another tenant is reported as `404`, exactly like a missing one.
 | `GET` | `/v1/findings/{id}/decisions?tenant_id=…` | List decisions for a finding |
 
 ```bash
-curl -s "http://localhost:8000/v1/findings?tenant_id=$TENANT_ID"
+curl -s -H "Authorization: Bearer $REVIEWER_TOKEN" \
+  "http://localhost:8000/v1/findings?tenant_id=$TENANT_ID"
 
 curl -s -X POST \
+  -H "Authorization: Bearer $REVIEWER_TOKEN" \
   "http://localhost:8000/v1/findings/$FINDING_ID/decisions?tenant_id=$TENANT_ID" \
   -H 'content-type: application/json' \
   -d '{
-        "reviewer_id": "secops.alice",
         "decision": "CONFIRMED",
         "rationale": "AssumeRole to Admin by an unapproved principal.",
         "evidence_pack_ref": "bundle-2026-11-01-001"
       }'
 ```
 
-Decision body: `reviewer_id` (1–128 chars), `decision` in
+Decision body: `decision` in
 `CONFIRMED | FALSE_POSITIVE | ACCEPTED_RISK | NEEDS_MORE_EVIDENCE`,
-`rationale` (1–2000 chars), optional `evidence_pack_ref`. Status codes:
-`200` read, `201` appended, `404` unknown/cross-tenant, `422` invalid body,
+`rationale` (1–2000 chars), optional `evidence_pack_ref`. `reviewer_id` is
+derived from the credential and rejected in the body. Status codes:
+`200` read, `201` appended, `401` missing/invalid credential, `403`
+cross-tenant or missing permission, `404` unknown/cross-tenant, `422` invalid
+body,
 `503` store not configured. Full contract and known gaps:
-[`docs/findings-api.md`](docs/findings-api.md).
+[`docs/findings-api.md`](docs/findings-api.md). Tokens are minted out of band
+with `itsm_agent.api.auth.mint_token`; there is no token endpoint yet.
 
 ## Local development
 
@@ -238,6 +260,12 @@ LLM cannot talk its way into an action.
    metadata is not trusted.
 10. No secrets in Git, logs, traces, test output, or audit payloads.
     Deterministic tests never require a remote LLM, SaaS, or internet.
+11. Reviewer identity and tenant scope come from a verified credential, never
+    from the request body; RBAC is deny-by-default.
+12. Tenant isolation is enforced by PostgreSQL RLS *and* by query predicates;
+    missing tenant context sees zero rows (fail closed).
+13. Append-only evidence is never rewritten by retention; erasure preserves
+    an integrity tombstone and deletes only rebuildable projections.
 
 ## Documentation
 
@@ -251,8 +279,10 @@ LLM cannot talk its way into an action.
   fields, timestamp and schema-versioning rules
 - [`docs/source-integration-matrix.md`](docs/source-integration-matrix.md) —
   source coverage and trust levels
-- [`docs/privacy-retention.md`](docs/privacy-retention.md) — retention and
-  redaction intent
+- [`docs/security-boundaries.md`](docs/security-boundaries.md) —
+  authentication, RBAC, row-level security, and the honest gaps
+- [`docs/privacy-retention.md`](docs/privacy-retention.md) — retention,
+  legal hold, erasure tombstones, and redaction
 - [`docs/findings-api.md`](docs/findings-api.md) — findings queue and
   reviewer-decision HTTP contract (tenant scoping, status codes,
   evidence-first invariants, known gaps)

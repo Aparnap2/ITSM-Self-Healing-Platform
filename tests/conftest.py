@@ -61,6 +61,11 @@ TABLES = (
     "coverage_status",
     "review_decisions",
     "processing_records",
+    "erasure_tombstones",
+    "erasure_requests",
+    "legal_holds",
+    "retention_policies",
+    "tenants",
 )
 
 

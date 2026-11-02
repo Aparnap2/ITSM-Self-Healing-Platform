@@ -20,6 +20,7 @@ from itsm_agent.adapters.persistence.repositories import (
     PsycopgProcessingRecordRepository,
     PsycopgSourceEventRepository,
 )
+from itsm_agent.adapters.persistence.tenant import tenant_transaction
 from itsm_agent.domain.events import SourceEvent
 
 logger = logging.getLogger(__name__)
@@ -46,13 +47,23 @@ async def process_source_event(
     """
     from itsm_agent.detection.engine import run_detection
 
-    # Tenant validation: re-read canonical event from PostgreSQL; the message
-    # cannot override canonical tenant identity.
+    # Tenant validation + all writes run inside one transaction-local tenant
+    # context, so every tenant-scoped read/write is covered by RLS. The
+    # canonical event is re-read under the SENDER's tenant; the message cannot
+    # override canonical tenant identity.
     src_repo = PsycopgSourceEventRepository(pool)
-    async with pool.connection() as conn:
-        canonical = await src_repo.get(event.event_id, conn=conn)
+    failure: Exception | None = None
+    result: tuple[bool, list[UUID]] = (False, [])
+    async with tenant_transaction(pool, event.tenant_id) as conn:
+        canonical = await src_repo.get_for_tenant(
+            event.tenant_id,
+            event.event_id,
+            conn=conn,
+        )
         if canonical is None:
-            raise ValueError(f"unknown source event: {event.event_id}")
+            raise ValueError(f"unknown source event for tenant: {event.event_id}")
+        # Defense in depth: a row read under the sender's tenant can no longer
+        # disagree, but keep the explicit check in case the read path changes.
         if canonical.tenant_id != event.tenant_id:
             raise ValueError(
                 f"tenant mismatch for event {event.event_id}: "
@@ -70,38 +81,46 @@ async def process_source_event(
         )
         if status == "COMPLETED":
             # Already processed; do not re-run detection or create findings.
-            await conn.commit()
-            return True, []
-        if status == "PROCESSING":
+            result = (True, [])
+        elif status == "PROCESSING":
             # Another worker holds the slot; let the caller retry.
-            await conn.commit()
             raise RuntimeError("processing in progress; retry later")
-
-        # status NEW or FAILED -> proceed.
-        assert record_id is not None
-        try:
-            findings = run_detection(
-                [canonical],
-                approvals=approvals,
-                covered_sources=covered_sources,
-                source_coverage=source_coverage,
-                now=clock_now(),
-            )
-            # Approval detection is only meaningful for privileged events; the
-            # engine already filters. But run_detection above only runs
-            # privilege/failed-access unless approvals/coverage provided.
-            # Always also run approval detection with provided context.
-            finding_ids: list[UUID] = []
-            for f in findings:
-                persisted = await findings_repo.upsert(f, conn=conn)
-                finding_ids.append(persisted.id)
-            await processing_repo.complete(record_id, finding_ids, conn=conn)
-            await conn.commit()
-            return False, finding_ids
-        except Exception as exc:  # noqa: BLE001
-            await processing_repo.fail(record_id, str(exc), conn=conn)
-            await conn.commit()
-            raise
+        else:
+            # status NEW or FAILED -> proceed.
+            assert record_id is not None
+            try:
+                findings = run_detection(
+                    [canonical],
+                    approvals=approvals,
+                    covered_sources=covered_sources,
+                    source_coverage=source_coverage,
+                    now=clock_now(),
+                )
+                finding_ids: list[UUID] = []
+                for f in findings:
+                    persisted = await findings_repo.upsert(f, conn=conn)
+                    finding_ids.append(persisted.id)
+                await processing_repo.complete(
+                    record_id,
+                    finding_ids,
+                    tenant_id=tenant_id,
+                    conn=conn,
+                )
+                result = (False, finding_ids)
+            except Exception as exc:  # noqa: BLE001
+                # Persist the FAILED record in the same tenant transaction, then
+                # re-raise AFTER the transaction commits (raising here would roll
+                # the failure record back).
+                failure = exc
+                await processing_repo.fail(
+                    record_id,
+                    str(exc),
+                    tenant_id=tenant_id,
+                    conn=conn,
+                )
+    if failure is not None:
+        raise failure
+    return result
 
 
 async def consume_source_event(

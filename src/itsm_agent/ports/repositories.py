@@ -132,6 +132,7 @@ class InboxRepository(Protocol):
         source_system: str,
         external_event_id: str,
         payload_hash: str,
+        tenant_id: UUID | None = None,
         conn: AsyncConnection | None = None,
     ) -> InboxReceipt: ...
     async def get(

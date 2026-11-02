@@ -14,6 +14,7 @@ from fastapi.responses import PlainTextResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from itsm_agent.api import security
+from itsm_agent.api.auth import Authenticator
 from itsm_agent.api.routes.findings import (
     DecisionsStore,
     FindingsDeps,
@@ -41,6 +42,7 @@ def create_app(
     sink: IngestionSink,
     findings_repo: FindingsReader | None = None,
     review_decisions_repo: DecisionsStore | None = None,
+    authenticator: Authenticator | None = None,
 ) -> FastAPI:
     """Build the API app with the given durable ingestion sink."""
     app = FastAPI(
@@ -67,10 +69,14 @@ def create_app(
     app.include_router(ingestion_router)
 
     if findings_repo is not None and review_decisions_repo is not None:
+        # The router is always mounted when the stores are wired; requests fail
+        # closed with 503 if no authenticator was supplied, so a misconfigured
+        # deployment cannot silently serve an unauthenticated findings API.
         configure_findings(
             FindingsDeps(
                 findings_repo=findings_repo,
                 review_decisions_repo=review_decisions_repo,
+                authenticator=authenticator,
             )
         )
         app.include_router(findings_router)

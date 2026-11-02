@@ -14,14 +14,17 @@ from itsm_agent.adapters.persistence.repositories import (
     PsycopgOutboxRepository,
     PsycopgProcessingRecordRepository,
     PsycopgReviewDecisionRepository,
+    PsycopgTenantRepository,
     PsycopgTerminalStateRepository,
     PsycopgWorkflowStateRepository,
     RepositoryBundle,
 )
+from itsm_agent.adapters.persistence.tenant import tenant_transaction
 
 __all__ = [
     "PersistenceConfig",
     "create_pool",
+    "tenant_transaction",
     "PsycopgActionIntentRepository",
     "PsycopgApprovalRepository",
     "PsycopgAuditRepository",
@@ -33,6 +36,7 @@ __all__ = [
     "PsycopgProcessingRecordRepository",
     "PsycopgReviewDecisionRepository",
     "PsycopgTerminalStateRepository",
+    "PsycopgTenantRepository",
     "PsycopgWorkflowStateRepository",
     "RepositoryBundle",
 ]

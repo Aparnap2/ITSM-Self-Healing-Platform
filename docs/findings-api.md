@@ -1,11 +1,12 @@
-# Findings and Reviewer Decisions API (Task 14)
+# Findings and Reviewer Decisions API
 
-Status: implemented on `feat/access-audit-foundation` (commit `ca9ce88`), with
-10 offline unit tests and 7 real-PostgreSQL integration tests (`babcbc0`).
+Status: implemented on `feat/access-audit-foundation`. Originally landed in
+`ca9ce88`/`babcbc0`; authenticated, tenant-membership-checked, RBAC-enforced
+and backed by PostgreSQL row-level security in the security-boundary slice.
 Contract source: `src/itsm_agent/api/routes/findings.py`.
 
 The surface is read-only over findings and append-only over reviewer decisions.
-It is mounted by `create_app` only when both repositories are supplied
+It is mounted by `create_app` when the two stores are supplied
 (`src/itsm_agent/api/app.py`), under the prefix `/v1/findings`.
 
 ## 1. Wiring
@@ -13,47 +14,51 @@ It is mounted by `create_app` only when both repositories are supplied
 | Item | Value | Source |
 |---|---|---|
 | Router prefix | `/v1/findings` | `routes/findings.py` (`APIRouter(prefix=...)`) |
-| Mount condition | both repositories non-`None` | `api/app.py` (`create_app`) |
+| Mount condition | both stores non-`None` | `api/app.py` (`create_app`) |
 | Dependency holder | process-global `_deps`, set by `configure_findings` | `routes/findings.py` |
+| Authenticator | `TokenAuthenticator` (HMAC bearer) or any `Authenticator` | `api/auth.py` |
 | Findings reader | `PsycopgFindingRepository.get` / `.list_for_tenant` | `repositories.py` |
 | Decisions store | `PsycopgReviewDecisionRepository` record/list methods | `repositories.py` |
 
 Dependencies are declared as narrow protocols (`FindingsReader`,
-`DecisionsStore`), so the routes can be exercised offline with fakes. Both
-repositories live in `src/itsm_agent/adapters/persistence/repositories.py`.
+`DecisionsStore`, `Authenticator`), so the routes can be exercised offline with
+fakes. Both stores live in
+`src/itsm_agent/adapters/persistence/repositories.py`.
+
+If the stores are wired but no authenticator is supplied, every request fails
+closed with `503`; the router never serves unauthenticated data.
 
 ## 2. Endpoints
 
-| Method | Path | Purpose | Success |
+| Method | Path | Required permission(s) | Success |
 |---|---|---|---|
-| GET | `/v1/findings` | List findings for a tenant | `200` JSON array |
-| GET | `/v1/findings/{finding_id}` | One finding plus its review decisions | `200` JSON object |
-| POST | `/v1/findings/{finding_id}/decisions` | Append reviewer decision | `201` (see §5) |
-| GET | `/v1/findings/{finding_id}/decisions` | List decisions for a finding | `200` JSON array |
+| GET | `/v1/findings` | `findings:read` | `200` JSON array |
+| GET | `/v1/findings/{finding_id}` | `findings:read`, `decisions:read` | `200` JSON object |
+| POST | `/v1/findings/{finding_id}/decisions` | `decisions:write` + permission for the decision type | `201` |
+| GET | `/v1/findings/{finding_id}/decisions` | `decisions:read` | `200` JSON array |
 
-These are the four routes currently defined in the module. There is no
-finding-status transition endpoint; see §7.
+There is no finding-status transition endpoint; see §9.
 
-## 3. Tenant scoping
+## 3. Authentication and tenant scoping
 
-Every request requires `tenant_id` as a UUID query parameter:
+Every request requires a bearer credential:
 
 ```text
+Authorization: Bearer v1.<payload>.<signature>
 GET /v1/findings?tenant_id=6f1c0b1e-6a8f-4a1f-9c0f-2d6a0b6f5f11
-GET /v1/findings/{finding_id}?tenant_id=6f1c0b1e-...
-POST /v1/findings/{finding_id}/decisions?tenant_id=6f1c0b1e-...
 ```
 
-- A missing or malformed `tenant_id` is a `422` (FastAPI request validation).
-- Tenant scoping is enforced in the SQL predicates
-  (`WHERE tenant_id = %s AND id = %s`; decisions filtered by
-  `tenant_id` and `finding_id`).
+- The token is verified by `TokenAuthenticator`: HMAC-SHA256 over the payload,
+  issuer must be `itsm-audit`, `exp` must be in the future.
+- The resulting principal carries `principal_id`, tenant memberships and roles.
+- `tenant_id` is a **requested scope**, never trusted as identity. It must be a
+  UUID (else `422`) and must be in the principal's `tenant_ids` (else `403`).
 - A finding that exists in a different tenant is indistinguishable from a
   missing finding: `404`, with detail `finding not found`.
-- `POST` also checks the finding through the tenant-scoped read first, so a
-  decision cannot be appended to another tenant's finding.
-- The tenant is **not** derived from an authenticated principal — there is no
-  authentication on this surface (§7).
+- PostgreSQL RLS independently scopes every read and write to the same tenant
+  (`docs/security-boundaries.md`), so a query bug cannot cross tenants.
+- Tenant scope for a decision is derived from the verified principal and the
+  verified finding; the body cannot override either.
 
 ## 4. Finding representation
 
@@ -84,62 +89,40 @@ POST /v1/findings/{finding_id}/decisions?tenant_id=6f1c0b1e-...
 | `detected_at` | string (ISO 8601) | Timezone-aware |
 | `rule_version` | string | Detection rule set version, currently `detection-rules-v1` |
 | `risk_score` | integer | Score set by the emitting rule (current rules use 30, 50, 60, 70) |
-| `outcome` | string | Emitted values: `VIOLATION`, `SUSPICIOUS`, `COVERAGE_GAP`, `INCONCLUSIVE` |
+| `outcome` | string | `VIOLATION`, `SUSPICIOUS`, `COVERAGE_GAP`, `INCONCLUSIVE` |
 
 `GET /v1/findings` returns an array of these objects ordered by
 `(detected_at, id)`, with no pagination. `GET /v1/findings/{finding_id}` adds a
-`review_decisions` array to the object:
-
-```json
-{
-  "id": "...",
-  "tenant_id": "...",
-  "finding_type": "...",
-  "severity": "P2",
-  "status": "OPEN",
-  "title": "...",
-  "description": "...",
-  "detected_at": "2026-01-01T12:00:00+00:00",
-  "rule_version": "detection-rules-v1",
-  "risk_score": 60,
-  "outcome": "SUSPICIOUS",
-  "review_decisions": []
-}
-```
+`review_decisions` array to the object.
 
 ## 5. Decision request
 
 `POST /v1/findings/{finding_id}/decisions` body
-(`FindingDecisionRequest`, Pydantic v2):
+(`FindingDecisionRequest`, Pydantic v2, `extra="forbid"`):
 
 | Field | Type | Constraints | Required |
 |---|---|---|---|
-| `reviewer_id` | string | 1–128 characters | yes |
 | `decision` | string | one of four enum values (below) | yes |
-| `rationale` | string | 1–2000 characters | yes |
-| `evidence_pack_ref` | string or null | opaque reference, no format/length constraint | no |
+| `rationale` | string | 1–2000 characters, stripped | yes |
+| `evidence_pack_ref` | string or null | opaque reference | no |
 
 `decision` must match `DECISION_PATTERN` exactly: `CONFIRMED`, `FALSE_POSITIVE`,
 `ACCEPTED_RISK`, or `NEEDS_MORE_EVIDENCE`.
 
+`reviewer_id` is **not** accepted in the body. Sending it (or any other unknown
+field) is a `422`; the stored actor is `principal.principal_id` from the
+verified credential.
+
 ```json
 {
-  "reviewer_id": "analyst-17",
   "decision": "CONFIRMED",
   "rationale": "AssumeRole from an unapproved IP range; no change ticket found.",
   "evidence_pack_ref": "bundle-2026-01-01-0007"
 }
 ```
 
-Success response (`201`) echoes only the stored id and a fixed status — it does
-not return the full decision:
-
-```json
-{"id": "c2f7d3aa-6a06-4a4e-9f0e-2a1e4b8c9d10", "status": "recorded"}
-```
-
-Repeated `POST`s append additional decisions. There is no uniqueness
-constraint and no "latest decision wins" logic.
+Success response (`201`) echoes only the stored id and a fixed status. Repeated
+`POST`s append additional decisions; there is no "latest decision wins" logic.
 
 ## 6. Decision representation
 
@@ -160,7 +143,8 @@ constraint and no "latest decision wins" logic.
 ```
 
 `tenant_id` and `finding_id` are validated on read but are not echoed in the
-decision JSON.
+decision JSON. `reviewer_id` is the authenticated principal that created the
+decision.
 
 ## 7. Status codes
 
@@ -168,15 +152,14 @@ decision JSON.
 |---|---|
 | `200` | Successful read (list, detail, decisions) |
 | `201` | Decision recorded |
+| `401` | Missing, malformed, forged, wrong-issuer, or expired credential (`WWW-Authenticate: Bearer`) |
+| `403` | Principal is not a member of the requested tenant, or lacks the required permission/decision type |
 | `404` | Finding absent **or** owned by another tenant (`{"detail": "finding not found"}`) |
-| `422` | Missing/malformed id; invalid decision body (enum, lengths) |
-| `503` | Findings dependencies absent (`{"detail": "findings store not configured"}`) |
+| `422` | Missing/malformed id or body (enum, lengths, unknown fields such as `reviewer_id`) |
+| `503` | Stores or authenticator not configured (fail closed) |
 
-Note on `503`: the guard lives in the route module (`_deps_or_503`). The stock
-`create_app` only mounts the router when both repositories are provided, so a
-process built without them returns `404` for these paths; `503` applies when the
-router is embedded without configured dependencies (e.g. imported directly in
-tests).
+Authorization happens before any write: an under-privileged or cross-tenant
+`POST` leaves the decision table unchanged.
 
 ## 8. Evidence-first invariants
 
@@ -199,26 +182,23 @@ tests).
 
 ## 9. What is not implemented
 
-- **No authentication or authorization.** `reviewer_id` is client-supplied and
-  unverified; no token, signature, or session is checked on this router.
-- **No RBAC.** Any caller who can reach the process can record any decision for
-  any tenant id they name.
-- **No row-level security.** Tenant isolation is query-level (`WHERE
-  tenant_id = ...`), not enforced by PostgreSQL RLS or a session-bound tenant.
+- **No management plane.** There is no endpoint to create/rotate principals,
+  grant roles, or manage tenants; tokens are minted out-of-band
+  (`mint_token`) and roles are embedded in the token.
+- **No key rotation or revocation.** A single symmetric secret signs tokens;
+  there is no key id, rotation window, or revocation list. A valid token works
+  until `exp`.
+- **No server-side role freshness.** A role change requires issuing a new
+  token; there is no lookup of current grants per request.
 - **No pagination, filtering, or sorting.** No `limit`/`offset`, no
-  severity/status/outcome filters; the list endpoint returns every finding for
-  the tenant.
+  severity/status/outcome filters.
 - **No update or delete.** The repository exposes only `INSERT` and `SELECT`;
-  there is no update/delete route, and no DB trigger enforces immutability on
-  `review_decisions` (migration 005 defines none) — append-only is an
-  application-level property.
+  append-only is enforced by the application and by the absence of routes,
+  not by a database trigger on `review_decisions`.
 - **No finding status transition.** Recording a decision does not change
-  `findings.status`; there is no `PATCH`/`PUT` endpoint.
+  `findings.status`.
 - **No evidence-link validation.** `evidence_pack_ref` is stored as an opaque
   optional string and is not resolved against an evidence bundle.
-- **Unknown body fields are ignored,** not rejected (Pydantic's default
-  `extra="ignore"` on `FindingDecisionRequest`), unlike the domain models'
-  `extra="forbid"`.
 - **No rate limiting.** The sliding-window limiter is wired to the ingestion
   router only.
 - **No OpenAPI schema.** `create_app` sets `docs_url`, `redoc_url`, and
@@ -230,10 +210,11 @@ tests).
 
 | Commit | Content |
 |---|---|
-| `371dffb` | `ReviewDecision` model, append-only tenant-scoped repository, 3 integration tests |
+| `371dffb` | `ReviewDecision` model, append-only tenant-scoped repository, integration tests |
 | `0a80cb2` | `migrations/006_audit_processing.sql` (`processing_records`, severity CHECK P1–P4) |
 | `00d11a9` | `tests/integration/test_audit_pipeline_durable.py` |
 | `98e83ef` | Repository exports; truncate `processing_records` between tests |
 | `ee55c3a` | Approval-evidence detection (`detect_approval_violation`) and outcome semantics |
 | `ca9ce88` | `api/routes/findings.py`, `create_app(..., findings_repo=..., review_decisions_repo=...)`, `PsycopgFindingRepository.get` |
-| `babcbc0` | `tests/unit/test_findings_api.py` (10 tests), `tests/integration/test_findings_api.py` (7 tests, real PostgreSQL) |
+| `babcbc0` | `tests/unit/test_findings_api.py`, `tests/integration/test_findings_api.py` (real PostgreSQL) |
+| security-boundary slice | `api/auth.py`, `api/rbac.py`, migrations 007–009, RLS/tenant plumbing, retention, authenticated API tests |
