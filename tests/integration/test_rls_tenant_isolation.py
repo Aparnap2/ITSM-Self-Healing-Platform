@@ -31,6 +31,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from itsm_agent.adapters.messaging.outbox_relay import OutboxRelay
 from itsm_agent.adapters.persistence.pool import PersistenceConfig, create_pool
+from itsm_agent.adapters.persistence.privileges import TENANT_RLS_TABLES
 from itsm_agent.adapters.persistence.repositories import (
     PsycopgFindingRepository,
     PsycopgOutboxRepository,
@@ -44,20 +45,7 @@ from itsm_agent.domain.models import Finding, Severity
 
 pytestmark = pytest.mark.integration
 
-TENANT_TABLES = (
-    "tenants",
-    "source_events",
-    "source_checkpoints",
-    "identity_mappings",
-    "access_facts",
-    "findings",
-    "evidence_references",
-    "coverage_status",
-    "review_decisions",
-    "processing_records",
-    "event_inbox",
-    "outbox",
-)
+TENANT_TABLES = TENANT_RLS_TABLES
 
 
 def _role_dsn(base_dsn: str, role: str, password: str) -> str:
