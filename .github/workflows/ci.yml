@@ -45,9 +45,9 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --frozen --extra dev --reinstall-package itsm-agent --no-cache
       - name: Ruff format check
-        run: uv run ruff format --check .
+        run: make format-check
       - name: Ruff lint
-        run: uv run ruff check .
+        run: make lint
 
   typecheck:
     name: Type Check (mypy --strict)
@@ -62,7 +62,7 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --frozen --extra dev --reinstall-package itsm-agent --no-cache
       - name: mypy strict
-        run: uv run mypy src tests
+        run: make typecheck
 
   secret-scan:
     name: Secret Scan (gitleaks)
@@ -95,11 +95,9 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --frozen --extra dev --reinstall-package itsm-agent --no-cache
       - name: SAST scan (bandit, must exit 0)
-        run: uv run bandit -q -c pyproject.toml -r src
+        run: make sast
       - name: Dependency vulnerability audit (pip-audit)
-        run: |
-          uv export --frozen --format requirements-txt --no-emit-project -o ci-requirements.txt
-          uv run pip-audit --disable-pip -r ci-requirements.txt
+        run: make audit-deps
       - name: Create reports directory
         run: mkdir -p reports
         if: always()
@@ -140,7 +138,7 @@ jobs:
       - name: Run unit tests
         run: |
           mkdir -p reports
-          uv run pytest -m unit --junitxml=reports/unit-junit.xml
+          make test-unit PYTEST_OPTS='--junitxml=reports/unit-junit.xml'
       - name: Upload unit test report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -167,7 +165,7 @@ jobs:
       - name: Run contract tests
         run: |
           mkdir -p reports
-          uv run pytest -m contract --junitxml=reports/contract-junit.xml
+          make test-contract PYTEST_OPTS='--junitxml=reports/contract-junit.xml'
       - name: Upload contract test report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -179,10 +177,27 @@ jobs:
   security-invariants:
     name: Security Invariant Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     needs: [lint, typecheck]
     env:
       PYTHONHASHSEED: "0"
+      ITSM_TEST_PG_DSN: postgresql://itsm:itsm_test_password@localhost:5432/itsm_test
+      ITSM_TEST_NATS_URL: nats://localhost:4222
+      ITSM_TEST_STRICT: "1"
+    services:
+      postgres:
+        image: postgres:16.10-alpine
+        env:
+          POSTGRES_USER: itsm
+          POSTGRES_PASSWORD: itsm_test_password
+          POSTGRES_DB: itsm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U itsm -d itsm_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
@@ -191,10 +206,32 @@ jobs:
           enable-cache: false
       - name: Install locked dependencies
         run: uv sync --frozen --extra dev --reinstall-package itsm-agent --no-cache
+      - name: Start NATS simulator
+        run: |
+          docker run -d --name itsm-nats-security-ci \
+            -p 4222:4222 \
+            -p 8222:8222 \
+            -v "$PWD/ci/nats.conf:/etc/nats/nats-server.conf:ro" \
+            nats:2.12.10-alpine \
+            -c /etc/nats/nats-server.conf
+      - name: Wait for PG and NATS
+        run: |
+          set -e
+          for i in $(seq 1 30); do
+            if pg_isready -h localhost -U itsm -d itsm_test >/dev/null 2>&1 \
+              && wget -q -O - http://127.0.0.1:8222/healthz >/dev/null 2>&1; then
+              echo "Services ready after ${i}s."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Services not ready within 30s."
+          docker ps -a
+          exit 1
       - name: Run security invariant tests
         run: |
           mkdir -p reports
-          uv run pytest -m security --junitxml=reports/security-junit.xml
+          make test-security PYTEST_OPTS='--junitxml=reports/security-junit.xml'
       - name: Upload security test report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -202,6 +239,9 @@ jobs:
           name: security-junit
           path: reports/security-junit.xml
           if-no-files-found: ignore
+      - name: Cleanup simulator container
+        if: always()
+        run: docker rm -f itsm-nats-security-ci || true
 
   # --------------------------------------------------------------------------
   # Build — validate compose config, build and scan the application image
@@ -336,7 +376,7 @@ jobs:
       - name: Run integration tests
         run: |
           mkdir -p reports
-          uv run pytest -m integration --junitxml=reports/integration-junit.xml
+          make test-integration PYTEST_OPTS='--junitxml=reports/integration-junit.xml'
 
       - name: Upload integration test report
         if: always()
@@ -427,7 +467,7 @@ jobs:
       - name: Run fault injection tests
         run: |
           mkdir -p reports
-          uv run pytest -m fault_injection --junitxml=reports/fault-injection-junit.xml
+          make test-fault-injection PYTEST_OPTS='--junitxml=reports/fault-injection-junit.xml'
       - name: Upload fault injection test report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -514,7 +554,7 @@ jobs:
       - name: Run e2e tests
         run: |
           mkdir -p reports
-          uv run pytest -m e2e --junitxml=reports/e2e-junit.xml
+          make test-e2e PYTEST_OPTS='--junitxml=reports/e2e-junit.xml'
       - name: Upload e2e test report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -547,7 +587,7 @@ jobs:
       - name: Run scenario harness
         run: |
           mkdir -p reports
-          uv run pytest -m scenarios --junitxml=reports/scenarios-junit.xml
+          make test-scenarios PYTEST_OPTS='--junitxml=reports/scenarios-junit.xml'
       - name: Upload scenario reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -555,3 +595,35 @@ jobs:
           name: scenario-reports
           path: reports/scenarios-junit.xml
           if-no-files-found: ignore
+
+  # --------------------------------------------------------------------------
+  # CI Verification Summary — fails when a mandatory report is missing or red
+  # --------------------------------------------------------------------------
+  ci-summary:
+    name: CI Verification Summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - lint
+      - typecheck
+      - supply-chain
+      - unit-tests
+      - contract-tests
+      - security-invariants
+      - integration-tests
+      - fault-injection-tests
+      - e2e-tests
+      - scenarios
+    if: always()
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Download mandatory JUnit reports
+        if: always()
+        uses: actions/download-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          pattern: '*junit.xml'
+          path: reports
+          merge-multiple: true
+      - name: Aggregate verification summary and fail on missing groups
+        if: always()
+        run: python3 tools/ci_summary.py --reports reports --sha "$GITHUB_SHA"

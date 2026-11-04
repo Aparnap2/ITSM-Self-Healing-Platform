@@ -36,6 +36,18 @@ class Settings(BaseModel):
     rate_limit_requests: int = Field(default=60, ge=1)
     rate_limit_window_seconds: float = Field(default=60.0, gt=0)
 
+    # Reviewer authentication. HMAC is a development/test-only placeholder;
+    # OIDC is the production path. ``load_settings`` refuses HMAC in staging.
+    auth_mode: Literal["hmac", "oidc"] = "hmac"
+    auth_hmac_secret: str | None = Field(default=None, min_length=16)
+    oidc_issuer: str | None = None
+    oidc_audience: str | None = None
+    oidc_jwks_url: str | None = None
+    oidc_algorithms: tuple[str, ...] = ("RS256", "ES256")
+    oidc_jwks_cache_seconds: float = Field(default=300.0, gt=0)
+    oidc_leeway_seconds: float = Field(default=30.0, ge=0, le=120)
+    oidc_max_token_age_seconds: float | None = Field(default=3600.0, gt=0)
+
     # Adapter boundary (Mockoon base URLs; allowlisted endpoints derive
     # from these origins only)
     mockoon_itsm_base_url: str
@@ -123,6 +135,19 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         "webhook_max_body_bytes": _int("ITSM_WEBHOOK_MAX_BODY_BYTES", 65536),
         "rate_limit_requests": _int("ITSM_RATE_LIMIT_REQUESTS", 60),
         "rate_limit_window_seconds": _float("ITSM_RATE_LIMIT_WINDOW_SECONDS", 60.0),
+        "auth_mode": (get("ITSM_AUTH_MODE") or "hmac").strip().lower(),
+        "auth_hmac_secret": get("ITSM_AUTH_HMAC_SECRET"),
+        "oidc_issuer": get("ITSM_OIDC_ISSUER"),
+        "oidc_audience": get("ITSM_OIDC_AUDIENCE"),
+        "oidc_jwks_url": get("ITSM_OIDC_JWKS_URL"),
+        "oidc_algorithms": tuple(
+            part.strip().upper()
+            for part in (get("ITSM_OIDC_ALGORITHMS") or "RS256,ES256").split(",")
+            if part.strip()
+        ),
+        "oidc_jwks_cache_seconds": _float("ITSM_OIDC_JWKS_CACHE_SECONDS", 300.0),
+        "oidc_leeway_seconds": _float("ITSM_OIDC_LEEWAY_SECONDS", 30.0),
+        "oidc_max_token_age_seconds": _float("ITSM_OIDC_MAX_TOKEN_AGE_SECONDS", 3600.0),
         "mockoon_itsm_base_url": require("ITSM_MOCKOON_ITSM_BASE_URL"),
         "mockoon_identity_base_url": require("ITSM_MOCKOON_IDENTITY_BASE_URL"),
         "mockoon_infrastructure_base_url": require("ITSM_MOCKOON_INFRASTRUCTURE_BASE_URL"),
@@ -140,9 +165,30 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
     }
 
     try:
-        return Settings.model_validate(raw)
+        settings = Settings.model_validate(raw)
     except ValidationError as exc:
         raise ConfigError(f"Invalid configuration: {exc}") from exc
+
+    # Fail closed at configuration time: HMAC is an explicitly development/
+    # test-only mechanism, not a production identity provider.
+    if settings.auth_mode == "hmac":
+        if settings.env == "staging":
+            raise ConfigError("ITSM_AUTH_MODE=hmac is not permitted when ITSM_ENV=staging")
+        if not settings.auth_hmac_secret:
+            raise ConfigError("Missing required environment variable: ITSM_AUTH_HMAC_SECRET")
+    else:
+        missing = [
+            name
+            for name, value in (
+                ("ITSM_OIDC_ISSUER", settings.oidc_issuer),
+                ("ITSM_OIDC_AUDIENCE", settings.oidc_audience),
+                ("ITSM_OIDC_JWKS_URL", settings.oidc_jwks_url),
+            )
+            if not value
+        ]
+        if missing:
+            raise ConfigError("Missing required OIDC configuration: " + ", ".join(missing))
+    return settings
 
 
 def redact_secret(value: str, keep: int = 4) -> str:

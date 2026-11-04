@@ -14,9 +14,9 @@ Security properties enforced here (and re-enforced by PostgreSQL RLS):
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Any, Protocol
+from typing import Annotated, Any, Protocol, cast
 
-from fastapi import APIRouter, Header, HTTPException, Query, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from itsm_agent.api.auth import AuthenticationError, Authenticator, Principal
@@ -75,12 +75,20 @@ _deps: FindingsDeps | None = None
 
 
 def configure_findings(deps: FindingsDeps | None) -> None:
+    """Deprecated process-global hook (kept only for import compatibility).
+
+    .. deprecated::
+       Do not use. The app factory now stores dependencies on
+       ``app.state.findings_deps`` so independent app instances cannot share
+       mutable configuration. This function remains as a no-op-shaped shim and
+       is removed in the next slice.
+    """
     global _deps
     _deps = deps
 
 
-def _configured_deps() -> FindingsDeps:
-    deps = _deps
+def _configured_deps(request: Request) -> FindingsDeps:
+    deps = cast(FindingsDeps | None, getattr(request.app.state, "findings_deps", None))
     if (
         deps is None
         or deps.findings_repo is None
@@ -96,9 +104,10 @@ def _configured_deps() -> FindingsDeps:
 
 
 async def _authenticated_principal(
+    request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> Principal:
-    deps = _configured_deps()
+    deps = _configured_deps(request)
     assert deps.authenticator is not None
     try:
         return await deps.authenticator.authenticate(authorization)
@@ -157,11 +166,12 @@ def _decision_json(decision: ReviewDecision) -> dict[str, Any]:
 
 @router.get("")
 async def list_findings(
+    request: Request,
     tenant_id: Annotated[uuid.UUID, Query()],
     authorization: Annotated[str | None, Header()] = None,
 ) -> list[dict[str, Any]]:
-    deps = _configured_deps()
-    principal = await _authenticated_principal(authorization)
+    deps = _configured_deps(request)
+    principal = await _authenticated_principal(request, authorization)
     _authorize_tenant(principal, tenant_id)
     _authorize(principal, Permission.FINDINGS_READ)
     assert deps.findings_repo is not None
@@ -171,12 +181,13 @@ async def list_findings(
 
 @router.get("/{finding_id}")
 async def get_finding(
+    request: Request,
     finding_id: uuid.UUID,
     tenant_id: Annotated[uuid.UUID, Query()],
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
-    deps = _configured_deps()
-    principal = await _authenticated_principal(authorization)
+    deps = _configured_deps(request)
+    principal = await _authenticated_principal(request, authorization)
     _authorize_tenant(principal, tenant_id)
     _authorize(principal, Permission.FINDINGS_READ)
     _authorize(principal, Permission.DECISIONS_READ)
@@ -194,13 +205,14 @@ async def get_finding(
 
 @router.post("/{finding_id}/decisions", status_code=201)
 async def record_decision(
+    request: Request,
     finding_id: uuid.UUID,
     body: FindingDecisionRequest,
     tenant_id: Annotated[uuid.UUID, Query()],
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
-    deps = _configured_deps()
-    principal = await _authenticated_principal(authorization)
+    deps = _configured_deps(request)
+    principal = await _authenticated_principal(request, authorization)
     _authorize_tenant(principal, tenant_id)
     try:
         authorize_decision(principal, body.decision)
@@ -231,12 +243,13 @@ async def record_decision(
 
 @router.get("/{finding_id}/decisions")
 async def list_decisions(
+    request: Request,
     finding_id: uuid.UUID,
     tenant_id: Annotated[uuid.UUID, Query()],
     authorization: Annotated[str | None, Header()] = None,
 ) -> list[dict[str, Any]]:
-    deps = _configured_deps()
-    principal = await _authenticated_principal(authorization)
+    deps = _configured_deps(request)
+    principal = await _authenticated_principal(request, authorization)
     _authorize_tenant(principal, tenant_id)
     _authorize(principal, Permission.DECISIONS_READ)
     assert deps.findings_repo is not None

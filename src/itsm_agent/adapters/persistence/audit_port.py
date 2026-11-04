@@ -15,6 +15,7 @@ class PsycopgAuditPort:
     async def append(self, event: DomainAuditEvent) -> None:
         record = AuditEventRecord(
             id=event.event_id,
+            tenant_id=event.tenant_id,
             occurred_at=event.occurred_at,
             correlation_id=event.correlation_id,
             incident_id=event.incident_id,

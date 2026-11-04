@@ -24,7 +24,6 @@ from httpx import ASGITransport, AsyncClient
 
 from itsm_agent.api.app import create_app
 from itsm_agent.api.auth import TokenAuthenticator, mint_token
-from itsm_agent.api.routes.findings import FindingsDeps, configure_findings
 from itsm_agent.api.routes.ingestion import SinkOutcome
 from itsm_agent.config import Settings
 from itsm_agent.domain.models import Finding, ReviewDecision, Severity
@@ -125,13 +124,7 @@ def _build_app(
     repo = findings_repo if findings_repo is not None else FakeFindingsRepo()
     store = decisions_repo if decisions_repo is not None else FakeDecisionsStore()
     authenticate = authenticator or TokenAuthenticator(secret=SECRET)
-    configure_findings(
-        FindingsDeps(
-            findings_repo=repo,
-            review_decisions_repo=store,
-            authenticator=authenticate,
-        )
-    )
+    # Composition is instance-scoped (app.state); no shared global exists.
     return create_app(
         settings=_settings(),
         sink=FakeSink(),
@@ -174,10 +167,8 @@ def _decision_body(
 
 
 @pytest.fixture(autouse=True)
-def _reset_findings_deps() -> Iterator[None]:
-    configure_findings(None)
+def _app_instances_are_independent() -> Iterator[None]:
     yield
-    configure_findings(None)
 
 
 # ---------------------------------------------------------------------------
@@ -239,14 +230,15 @@ async def test_token_signed_with_another_secret_is_rejected() -> None:
 
 
 def test_unconfigured_authenticator_is_fail_closed_503() -> None:
-    app = _build_app(authenticator=TokenAuthenticator(secret=SECRET))
-    # Clearing deps simulates a composition root that forgot authentication.
-    configure_findings(
-        FindingsDeps(
-            findings_repo=FakeFindingsRepo(),
-            review_decisions_repo=FakeDecisionsStore(),
-            authenticator=None,
-        )
+    # Composition root that forgot authentication: router mounted, authenticator=None.
+    # Dependencies live on app.state (the deprecated global shim is intentionally
+    # not used here). Assertion is unchanged: must fail closed with 503.
+    app = create_app(
+        settings=_settings(),
+        sink=FakeSink(),
+        findings_repo=FakeFindingsRepo(),
+        review_decisions_repo=FakeDecisionsStore(),
+        authenticator=None,
     )
     import asyncio
 

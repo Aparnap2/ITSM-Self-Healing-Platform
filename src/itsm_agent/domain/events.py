@@ -13,6 +13,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter
 
+from itsm_agent.domain.tenancy import SYSTEM_TENANT_ID
+
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
 SafeIdentifier = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)
@@ -295,6 +297,7 @@ class VerificationResult(StrictModel):
 
 class AuditEvent(StrictModel):
     event_id: UUID
+    tenant_id: UUID = SYSTEM_TENANT_ID
     occurred_at: datetime
     correlation_id: UUID
     incident_id: UUID | None = None

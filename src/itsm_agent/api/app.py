@@ -9,17 +9,22 @@ Import rules: api may import domain, application, config, observability.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from psycopg import AsyncConnection
+from psycopg_pool import AsyncConnectionPool
 
+from itsm_agent.adapters.persistence.privileges import verify_runtime_database
 from itsm_agent.api import security
 from itsm_agent.api.auth import Authenticator
 from itsm_agent.api.routes.findings import (
     DecisionsStore,
     FindingsDeps,
     FindingsReader,
-    configure_findings,
 )
 from itsm_agent.api.routes.findings import (
     router as findings_router,
@@ -27,7 +32,6 @@ from itsm_agent.api.routes.findings import (
 from itsm_agent.api.routes.ingestion import (
     IngestionDeps,
     IngestionSink,
-    configure_ingestion,
 )
 from itsm_agent.api.routes.ingestion import (
     router as ingestion_router,
@@ -43,41 +47,53 @@ def create_app(
     findings_repo: FindingsReader | None = None,
     review_decisions_repo: DecisionsStore | None = None,
     authenticator: Authenticator | None = None,
+    database_pool: AsyncConnectionPool[AsyncConnection] | None = None,
 ) -> FastAPI:
-    """Build the API app with the given durable ingestion sink."""
+    """Build the API app with the given durable ingestion sink.
+
+    When ``database_pool`` is supplied the startup hook asserts that the
+    runtime role cannot bypass tenant RLS and fails closed otherwise.
+    """
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if database_pool is not None:
+            await verify_runtime_database(database_pool)
+        yield
+
     app = FastAPI(
         title="ITSM Self-Healing Agent API",
         version="0.1.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=lifespan,
     )
 
-    configure_ingestion(
-        IngestionDeps(
-            sink=sink,
-            webhook_secret=settings.webhook_secret,
-            signature_header=settings.webhook_signature_header,
-            max_body_bytes=settings.webhook_max_body_bytes,
-            rate_limiter=security.SlidingWindowRateLimiter(
-                max_requests=settings.rate_limit_requests,
-                window_seconds=settings.rate_limit_window_seconds,
-            ),
-            replay_cache=security.ReplayCache(),
-        )
+    # Dependencies live on the app instance, never in a module global. Two
+    # independently composed apps therefore cannot share mutable configuration.
+    app.state.ingestion_deps = IngestionDeps(
+        sink=sink,
+        webhook_secret=settings.webhook_secret,
+        signature_header=settings.webhook_signature_header,
+        max_body_bytes=settings.webhook_max_body_bytes,
+        rate_limiter=security.SlidingWindowRateLimiter(
+            max_requests=settings.rate_limit_requests,
+            window_seconds=settings.rate_limit_window_seconds,
+        ),
+        replay_cache=security.ReplayCache(),
     )
     app.include_router(ingestion_router)
 
+    app.state.findings_deps = None
     if findings_repo is not None and review_decisions_repo is not None:
         # The router is always mounted when the stores are wired; requests fail
         # closed with 503 if no authenticator was supplied, so a misconfigured
         # deployment cannot silently serve an unauthenticated findings API.
-        configure_findings(
-            FindingsDeps(
-                findings_repo=findings_repo,
-                review_decisions_repo=review_decisions_repo,
-                authenticator=authenticator,
-            )
+        app.state.findings_deps = FindingsDeps(
+            findings_repo=findings_repo,
+            review_decisions_repo=review_decisions_repo,
+            authenticator=authenticator,
         )
         app.include_router(findings_router)
 

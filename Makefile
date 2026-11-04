@@ -10,8 +10,9 @@
 
 SHELL := /bin/sh
 
-.PHONY: help format format-check lint typecheck test-unit test-security \
-        test-integration test-scenarios test compose-up compose-down \
+.PHONY: help format format-check lint typecheck test-unit test-contract \
+        test-security test-fault-injection test-integration test-scenarios \
+        test-e2e verify verify-ci test compose-up compose-down \
         compose-reset demo-reset demo-run
 
 help: ## Show available targets
@@ -32,25 +33,38 @@ lint: ## Lint with ruff (CI gate 1b)
 typecheck: ## Strict typecheck with mypy (CI gate 2)
 	uv run mypy src tests
 
-# --- Test suites (pytest markers; deterministic, offline) ---------------------
+# --- Test suites (single source of selection; CI invokes these targets) ------
 
-test-unit: ## Unit tests (CI gate 3)
-	uv run pytest -m unit
+PYTEST_OPTS ?=
+
+test-unit: ## Unit tests
+	uv run pytest -m unit $(PYTEST_OPTS)
 
 test-contract: ## Adapter contract tests against simulators (offline)
-	uv run pytest -m contract
+	uv run pytest -m contract $(PYTEST_OPTS)
 
-test-security: ## Security invariant tests (CI gate 4)
-	uv run pytest -m security
+test-security: ## Security invariant tests (requires PG; fail closed on missing services in CI)
+	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} uv run pytest -m security $(PYTEST_OPTS)
 
-test-fault-injection: ## Deterministic fault injection tests (requires local stack)
-	uv run pytest -m fault_injection
+test-fault-injection: ## Deterministic fault injection tests (requires PG+NATS)
+	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} uv run pytest -m fault_injection $(PYTEST_OPTS)
 
-test-integration: ## Integration tests (requires local stack or CI services)
-	uv run pytest -m integration
+test-integration: ## Integration tests (requires PG+NATS)
+	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} uv run pytest -m integration $(PYTEST_OPTS)
 
-test-scenarios: ## 24-scenario evaluation harness (CI gate 7)
-	uv run pytest -m scenarios
+test-scenarios: ## 24-scenario evaluation harness
+	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} uv run pytest -m scenarios $(PYTEST_OPTS)
+
+test-e2e: ## Complete end-to-end scenarios (requires PG+NATS+simulators)
+	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} uv run pytest -m e2e $(PYTEST_OPTS)
+
+verify: ## Local full verification (offline + PG/NATS required)
+	$(MAKE) format-check lint typecheck test-unit test-contract test-security test-integration test-scenarios test-e2e sast
+
+verify-ci: ## Strict CI-equivalent verification
+	ITSM_TEST_STRICT=1 $(MAKE) format-check lint typecheck sast
+	ITSM_TEST_STRICT=1 $(MAKE) test-unit test-contract test-security test-integration test-fault-injection test-scenarios
+	ITSM_TEST_STRICT=1 $(MAKE) test-e2e
 
 sast: ## SAST scan of src/ with bandit (must exit 0)
 	uv run bandit -q -c pyproject.toml -r src

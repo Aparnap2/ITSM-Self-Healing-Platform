@@ -31,6 +31,7 @@ from psycopg_pool import AsyncConnectionPool
 from itsm_agent.adapters.persistence.tenant import tenant_transaction
 from itsm_agent.domain.events import SourceEvent
 from itsm_agent.domain.models import Finding, IdentityMapping, ReviewDecision
+from itsm_agent.domain.tenancy import SYSTEM_TENANT_ID
 from itsm_agent.ports.repositories import (
     ActionIntent,
     ApprovalNotPendingError,
@@ -59,14 +60,39 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def _erasure_request_from_row(row: dict[str, Any]) -> ErasureRequest:
+    return ErasureRequest(
+        id=row["id"],
+        tenant_id=row["tenant_id"],
+        requested_by=row["requested_by"],
+        reason=row["reason"],
+        data_classes=tuple(DataClass(value) for value in row["data_classes"]),
+        status=row["status"],
+        requested_at=row["requested_at"],
+        completed_at=row["completed_at"],
+    )
+
+
 class _BaseRepository:
-    def __init__(self, pool: AsyncConnectionPool[AsyncConnection]) -> None:
+    def __init__(
+        self,
+        pool: AsyncConnectionPool[AsyncConnection],
+        tenant_id: UUID | None = None,
+    ) -> None:
         self._pool = pool
+        self._tenant_id = tenant_id
+
+    def for_tenant(self, tenant_id: UUID) -> _BaseRepository:
+        """Return a repository bound to a tenant RLS context."""
+        return type(self)(self._pool, tenant_id)
 
     @asynccontextmanager
     async def _session(self, conn: AsyncConnection | None) -> AsyncIterator[AsyncConnection]:
         if conn is not None:
             yield conn
+        elif self._tenant_id is not None:
+            async with self._tenant_session(self._tenant_id, None) as scoped:
+                yield scoped
         else:
             async with self._pool.connection() as pooled, pooled.transaction():
                 yield pooled
@@ -93,22 +119,29 @@ class _BaseRepository:
     ) -> AbstractAsyncContextManager[AsyncConnection]:
         """Select a tenant-scoped session when a tenant is given, else a plain one."""
         if tenant_id is None:
+            if conn is None:
+                return self._session(None)
             return self._session(conn)
         return self._tenant_session(tenant_id, conn)
 
 
 class PsycopgIncidentRepository(_BaseRepository):
+    def __init__(
+        self, pool: AsyncConnectionPool[AsyncConnection], tenant_id: UUID | None = None
+    ) -> None:
+        super().__init__(pool, tenant_id or SYSTEM_TENANT_ID)
+
     async def create(self, incident: Incident, *, conn: AsyncConnection | None = None) -> Incident:
         async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 """
                     INSERT INTO incidents (
-                        id, source_system, source_incident_id, external_event_id,
+                        id, tenant_id, source_system, source_incident_id, external_event_id,
                         title, description, service_name, severity, status,
                         created_at, updated_at, correlation_id, current_workflow_id,
                         resolution_summary, audit_reference
                     ) VALUES (
-                        %(id)s, %(source_system)s, %(source_incident_id)s,
+                        %(id)s, %(tenant_id)s, %(source_system)s, %(source_incident_id)s,
                         %(external_event_id)s, %(title)s, %(description)s,
                         %(service_name)s, %(severity)s, %(status)s,
                         %(created_at)s, %(updated_at)s, %(correlation_id)s,
@@ -384,6 +417,11 @@ class PsycopgOutboxRepository(_BaseRepository):
 
 
 class PsycopgActionIntentRepository(_BaseRepository):
+    def __init__(
+        self, pool: AsyncConnectionPool[AsyncConnection], tenant_id: UUID | None = None
+    ) -> None:
+        super().__init__(pool, tenant_id or SYSTEM_TENANT_ID)
+
     async def record(
         self, intent: ActionIntent, *, conn: AsyncConnection | None = None
     ) -> ActionIntent:
@@ -394,14 +432,14 @@ class PsycopgActionIntentRepository(_BaseRepository):
             await cur.execute(
                 """
                     INSERT INTO action_intents (
-                        id, incident_id, workflow_id, action_type, resource_id,
+                        id, tenant_id, incident_id, workflow_id, action_type, resource_id,
                         idempotency_key, proposal_hash, status, attempt_number,
                         intent_recorded_at, adapter_name
                     ) VALUES (
-                        %(id)s, %(incident_id)s, %(workflow_id)s, %(action_type)s,
-                        %(resource_id)s, %(idempotency_key)s, %(proposal_hash)s,
-                        %(status)s, %(attempt_number)s, %(intent_recorded_at)s,
-                        %(adapter_name)s
+                        %(id)s, %(tenant_id)s, %(incident_id)s, %(workflow_id)s,
+                        %(action_type)s, %(resource_id)s, %(idempotency_key)s,
+                        %(proposal_hash)s, %(status)s, %(attempt_number)s,
+                        %(intent_recorded_at)s, %(adapter_name)s
                     )
                     """,
                 intent.model_dump(),
@@ -461,6 +499,11 @@ class PsycopgActionIntentRepository(_BaseRepository):
 
 
 class PsycopgApprovalRepository(_BaseRepository):
+    def __init__(
+        self, pool: AsyncConnectionPool[AsyncConnection], tenant_id: UUID | None = None
+    ) -> None:
+        super().__init__(pool, tenant_id or SYSTEM_TENANT_ID)
+
     async def create(
         self, approval: ApprovalRequest, *, conn: AsyncConnection | None = None
     ) -> ApprovalRequest:
@@ -468,13 +511,14 @@ class PsycopgApprovalRepository(_BaseRepository):
             await c.execute(
                 """
                 INSERT INTO approvals (
-                    id, incident_id, workflow_id, proposal_hash, action_type,
+                    id, tenant_id, incident_id, workflow_id, proposal_hash, action_type,
                     resource_id, parameters_hash, status, requested_at, expires_at,
                     replay_nonce_hash
                 ) VALUES (
-                    %(id)s, %(incident_id)s, %(workflow_id)s, %(proposal_hash)s,
-                    %(action_type)s, %(resource_id)s, %(parameters_hash)s, %(status)s,
-                    %(requested_at)s, %(expires_at)s, %(replay_nonce_hash)s
+                    %(id)s, %(tenant_id)s, %(incident_id)s, %(workflow_id)s,
+                    %(proposal_hash)s, %(action_type)s, %(resource_id)s,
+                    %(parameters_hash)s, %(status)s, %(requested_at)s,
+                    %(expires_at)s, %(replay_nonce_hash)s
                 )
                 """,
                 approval.model_dump(),
@@ -535,6 +579,11 @@ class PsycopgApprovalRepository(_BaseRepository):
 
 
 class PsycopgAuditRepository(_BaseRepository):
+    def __init__(
+        self, pool: AsyncConnectionPool[AsyncConnection], tenant_id: UUID | None = None
+    ) -> None:
+        super().__init__(pool, tenant_id or SYSTEM_TENANT_ID)
+
     async def append(self, event: AuditEvent, *, conn: AsyncConnection | None = None) -> AuditEvent:
         """Append-only (DB trigger rejects UPDATE/DELETE).
 
@@ -544,18 +593,18 @@ class PsycopgAuditRepository(_BaseRepository):
         commits. Callers that cannot share a transaction must append the
         audit record BEFORE the side effect and abort on failure.
         """
-        async with self._session(conn) as c:  # noqa: SIM117
+        async with self._tenant_session(event.tenant_id, conn) as c:  # noqa: SIM117
             await c.execute(
                 """
                 INSERT INTO audit_events (
-                    id, occurred_at, correlation_id, incident_id, workflow_id,
+                    id, tenant_id, occurred_at, correlation_id, incident_id, workflow_id,
                     actor_type, actor_id, event_type, entity_type, entity_id,
                     payload_redacted, previous_hash, event_hash
                 ) VALUES (
-                    %(id)s, %(occurred_at)s, %(correlation_id)s, %(incident_id)s,
-                    %(workflow_id)s, %(actor_type)s, %(actor_id)s, %(event_type)s,
-                    %(entity_type)s, %(entity_id)s, %(payload_redacted)s,
-                    %(previous_hash)s, %(event_hash)s
+                    %(id)s, %(tenant_id)s, %(occurred_at)s, %(correlation_id)s,
+                    %(incident_id)s, %(workflow_id)s, %(actor_type)s, %(actor_id)s,
+                    %(event_type)s, %(entity_type)s, %(entity_id)s,
+                    %(payload_redacted)s, %(previous_hash)s, %(event_hash)s
                 )
                 """,
                 {
@@ -567,6 +616,11 @@ class PsycopgAuditRepository(_BaseRepository):
 
 
 class PsycopgWorkflowStateRepository(_BaseRepository):
+    def __init__(
+        self, pool: AsyncConnectionPool[AsyncConnection], tenant_id: UUID | None = None
+    ) -> None:
+        super().__init__(pool, tenant_id or SYSTEM_TENANT_ID)
+
     async def create(
         self, state: WorkflowState, *, conn: AsyncConnection | None = None
     ) -> WorkflowState:
@@ -574,13 +628,14 @@ class PsycopgWorkflowStateRepository(_BaseRepository):
             await c.execute(
                 """
                 INSERT INTO workflow_state (
-                    id, incident_id, workflow_version, status, current_node,
+                    id, tenant_id, incident_id, workflow_version, status, current_node,
                     checkpoint_ref, attempt_count, started_at, updated_at,
                     correlation_id
                 ) VALUES (
-                    %(id)s, %(incident_id)s, %(workflow_version)s, %(status)s,
-                    %(current_node)s, %(checkpoint_ref)s, %(attempt_count)s,
-                    %(started_at)s, %(updated_at)s, %(correlation_id)s
+                    %(id)s, %(tenant_id)s, %(incident_id)s, %(workflow_version)s,
+                    %(status)s, %(current_node)s, %(checkpoint_ref)s,
+                    %(attempt_count)s, %(started_at)s, %(updated_at)s,
+                    %(correlation_id)s
                 )
                 """,
                 state.model_dump(),
@@ -648,6 +703,11 @@ class PsycopgTerminalStateRepository(_BaseRepository):
     """
 
     _TERMINAL_INCIDENT_STATUSES = ("RESOLVED", "ESCALATED", "REJECTED")
+
+    def __init__(
+        self, pool: AsyncConnectionPool[AsyncConnection], tenant_id: UUID | None = None
+    ) -> None:
+        super().__init__(pool, tenant_id or SYSTEM_TENANT_ID)
 
     async def finalize(
         self,
@@ -1319,17 +1379,117 @@ class PsycopgRetentionRepository(_BaseRepository):
         status: str,
         conn: AsyncConnection | None = None,
     ) -> None:
-        if status not in {"COMPLETED", "BLOCKED"}:
-            raise ValueError("status must be COMPLETED or BLOCKED")
+        if status not in {"COMPLETED", "BLOCKED", "FAILED"}:
+            raise ValueError("status must be COMPLETED, BLOCKED or FAILED")
         async with self._tenant_session(tenant_id, conn) as c:
             await c.execute(
                 """
                 UPDATE erasure_requests
-                   SET status = %s, completed_at = %s
+                   SET status = %s,
+                       completed_at = %s,
+                       lease_until = NULL,
+                       updated_at = %s
                  WHERE id = %s AND tenant_id = %s
                 """,
-                (status, _utcnow(), request_id, tenant_id),
+                (status, _utcnow(), _utcnow(), request_id, tenant_id),
             )
+
+    async def claim_due_requests(
+        self,
+        tenant_id: UUID,
+        *,
+        limit: int = 10,
+        lease_seconds: float = 60.0,
+        conn: AsyncConnection | None = None,
+    ) -> list[ErasureRequest]:
+        """Atomically claim due requests with a lease (FOR UPDATE SKIP LOCKED).
+
+        A crashed scheduler leaves a PROCESSING row whose lease expires; the
+        next run reclaims it. ``attempt_count`` is incremented on every claim,
+        so a poison request eventually becomes FAILED instead of looping
+        forever.
+        """
+        lease_until = _utcnow() + timedelta(seconds=lease_seconds)
+        async with (
+            self._tenant_session(tenant_id, conn) as c,
+            c.cursor(row_factory=dict_row) as cur,
+        ):
+            await cur.execute(
+                """
+                UPDATE erasure_requests
+                   SET status = 'PROCESSING',
+                       attempt_count = attempt_count + 1,
+                       lease_until = %s,
+                       updated_at = now()
+                 WHERE id IN (
+                     SELECT id FROM erasure_requests
+                      WHERE tenant_id = %s
+                        AND status IN ('REQUESTED', 'PROCESSING')
+                        AND next_attempt_at <= now()
+                        AND (lease_until IS NULL OR lease_until < now())
+                      ORDER BY next_attempt_at, requested_at, id
+                      LIMIT %s
+                      FOR UPDATE SKIP LOCKED
+                 )
+                 RETURNING *
+                """,
+                (lease_until, tenant_id, limit),
+            )
+            rows = await cur.fetchall()
+        return [_erasure_request_from_row(row) for row in rows]
+
+    async def retry_or_fail_request(
+        self,
+        tenant_id: UUID,
+        request_id: UUID,
+        *,
+        error: str,
+        max_attempts: int,
+        backoff_seconds: float,
+        conn: AsyncConnection | None = None,
+    ) -> str:
+        """Release a failed claim with backoff, or mark it FAILED at the cap.
+
+        Returns the resulting status so the caller can emit the matching audit
+        event. Retry exhaustion is an escalation signal, never a silent
+        resolution.
+        """
+        next_attempt = _utcnow() + timedelta(seconds=backoff_seconds)
+        async with self._tenant_session(tenant_id, conn) as c, c.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE erasure_requests
+                   SET status = CASE
+                           WHEN attempt_count >= %s THEN 'FAILED'
+                           ELSE 'REQUESTED'
+                       END,
+                       last_error = %s,
+                       lease_until = NULL,
+                       next_attempt_at = %s,
+                       updated_at = now()
+                 WHERE id = %s AND tenant_id = %s
+                RETURNING status
+                """,
+                (max_attempts, error[:2000], next_attempt, request_id, tenant_id),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            raise LookupError(f"erasure request not found: {request_id}")
+        return str(row[0])
+
+    async def get_request(
+        self, tenant_id: UUID, request_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> ErasureRequest | None:
+        async with (
+            self._tenant_session(tenant_id, conn) as c,
+            c.cursor(row_factory=dict_row) as cur,
+        ):
+            await cur.execute(
+                "SELECT * FROM erasure_requests WHERE id = %s AND tenant_id = %s",
+                (request_id, tenant_id),
+            )
+            row = await cur.fetchone()
+        return _erasure_request_from_row(row) if row else None
 
     async def tombstone_raw_evidence(
         self,
@@ -1467,7 +1627,10 @@ class PsycopgRetentionRepository(_BaseRepository):
     async def active_holds(
         self, tenant_id: UUID, *, conn: AsyncConnection | None = None
     ) -> list[LegalHold]:
-        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+        async with (
+            self._tenant_session(tenant_id, conn) as c,
+            c.cursor(row_factory=dict_row) as cur,
+        ):
             await cur.execute(
                 """
                 SELECT id, tenant_id, data_class, reason, placed_by, placed_at, released_at
@@ -1494,7 +1657,10 @@ class PsycopgRetentionRepository(_BaseRepository):
     async def effective_policies(
         self, tenant_id: UUID, *, conn: AsyncConnection | None = None
     ) -> tuple[RetentionPolicy, ...]:
-        async with self._session(conn) as c, c.cursor(row_factory=dict_row) as cur:
+        async with (
+            self._tenant_session(tenant_id, conn) as c,
+            c.cursor(row_factory=dict_row) as cur,
+        ):
             await cur.execute(
                 """
                 SELECT tenant_id, data_class, retention_days, on_expiry
@@ -1519,22 +1685,40 @@ class PsycopgRetentionRepository(_BaseRepository):
 
 
 class RepositoryBundle:
-    """All repositories sharing one pool."""
+    """All repositories sharing one pool.
 
-    def __init__(self, pool: AsyncConnectionPool[AsyncConnection]) -> None:
-        self.incidents = PsycopgIncidentRepository(pool)
-        self.inbox = PsycopgInboxRepository(pool)
-        self.outbox = PsycopgOutboxRepository(pool)
-        self.action_intents = PsycopgActionIntentRepository(pool)
-        self.approvals = PsycopgApprovalRepository(pool)
-        self.audit = PsycopgAuditRepository(pool)
-        self.workflow_state = PsycopgWorkflowStateRepository(pool)
-        self.terminal_state = PsycopgTerminalStateRepository(pool)
-        self.source_events = PsycopgSourceEventRepository(pool)
-        self.source_checkpoints = PsycopgSourceCheckpointRepository(pool)
-        self.identity_mappings = PsycopgIdentityMappingRepository(pool)
-        self.review_decisions = PsycopgReviewDecisionRepository(pool)
-        self.findings = PsycopgFindingRepository(pool)
-        self.processing_records = PsycopgProcessingRecordRepository(pool)
+    Passing ``tenant_id`` binds every repository to a transaction-local RLS
+    context. ``for_tenant`` returns a bound bundle without mutating the
+    original, so independent workers cannot share mutable tenant state.
+    """
+
+    def __init__(
+        self,
+        pool: AsyncConnectionPool[AsyncConnection],
+        tenant_id: UUID | None = None,
+    ) -> None:
+        self._pool = pool
+        self.tenant_id = tenant_id
+        self.incidents = PsycopgIncidentRepository(pool, tenant_id)
+        self.inbox = PsycopgInboxRepository(pool, tenant_id)
+        self.outbox = PsycopgOutboxRepository(pool, tenant_id)
+        self.action_intents = PsycopgActionIntentRepository(pool, tenant_id)
+        self.approvals = PsycopgApprovalRepository(pool, tenant_id)
+        self.audit = PsycopgAuditRepository(pool, tenant_id)
+        self.workflow_state = PsycopgWorkflowStateRepository(pool, tenant_id)
+        self.terminal_state = PsycopgTerminalStateRepository(pool, tenant_id)
+        self.source_events = PsycopgSourceEventRepository(pool, tenant_id)
+        self.source_checkpoints = PsycopgSourceCheckpointRepository(pool, tenant_id)
+        self.identity_mappings = PsycopgIdentityMappingRepository(pool, tenant_id)
+        self.review_decisions = PsycopgReviewDecisionRepository(pool, tenant_id)
+        self.findings = PsycopgFindingRepository(pool, tenant_id)
+        self.processing_records = PsycopgProcessingRecordRepository(pool, tenant_id)
         self.tenants = PsycopgTenantRepository(pool)
-        self.retention = PsycopgRetentionRepository(pool)
+        self.retention = PsycopgRetentionRepository(pool, tenant_id)
+
+    def for_tenant(self, tenant_id: UUID) -> RepositoryBundle:
+        return RepositoryBundle(self._pool, tenant_id)
+
+    def transaction(self, tenant_id: UUID) -> AbstractAsyncContextManager[AsyncConnection]:
+        """Open a transaction-local tenant context for multi-repository work."""
+        return tenant_transaction(self._pool, tenant_id)

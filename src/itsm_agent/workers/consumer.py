@@ -79,6 +79,9 @@ class Worker:
         # --- database -------------------------------------------------------
         self._pool = create_pool(PersistenceConfig(dsn=self.pg_dsn, min_size=1, max_size=10))
         await self._pool.open()
+        from itsm_agent.adapters.persistence.privileges import verify_runtime_database
+
+        await verify_runtime_database(self._pool)
         self._repos = RepositoryBundle(self._pool)
 
         # --- simulator-backed adapters (deterministic, simulated env) --------

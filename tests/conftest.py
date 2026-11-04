@@ -65,6 +65,7 @@ TABLES = (
     "erasure_requests",
     "legal_holds",
     "retention_policies",
+    "reviewer_authorizations",
     "tenants",
 )
 
@@ -120,6 +121,35 @@ async def repos(pg_dsn: str) -> AsyncIterator[RepositoryBundle]:
         yield RepositoryBundle(pool)
     finally:
         await pool.close()
+
+
+@pytest.fixture
+async def runtime_dsn(pg_dsn: str) -> AsyncIterator[str]:
+    """DSN for the migration-issued constrained runtime role.
+
+    Local/CI control-plane connections use the admin/migration role (often a
+    superuser) to apply migrations and seed fixtures. The runtime process
+    under test must instead connect as ``itsm_app`` — the role whose privileges
+    and RLS bypass permissions are what ``verify_runtime_database`` enforces.
+
+    Only the test run's password is ephemeral; ``itsm_app`` is restored to
+    NOLOGIN afterwards.
+    """
+    import secrets
+
+    from psycopg import sql
+    from psycopg.conninfo import make_conninfo
+
+    password = secrets.token_urlsafe(24)
+    admin = await AsyncConnection.connect(pg_dsn, autocommit=True)
+    try:
+        await admin.execute(
+            sql.SQL("ALTER ROLE itsm_app LOGIN PASSWORD {}").format(sql.Literal(password))
+        )
+        yield make_conninfo(pg_dsn, user="itsm_app", password=password)
+    finally:
+        await admin.execute("ALTER ROLE itsm_app NOLOGIN PASSWORD NULL")
+        await admin.close()
 
 
 @pytest.fixture

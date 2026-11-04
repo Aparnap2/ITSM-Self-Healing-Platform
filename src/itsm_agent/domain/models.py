@@ -12,6 +12,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from itsm_agent.domain.tenancy import SYSTEM_TENANT_ID
+
 
 class Severity(StrEnum):
     P1 = "P1"
@@ -120,6 +122,7 @@ class Incident(StrictModel):
     """Core incident entity (PRD §5.1)."""
 
     id: UUID
+    tenant_id: UUID = SYSTEM_TENANT_ID
     source_system: str
     source_incident_id: str
     external_event_id: str | None = None
@@ -138,6 +141,7 @@ class Incident(StrictModel):
 
 class WorkflowRun(StrictModel):
     id: UUID
+    tenant_id: UUID = SYSTEM_TENANT_ID
     incident_id: UUID
     workflow_version: str
     status: WorkflowStatus = WorkflowStatus.PENDING
@@ -180,6 +184,7 @@ class PolicyDecisionRecord(StrictModel):
 
 class ApprovalRequestRecord(StrictModel):
     id: UUID
+    tenant_id: UUID = SYSTEM_TENANT_ID
     incident_id: UUID
     workflow_id: UUID
     proposal_hash: str
@@ -197,6 +202,7 @@ class ApprovalRequestRecord(StrictModel):
 
 class ActionAttemptRecord(StrictModel):
     id: UUID
+    tenant_id: UUID = SYSTEM_TENANT_ID
     incident_id: UUID
     workflow_id: UUID
     action_type: ActionType
@@ -228,6 +234,7 @@ class VerificationRecord(StrictModel):
 
 class AuditEventRecord(StrictModel):
     id: UUID
+    tenant_id: UUID = SYSTEM_TENANT_ID
     occurred_at: datetime
     correlation_id: UUID
     incident_id: UUID | None = None

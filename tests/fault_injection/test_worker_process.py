@@ -60,12 +60,14 @@ async def _reset(pg_dsn: str, nats_url: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_worker_process_resolves_published_event(pg_dsn: str, nats_url: str) -> None:
+async def test_worker_process_resolves_published_event(
+    pg_dsn: str, runtime_dsn: str, nats_url: str
+) -> None:
     await _reset(pg_dsn, nats_url)
 
     env = dict(os.environ)
     env["PYTHONPATH"] = str(Path("src").resolve())
-    env["ITSM_POSTGRES_DSN"] = pg_dsn
+    env["ITSM_POSTGRES_DSN"] = runtime_dsn
     env["ITSM_NATS_URL"] = nats_url
     env["ITSM_SIMULATOR_SEED"] = "42"
     env["PYTHONUNBUFFERED"] = "1"

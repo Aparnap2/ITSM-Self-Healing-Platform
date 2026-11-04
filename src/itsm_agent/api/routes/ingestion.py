@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, cast
 
 from fastapi import APIRouter, Request, Response
 from pydantic import ValidationError
@@ -74,15 +74,21 @@ _deps: IngestionDeps | None = None
 
 
 def configure_ingestion(deps: IngestionDeps) -> None:
-    """Install dependencies (called once by the app factory)."""
+    """Deprecated process-global hook (import compatibility only).
+
+    .. deprecated::
+       Dependencies are stored on ``app.state.ingestion_deps`` by the app
+       factory. Do not install them globally.
+    """
     global _deps
     _deps = deps
 
 
-def _get_deps() -> IngestionDeps:
-    if _deps is None:
+def _get_deps(request: Request) -> IngestionDeps:
+    deps = cast(IngestionDeps | None, getattr(request.app.state, "ingestion_deps", None))
+    if deps is None:
         raise RuntimeError("Ingestion router not configured")
-    return _deps
+    return deps
 
 
 def _client_key(request: Request) -> str:
@@ -97,7 +103,7 @@ def _client_key(request: Request) -> str:
 @router.post("/webhook")
 async def ingest_incident_webhook(request: Request) -> Response:
     """Accept a signed incident webhook; ack only after durable commit."""
-    deps = _get_deps()
+    deps = _get_deps(request)
     body = await request.body()
 
     # 1. Size limit before any parsing.
