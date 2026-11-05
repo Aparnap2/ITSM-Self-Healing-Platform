@@ -38,6 +38,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           python-version: "3.12"
@@ -55,6 +57,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           python-version: "3.12"
@@ -71,6 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          persist-credentials: false
           fetch-depth: 0 # full history so gitleaks can scan all commits
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
@@ -88,6 +93,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           python-version: "3.12"
@@ -98,6 +105,19 @@ jobs:
         run: make sast
       - name: Dependency vulnerability audit (pip-audit)
         run: make audit-deps
+      - name: IaC / Dockerfile / secret scan (Trivy, must exit 0)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: "vuln,misconfig,secret"
+          skip-dirs: ".venv,.git"
+          # Intentional AWS key-shaped fixture used to prove redaction works.
+          skip-files: "tests/unit/test_redaction.py"
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: "CRITICAL,HIGH"
       - name: Create reports directory
         run: mkdir -p reports
         if: always()
@@ -117,6 +137,49 @@ jobs:
           if-no-files-found: ignore
 
   # --------------------------------------------------------------------------
+  # Workflow / CI configuration security (OWASP GitHub Actions guidance)
+  # --------------------------------------------------------------------------
+  workflow-security:
+    name: Workflow Security (zizmor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      # advanced-security=false makes findings a blocking CI signal; the
+      # default (true) only uploads SARIF and never fails the job.
+      - name: Audit workflows with zizmor
+        uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+        with:
+          advanced-security: "false"
+          min-severity: medium
+          min-confidence: high
+
+  # --------------------------------------------------------------------------
+  # Dependency review — blocks PRs that introduce vulnerable licences/deps
+  # --------------------------------------------------------------------------
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+
+  # --------------------------------------------------------------------------
   # Deterministic test suites — no network, no LLM, no Ollama
   # --------------------------------------------------------------------------
   unit-tests:
@@ -129,6 +192,8 @@ jobs:
       # Deliberately NO GROQ_API_KEY: unit tests must pass without it.
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           python-version: "3.12"
@@ -156,6 +221,8 @@ jobs:
       PYTHONHASHSEED: "0"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           python-version: "3.12"
@@ -200,6 +267,8 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           python-version: "3.12"
@@ -256,6 +325,8 @@ jobs:
       POSTGRES_PASSWORD: ci-config-check-password
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - name: Validate compose file
         run: docker compose config -q
       - name: Build application image (if Dockerfile exists)
@@ -265,7 +336,7 @@ jobs:
           else
             echo "SKIP: Dockerfile not present yet (application slice pending)."
           fi
-      - name: Container image scan (trivy, vuln + secret)
+      - name: Container image scan (trivy, vuln + secret + misconfig)
         if: hashFiles('Dockerfile') != ''
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -274,7 +345,39 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
           vuln-type: "os,library"
+          scanners: "vuln,secret,misconfig"
           severity: "CRITICAL,HIGH"
+
+  # --------------------------------------------------------------------------
+  # DAST — isolated OWASP ZAP baseline against the deterministic target.
+  # Never scans a public or production target; see tools/dast.sh.
+  # --------------------------------------------------------------------------
+  dast:
+    name: DAST (OWASP ZAP baseline, isolated target)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [build]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          python-version: "3.12"
+          enable-cache: false
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev --reinstall-package itsm-agent --no-cache
+      - name: Run ZAP baseline (localhost target only)
+        run: tools/dast.sh
+      - name: Upload DAST report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dast-report
+          path: reports/zap-report.*
+          if-no-files-found: warn
 
   # --------------------------------------------------------------------------
   # Integration — real Postgres + NATS + Mockoon simulator, mocked LLM
@@ -311,6 +414,8 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           python-version: "3.12"
@@ -422,6 +527,8 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           python-version: "3.12"
@@ -512,6 +619,8 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           python-version: "3.12"
@@ -578,6 +687,8 @@ jobs:
       PYTHONHASHSEED: "0"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           python-version: "3.12"
@@ -606,10 +717,15 @@ jobs:
     needs:
       - lint
       - typecheck
+      - secret-scan
+      - workflow-security
+      - dependency-review
       - supply-chain
       - unit-tests
       - contract-tests
       - security-invariants
+      - build
+      - dast
       - integration-tests
       - fault-injection-tests
       - e2e-tests
@@ -617,6 +733,8 @@ jobs:
     if: always()
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - name: Download mandatory JUnit reports
         if: always()
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -626,4 +744,8 @@ jobs:
           merge-multiple: true
       - name: Aggregate verification summary and fail on missing groups
         if: always()
+        env:
+          # Serialised job results: a required job that did not succeed fails
+          # the summary even when its JUnit artifact happened to be uploaded.
+          NEEDS_RESULTS: ${{ toJSON(needs) }}
         run: python3 tools/ci_summary.py --reports reports --sha "$GITHUB_SHA"
