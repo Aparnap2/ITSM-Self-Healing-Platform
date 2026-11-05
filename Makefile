@@ -12,7 +12,8 @@ SHELL := /bin/sh
 
 .PHONY: help format format-check lint typecheck test-unit test-contract \
         test-security test-fault-injection test-integration test-scenarios \
-        test-e2e verify verify-ci test compose-up compose-down \
+        test-e2e verify verify-ci test sast audit-deps hooks-install \
+        verify-pre-push act-ci compose-up compose-down \
         compose-reset demo-reset demo-run
 
 help: ## Show available targets
@@ -73,6 +74,19 @@ audit-deps: ## Known-vulnerability audit of the locked dependency set
 	uv export --frozen --format requirements-txt --no-emit-project -o .itsm-requirements.txt
 	uv run pip-audit --disable-pip -r .itsm-requirements.txt
 	rm -f .itsm-requirements.txt
+
+# --- Versioned hooks & local GitHub Actions -----------------------------------
+
+hooks-install: ## Install versioned git hooks (core.hooksPath=.githooks)
+	git config core.hooksPath .githooks
+	@echo "Installed: core.hooksPath=.githooks (pre-push gate enabled)."
+
+verify-pre-push: ## Run the versioned pre-push gate without pushing
+	@printf '' | .githooks/pre-push
+
+act-ci: ## Run fast CI jobs locally via act (ACT_FULL=1 for all jobs)
+	@ACT_FLAG=""; if [ "$$ACT_FULL" = "1" ]; then ACT_FLAG="--full"; fi; \
+		./tools/act-ci.sh $$ACT_FLAG
 
 test: ## Full test suite (all markers)
 	uv run pytest

@@ -19,6 +19,9 @@ mockoon-data/
 localstack/
 *.local.json
 
+# Generated CI / security reports (JUnit, SBOM, ZAP, DAST logs)
+reports/
+
 # IDE / OS
 .idea/
 .vscode/
