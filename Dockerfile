@@ -3,9 +3,12 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN pip install --no-cache-dir uv
+RUN pip install --no-cache-dir uv \
+    && useradd --system --create-home --uid 10001 --shell /usr/sbin/nologin itsm \
+    && mkdir -p /app && chown itsm:itsm /app
 
 WORKDIR /app
+USER root
 
 # Project metadata first, so dependency resolution is cached separately from
 # source changes. README.md is required because pyproject.toml declares it as
@@ -24,5 +27,7 @@ RUN uv sync --frozen --no-dev
 
 ENV PYTHONPATH=/app/src \
     PATH="/app/.venv/bin:$PATH"
+
+USER itsm
 
 CMD ["python", "-m", "itsm_agent.workers.consumer"]

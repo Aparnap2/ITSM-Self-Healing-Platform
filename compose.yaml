@@ -177,6 +177,13 @@ services:
       resources:
         limits:
           memory: 512m
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   worker:
     build:
@@ -205,6 +212,13 @@ services:
       resources:
         limits:
           memory: 512m
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   # ---------------------------------------------------------------------------
   # LocalStack — QUARANTINED (ADR-0003). Opt-in only via:
