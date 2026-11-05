@@ -31,11 +31,23 @@
 ## Dependency and license audit
 
 - Moto (Apache-2.0), LocalStack (optional, license unverified), Mockoon (MIT).
-- Run pip-audit / safety in CI (to be wired).
+- pip-audit runs in CI (`make audit-deps`); Trivy adds OS/library, secret, and
+  misconfiguration scanning for both the source tree and the built image.
+- PRs also run `actions/dependency-review-action` and zizmor workflow auditing.
+- See `docs/security-ci.md` for the full gate map.
 
 ## CI qualification
 
-- Gates: ruff check, ruff format --check, mypy, pytest (unit/contract/integration/security/e2e), git diff --check.
+- Gates: ruff format/check, mypy `--strict`, gitleaks, zizmor, dependency
+  review (PRs), Bandit, pip-audit, Trivy (fs + image), Docker build, compose
+  config validation, OWASP ZAP baseline DAST, and pytest
+  (unit/contract/security/integration/fault-injection/scenarios/e2e).
+- `ci-summary` fails on a missing JUnit report, a failed test, or any required
+  job that did not succeed (via `${{ toJSON(needs) }}`), so a silent skip
+  cannot present as green.
+- Migration safety is covered by
+  `tests/integration/test_migration_safety.py` (fresh install, upgrade,
+  backfill determinism, data preservation, failure recovery).
 
 ## Clean-environment deployment
 
