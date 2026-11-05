@@ -17,6 +17,7 @@ from fastapi.responses import PlainTextResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
+from starlette.middleware.base import RequestResponseEndpoint
 
 from itsm_agent.adapters.persistence.privileges import verify_runtime_database
 from itsm_agent.api import security
@@ -69,6 +70,24 @@ def create_app(
         openapi_url=None,
         lifespan=lifespan,
     )
+
+    @app.middleware("http")
+    async def _security_headers(request: Request, call_next: RequestResponseEndpoint) -> Response:
+        response = await call_next(request)
+        response.headers.update(
+            {
+                "X-Content-Type-Options": "nosniff",
+                "X-Frame-Options": "DENY",
+                "Referrer-Policy": "no-referrer",
+                "Cache-Control": "no-store, no-cache, must-revalidate, private",
+                "Content-Security-Policy": (
+                    "default-src 'none'; base-uri 'none'; "
+                    "form-action 'none'; frame-ancestors 'none'"
+                ),
+                "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+            }
+        )
+        return response
 
     # Dependencies live on the app instance, never in a module global. Two
     # independently composed apps therefore cannot share mutable configuration.
