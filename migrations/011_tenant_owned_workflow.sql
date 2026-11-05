@@ -5,7 +5,8 @@
 --
 -- Backfill policy (deterministic, no guessing across tenants):
 --   1. Match an incident to a canonical source event by external_event_id.
---   2. If exactly one tenant exists, assign remaining legacy rows to it.
+--   2. If exactly one non-system tenant exists, assign remaining legacy rows
+--      to it.
 --   3. Otherwise assign remaining legacy rows to a dedicated ``system``
 --      tenant (fixed UUID). Those rows remain reachable only by a session
 --      that explicitly sets that tenant context; no reviewer is a member.
@@ -43,9 +44,16 @@ DECLARE
     chosen_tenant UUID;
 BEGIN
     IF EXISTS (SELECT 1 FROM incidents WHERE tenant_id IS NULL) THEN
-        SELECT count(*) INTO tenants_count FROM tenants;
+        -- The system tenant itself is excluded: it is infrastructure, not a
+        -- customer. Counting it would make the "single-tenant deployment"
+        -- branch unreachable, because it is inserted just above.
+        SELECT count(*) INTO tenants_count
+          FROM tenants
+         WHERE id <> '00000000-0000-0000-0000-000000000001';
         IF tenants_count = 1 THEN
-            SELECT id INTO chosen_tenant FROM tenants;
+            SELECT id INTO chosen_tenant
+              FROM tenants
+             WHERE id <> '00000000-0000-0000-0000-000000000001';
         ELSE
             chosen_tenant := '00000000-0000-0000-0000-000000000001';
         END IF;
