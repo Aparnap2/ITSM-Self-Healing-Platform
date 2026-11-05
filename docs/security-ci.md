@@ -12,7 +12,7 @@ prove, and — deliberately — what it cannot. It is a companion to
 | Static typing | `typecheck` | mypy `--strict` | Non-zero exit |
 | Secret scanning | `secret-scan` | gitleaks | Any finding |
 | Workflow security | `workflow-security` | zizmor (pinned action) | Findings at/above medium severity + high confidence (`advanced-security: false` makes findings fail the job) |
-| Dependency review | `dependency-review` | `actions/dependency-review-action` | New dependency at/above high severity (PR only) |
+| Dependency review | `dependency-review` | `actions/dependency-review-action` | New dependency at/above high severity (PR only; non-blocking until Dependency Graph is enabled) |
 | SAST | `supply-chain` | Bandit (`make sast`) | Any finding |
 | Dependency audit | `supply-chain` | pip-audit (`make audit-deps`) | Any known vulnerability |
 | IaC / misconfig / secret | `supply-chain` | Trivy `fs` (`vuln,misconfig,secret`) | CRITICAL/HIGH, fixed-only |
@@ -81,6 +81,7 @@ and, optionally, execute the workflow locally with `act`; see
 - The DAST lane targets an in-memory stub, not a fully wired API process.
 - zizmor results are console-gated; SARIF upload to GitHub Advanced Security
   is intentionally not enabled.
-- Dependency review runs on pull requests only.
+- Dependency review runs on pull requests only and is non-blocking until the
+  repository owner enables GitHub Dependency Graph (Settings → Security).
 - No release qualification is implied by a green pipeline; see the release
   gate in `docs/production-readiness.md`.

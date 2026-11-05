@@ -7,6 +7,7 @@ code — the only thing CI consumes — is asserted, not an in-process return.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -49,7 +50,9 @@ def _needs(*, failed: tuple[str, ...] = ()) -> str:
     return json.dumps(jobs)
 
 
-def _run(reports: Path, needs: str | None) -> subprocess.CompletedProcess[str]:
+def _run(
+    reports: Path, needs: str | None, *, summary_file: Path | None = None
+) -> subprocess.CompletedProcess[str]:
     args = [
         sys.executable,
         str(SCRIPT),
@@ -60,7 +63,12 @@ def _run(reports: Path, needs: str | None) -> subprocess.CompletedProcess[str]:
     ]
     if needs is not None:
         args.extend(["--needs-json", needs])
-    return subprocess.run(args, capture_output=True, text=True, check=False)
+    # CI sets GITHUB_STEP_SUMMARY, which redirects output to a file. Tests that
+    # assert stdout must opt out of that redirection; one test exercises it.
+    env = {key: value for key, value in os.environ.items() if key != "GITHUB_STEP_SUMMARY"}
+    if summary_file is not None:
+        env["GITHUB_STEP_SUMMARY"] = str(summary_file)
+    return subprocess.run(args, capture_output=True, text=True, check=False, env=env)
 
 
 def test_all_reports_and_successful_needs_exit_zero(tmp_path: Path) -> None:
@@ -122,3 +130,17 @@ def test_unparseable_needs_json_fails_closed(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "cannot parse --needs-json" in result.stderr
+
+
+def test_github_step_summary_is_written_and_exit_zero(tmp_path: Path) -> None:
+    for filename in REPORTS:
+        _junit(tmp_path / filename)
+    summary = tmp_path / "summary.md"
+
+    result = _run(tmp_path, _needs(), summary_file=summary)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == ""
+    written = summary.read_text(encoding="utf-8")
+    assert "# CI Verification Summary" in written
+    assert "Failures + errors: **0**" in written
