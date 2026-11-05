@@ -12,6 +12,7 @@ group into a passing green check.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import xml.etree.ElementTree as ET
@@ -70,11 +71,56 @@ def _escape_table(text: str) -> str:
     return text.replace("|", "\\|")
 
 
+def _failed_needs(raw: str | None, self_job: str, optional_jobs: frozenset[str]) -> list[str]:
+    """Return required jobs whose result is not ``success``.
+
+    GitHub exposes ``needs`` to a job as JSON via ``toJSON(needs)``. A job
+    that is missing from the mapping did not run at all; that is a failure for
+    qualification purposes. Jobs named in ``optional_jobs`` may be ``skipped``
+    (for example a PR-only job on a push event) without failing the summary.
+    """
+    if not raw:
+        return []
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"cannot parse --needs-json: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise SystemExit("--needs-json must be a JSON object")
+
+    failures: list[str] = []
+    for name, record in payload.items():
+        if name == self_job:
+            continue
+        result = record.get("result") if isinstance(record, dict) else record
+        if result == "success":
+            continue
+        if result == "skipped" and name in optional_jobs:
+            continue
+        failures.append(f"{name}: {result}")
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reports", type=Path, default=Path("reports"))
     parser.add_argument("--sha", default=os.environ.get("GITHUB_SHA", "unknown"))
     parser.add_argument("--post-to-summary", action="store_true", default=True)
+    parser.add_argument(
+        "--needs-json",
+        default=os.environ.get("NEEDS_RESULTS"),
+        help="JSON from ${{ toJSON(needs) }}; non-success required jobs fail the summary.",
+    )
+    parser.add_argument(
+        "--self-job",
+        default="ci-summary",
+        help="Name of this summary job; excluded from the needs check.",
+    )
+    parser.add_argument(
+        "--optional-jobs",
+        default="dependency-review,dast",
+        help="Comma-separated jobs allowed to be skipped without failing.",
+    )
     args = parser.parse_args()
 
     if not args.reports.is_dir():
@@ -89,6 +135,12 @@ def main() -> int:
             continue
         results.append(_group_result(label, candidate))
 
+    failed_needs = _failed_needs(
+        args.needs_json,
+        args.self_job,
+        frozenset(name.strip() for name in args.optional_jobs.split(",") if name.strip()),
+    )
+
     lines: list[str] = []
     lines.append("# CI Verification Summary")
     lines.append(f"Commit: `{args.sha}`")
@@ -99,6 +151,11 @@ def main() -> int:
         lines.append("**Missing mandatory reports:**")
         for filename in sorted(missing):
             lines.append(f"- `{filename}`")
+        lines.append("")
+    if failed_needs:
+        lines.append("**Required jobs that did not succeed:**")
+        for entry in failed_needs:
+            lines.append(f"- `{entry}`")
         lines.append("")
     lines.append("| Area | Tests | Failed | Errors | Skipped |")
     lines.append("| --- | ---: | ---: | ----: | ------: |")
@@ -114,6 +171,8 @@ def main() -> int:
     lines.append(f"Skipped tests: **{skipped}**")
     if missing:
         lines.append("**Missing mandatory group(s) — this run is not qualified.**")
+    if failed_needs:
+        lines.append("**Required job(s) did not succeed — this run is not qualified.**")
 
     output = "\n".join(lines) + "\n"
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -122,7 +181,7 @@ def main() -> int:
             handle.write(output)
     else:
         print(output, end="")
-    return 1 if missing or failed else 0
+    return 1 if missing or failed or failed_needs else 0
 
 
 if __name__ == "__main__":
