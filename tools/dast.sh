@@ -32,7 +32,10 @@ command -v curl >/dev/null 2>&1 || {
   exit 3
 }
 
+# The ZAP image may run as an unprivileged user; the bind-mounted reports
+# directory must be writable by it or the scan aborts with EACCES.
 mkdir -p "$REPORTS_DIR"
+chmod 0777 "$REPORTS_DIR"
 
 cleanup() {
   if [ -n "${TARGET_PID:-}" ] && kill -0 "$TARGET_PID" 2>/dev/null; then
