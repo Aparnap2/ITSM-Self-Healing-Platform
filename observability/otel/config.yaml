@@ -1,0 +1,38 @@
+# OpenTelemetry Collector (contrib) configuration for the local ITSM stack.
+# Mounted read-only into otel/opentelemetry-collector-contrib:0.164.0 by
+# compose.yaml.
+#
+# OTLP in (grpc 4317 / http 4318) -> batch -> Prometheus exporter (8889) for
+# metrics; traces and logs go to the `debug` exporter for local inspection.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

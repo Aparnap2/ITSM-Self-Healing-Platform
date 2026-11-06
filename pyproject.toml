@@ -14,6 +14,7 @@ dependencies = [
     "psycopg[binary,pool]>=3.2,<4",
     "nats-py>=2.6,<3",
     "httpx>=0.27,<1",
+    "cryptography>=42,<51",
     "structlog>=24.1,<26",
     "tenacity>=8.3,<10",
 ]
@@ -30,6 +31,11 @@ dev = [
     "opentelemetry-sdk>=1.25,<2",
     "opentelemetry-exporter-otlp>=1.25,<2",
     "prometheus-client>=0.20,<1",
+    # CI-0 supply-chain gates (release-qualification requirement):
+    # pip-audit = known-vulnerability audit of the locked environment,
+    # bandit = SAST scan of src/ before any push to the review PR.
+    "pip-audit>=2.7,<3",
+    "bandit[toml]>=1.7,<2",
 ]
 
 [build-system]
@@ -68,4 +74,11 @@ markers = [
     "security: policy and safety invariant tests",
     "fault_injection: deterministic fault injection tests",
     "scenarios: end-to-end scenario suite",
+    "e2e: end-to-end verification against live stack",
 ]
+
+[tool.bandit]
+# SAST gate for src/ only; tests/ is excluded (fixtures and simulators
+# intentionally shape untrusted input, which bandit flags as leaks).
+exclude_dirs = ["tests", "simulators", "evals"]
+skips = ["B101"]

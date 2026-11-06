@@ -1,0 +1,10 @@
+{
+  "incident_id": "inc-sim-0001",
+  "title": "payments-api elevated 5xx error rate",
+  "description": "Simulated clean outage: payments-api returns elevated 5xx rates after a configuration push. Recovery via restart-service is expected to succeed and be independently verified.",
+  "severity": "P2",
+  "affected_service": "payments-api",
+  "source": "simulator",
+  "created_at": "2026-10-28T09:00:00Z",
+  "external_event_id": "evt-sim-0001"
+}

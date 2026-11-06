@@ -1,0 +1,139 @@
+#!/bin/sh
+# ---------------------------------------------------------------------------
+# Versioned pre-push gate for the ITSM self-healing platform.
+#
+# Contract (see docs/ci/act-local-ci.md):
+#   * Git invokes this hook from `git push` when core.hooksPath=.githooks.
+#   * Git passes the remote name/URL as $1/$2 and ref update lines on stdin:
+#       <local-ref> SP <local-sha> SP <remote-ref> SP <remote-sha> LF
+#   * A non-zero exit aborts the push.
+#   * SKIP_PREPUSH=1 bypasses the gate with a loud warning. `git push
+#     --no-verify` also bypasses it (Git-level behaviour, not ours).
+#
+# This hook is deliberately offline and service-free:
+#   * no Docker, PostgreSQL, NATS, simulators, or network calls
+#   * no secrets are read, printed, or required
+#   * only the fast local gates run: format, lint, typecheck, unit+contract
+#
+# Optional security gates:
+#   * SAST (bandit) runs by default when bandit is installed in the locked
+#     environment. Set PREPUSH_SECURITY=0 to disable.
+#   * Dependency audit (pip-audit) needs network access to a vulnerability
+#     service, so it is opt-in via PREPUSH_AUDIT_DEPS=1.
+# ---------------------------------------------------------------------------
+set -eu
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
+if [ -z "$REPO_ROOT" ]; then
+    echo "pre-push: not inside a git work tree; refusing to run." >&2
+    exit 1
+fi
+cd "$REPO_ROOT"
+
+REMOTE_NAME=${1:-unknown}
+REMOTE_URL=${2:-unknown}
+
+# Read stdin without blocking when the hook is invoked manually from a TTY.
+# In a real push stdin is a pipe and reaches EOF after the ref lines.
+REF_COUNT=0
+DELETION_COUNT=0
+if [ ! -t 0 ]; then
+    while IFS=' ' read -r local_ref local_sha remote_ref remote_sha || [ -n "${local_ref:-}" ]; do
+        [ -z "${local_ref:-}" ] && continue
+        REF_COUNT=$((REF_COUNT + 1))
+        if [ "$local_ref" = "(delete)" ] || [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+            DELETION_COUNT=$((DELETION_COUNT + 1))
+        fi
+    done
+fi
+
+if [ "${SKIP_PREPUSH:-0}" = "1" ]; then
+    cat >&2 <<'EOF'
+
+########################################################################
+# WARNING: SKIP_PREPUSH=1 — PRE-PUSH QUALITY GATES WERE NOT RUN.        #
+# ruff format/check, mypy, unit+contract tests, and the optional       #
+# security gates were bypassed. CI is now the only safety net.          #
+# Re-run `.githooks/pre-push` or `make verify-pre-push` before merging. #
+########################################################################
+
+EOF
+    exit 0
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+    echo "pre-push: 'uv' is not installed or not on PATH." >&2
+    echo "pre-push: install it from https://docs.astral.sh/uv/ and retry." >&2
+    exit 127
+fi
+
+if [ ! -f pyproject.toml ]; then
+    echo "pre-push: pyproject.toml not found at $REPO_ROOT; run from the repo." >&2
+    exit 1
+fi
+
+BRANCH=$(git branch --show-current 2>/dev/null || true)
+[ -n "$BRANCH" ] || BRANCH="(detached HEAD)"
+HEAD_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+GATE_NUMBER=0
+
+run_gate() {
+    gate_label=$1
+    shift
+    GATE_NUMBER=$((GATE_NUMBER + 1))
+    printf '\n[gate %s] %s\n' "$GATE_NUMBER" "$gate_label"
+    printf '         $ %s\n' "$*"
+    if "$@"; then
+        return 0
+    else
+        gate_status=$?
+    fi
+    printf '\n' >&2
+    printf 'PRE-PUSH FAILED: %s\n' "$gate_label" >&2
+    printf '  command:   %s\n' "$*" >&2
+    printf '  exit code: %s\n' "$gate_status" >&2
+    printf '  Fix the failure above, then push again.\n' >&2
+    printf '  Emergency bypass (not recommended): SKIP_PREPUSH=1 git push ...\n' >&2
+    exit "$gate_status"
+}
+
+printf '==============================================================\n'
+printf 'pre-push gates  branch=%s  head=%s  remote=%s\n' "$BRANCH" "$HEAD_SHA" "$REMOTE_NAME"
+printf '                refs-on-stdin=%s  deletions=%s\n' "$REF_COUNT" "$DELETION_COUNT"
+printf '                remote-url=%s\n' "$REMOTE_URL"
+printf '==============================================================\n'
+
+# Fast, deterministic gates. Order matters: cheapest signal first.
+run_gate "Format check (ruff)" uv run ruff format --check .
+run_gate "Lint (ruff)" uv run ruff check .
+run_gate "Typecheck (mypy strict)" uv run mypy src tests
+run_gate "Unit and contract tests (pytest, no services)" uv run pytest -m "unit or contract"
+
+# Optional security gates. Never require a network-only tool to be present.
+SECURITY_MODE=${PREPUSH_SECURITY:-auto}
+if [ "$SECURITY_MODE" != "0" ]; then
+    if command -v make >/dev/null 2>&1 && uv run bandit --version >/dev/null 2>&1; then
+        run_gate "SAST (bandit, offline)" make sast
+    else
+        printf '\n[skip] SAST: bandit/make not available in this environment.\n'
+    fi
+
+    if [ "${PREPUSH_AUDIT_DEPS:-0}" = "1" ]; then
+        if command -v make >/dev/null 2>&1 && uv run pip-audit --version >/dev/null 2>&1; then
+            run_gate "Dependency audit (pip-audit, requires network)" make audit-deps
+        else
+            printf '\n[skip] Dependency audit: pip-audit/make not available.\n'
+            printf '       Install the dev extra with `uv sync --extra dev` to enable it.\n'
+        fi
+    else
+        printf '\n[skip] Dependency audit: set PREPUSH_AUDIT_DEPS=1 to run it (needs network).\n'
+    fi
+else
+    printf '\n[skip] Security gates disabled by PREPUSH_SECURITY=0.\n'
+fi
+
+printf '\n==============================================================\n'
+printf 'pre-push gates PASSED (%s gate(s) executed).\n' "$GATE_NUMBER"
+printf '==============================================================\n'
+exit 0

@@ -1,0 +1,35 @@
+# VCS / metadata
+.git
+.github
+.gitignore
+
+# Python bytecode / caches
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.venv
+
+# Tests and quality tooling
+tests
+evals
+
+# Documentation and planning (not needed at runtime)
+docs
+*.md
+!README.md
+
+# Simulators (Mockoon fixtures are mounted from host in compose)
+simulators
+
+# Environment / secrets (never bake into image)
+.env
+.env.*
+!.env.example
+
+# Reports / artifacts
+reports
+compose.yaml
+docker-compose*.yml

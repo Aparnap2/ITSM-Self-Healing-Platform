@@ -1,0 +1,625 @@
+{
+  "uuid": "6f9619ff-8b86-d011-b42d-00cf4fc964ff",
+  "lastMigration": 33,
+  "name": "ITSM self-healing simulators",
+  "endpointPrefix": "",
+  "latency": 0,
+  "port": 3001,
+  "hostname": "0.0.0.0",
+  "folders": [],
+  "routes": [
+    {
+      "uuid": "b1000000-0000-4000-8000-000000000001",
+      "method": "get",
+      "endpoint": "health",
+      "type": "http",
+      "documentation": "",
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0,
+      "responses": [
+        {
+          "uuid": "a1000000-0000-4000-8000-000000000001",
+          "body": "{\"status\":\"ok\",\"simulator\":\"itsm-mockoon\"}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Simulator health",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ]
+    },
+    {
+      "uuid": "b1000000-0000-4000-8000-000000000002",
+      "method": "post",
+      "endpoint": "tickets",
+      "type": "http",
+      "documentation": "",
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0,
+      "responses": [
+        {
+          "uuid": "a1000000-0000-4000-8000-000000000002",
+          "body": "{\"ticket_id\":\"tkt-{{uuid}}\",\"url\":null}",
+          "latency": 0,
+          "statusCode": 201,
+          "label": "Create incident",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ]
+    },
+    {
+      "uuid": "b1000000-0000-4000-8000-000000000003",
+      "method": "get",
+      "endpoint": "tickets",
+      "type": "http",
+      "documentation": "",
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0,
+      "responses": [
+        {
+          "uuid": "a1000000-0000-4000-8000-000000000003",
+          "body": "{\"incidents\":[],\"count\":0}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "List incidents",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ]
+    },
+    {
+      "uuid": "b1000000-0000-4000-8000-000000000004",
+      "method": "get",
+      "endpoint": "tickets/:ticketId",
+      "type": "http",
+      "documentation": "",
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0,
+      "responses": [
+        {
+          "uuid": "a1000000-0000-4000-8000-000000000004",
+          "body": "{\"ticket_id\":\"{{urlParam 'ticketId'}}\",\"status\":\"OPEN\",\"title\":\"Simulated incident\",\"description\":\"Health check failing\",\"updated_at\":\"2026-01-01T00:00:00Z\"}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Get incident",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ]
+    },
+    {
+      "uuid": "b1000000-0000-4000-8000-000000000005",
+      "method": "patch",
+      "endpoint": "tickets/:ticketId",
+      "type": "http",
+      "documentation": "",
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0,
+      "responses": [
+        {
+          "uuid": "a1000000-0000-4000-8000-000000000005",
+          "body": "{\"accepted\":true,\"result_code\":\"UPDATED\",\"summary\":\"ok\"}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Update incident",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ]
+    },
+    {
+      "uuid": "b1000000-0000-4000-8000-000000000006",
+      "method": "get",
+      "endpoint": "principals/principal-sim-001",
+      "type": "http",
+      "documentation": "",
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0,
+      "responses": [
+        {
+          "uuid": "a1000000-0000-4000-8000-000000000006",
+          "body": "{\"principal_id\":\"principal-sim-001\",\"display_name\":\"Simulated Responder\",\"active\":true,\"roles\":[\"responder\"],\"verified_at\":\"2026-01-01T00:00:00Z\"}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Known principal (must precede :principalId route)",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ]
+    },
+    {
+      "uuid": "b1000000-0000-4000-8000-000000000007",
+      "method": "get",
+      "endpoint": "principals/:principalId",
+      "type": "http",
+      "documentation": "",
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0,
+      "responses": [
+        {
+          "uuid": "a1000000-0000-4000-8000-000000000007",
+          "body": "{\"error\":\"unknown_principal\",\"principal_id\":\"{{urlParam 'principalId'}}\"}",
+          "latency": 0,
+          "statusCode": 404,
+          "label": "Unknown principal (fail closed)",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ]
+    },
+    {
+      "uuid": "b1000000-0000-4000-8000-000000000008",
+      "method": "get",
+      "endpoint": "state/:serviceId",
+      "type": "http",
+      "documentation": "",
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0,
+      "responses": [
+        {
+          "uuid": "a1000000-0000-4000-8000-000000000008",
+          "body": "{\"service_name\":\"{{urlParam 'serviceId'}}\",\"environment\":\"test\",\"status\":\"HEALTHY\",\"uptime_seconds\":10,\"restart_count\":1,\"last_action_result_code\":\"RESTART_OK\",\"observed_at\":\"2026-01-01T00:00:00Z\"}",
+          "latency": 0,
+          "statusCode": 503,
+          "label": "Service unhealthy (header x-sim-health-state: unhealthy)",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [
+            {
+              "target": "header",
+              "modifier": "x-sim-health-state",
+              "operator": "equals",
+              "value": "unhealthy",
+              "invert": false
+            }
+          ],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": false,
+          "crudKey": "id",
+          "callbacks": []
+        },
+        {
+          "uuid": "a1000000-0000-4000-8000-000000000009",
+          "body": "{\"service_name\":\"{{urlParam 'serviceId'}}\",\"environment\":\"test\",\"status\":\"HEALTHY\",\"uptime_seconds\":10,\"restart_count\":1,\"last_action_result_code\":\"RESTART_OK\",\"observed_at\":\"2026-01-01T00:00:00Z\"}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Service degraded (header x-sim-health-state: degraded)",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [
+            {
+              "target": "header",
+              "modifier": "x-sim-health-state",
+              "operator": "equals",
+              "value": "degraded",
+              "invert": false
+            }
+          ],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": false,
+          "crudKey": "id",
+          "callbacks": []
+        },
+        {
+          "uuid": "a1000000-0000-4000-8000-00000000000a",
+          "body": "{\"service_name\":\"{{urlParam 'serviceId'}}\",\"environment\":\"test\",\"status\":\"HEALTHY\",\"uptime_seconds\":10,\"restart_count\":1,\"last_action_result_code\":\"RESTART_OK\",\"observed_at\":\"2026-01-01T00:00:00Z\"}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Service healthy (default)",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ]
+    },
+    {
+      "uuid": "b1000000-0000-4000-8000-000000000009",
+      "method": "post",
+      "endpoint": "actions/restart_service",
+      "type": "http",
+      "documentation": "",
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0,
+      "responses": [
+        {
+          "uuid": "a1000000-0000-4000-8000-00000000000b",
+          "body": "{\"error\":\"simulated_transient_failure\"}",
+          "latency": 0,
+          "statusCode": 503,
+          "label": "Transient failure (header x-sim-fault-mode: transient_fail)",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [
+            {
+              "target": "header",
+              "modifier": "x-sim-fault-mode",
+              "operator": "equals",
+              "value": "transient_fail",
+              "invert": false
+            }
+          ],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": false,
+          "crudKey": "id",
+          "callbacks": []
+        },
+        {
+          "uuid": "a1000000-0000-4000-8000-00000000000c",
+          "body": "{\"action_type\":\"RESTART_SERVICE\",\"service_name\":\"payments-api\",\"status\":\"SUCCEEDED\",\"result_code\":\"RESTART_OK\",\"summary\":\"ok\",\"observed_at\":\"2026-01-01T00:00:00Z\"}",
+          "latency": 5000,
+          "statusCode": 200,
+          "label": "Slow success \u2014 caller timeout produces uncertain outcome (header x-sim-fault-mode: timeout_then_success)",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [
+            {
+              "target": "header",
+              "modifier": "x-sim-fault-mode",
+              "operator": "equals",
+              "value": "timeout_then_success",
+              "invert": false
+            }
+          ],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": false,
+          "crudKey": "id",
+          "callbacks": []
+        },
+        {
+          "uuid": "a1000000-0000-4000-8000-00000000000d",
+          "body": "{\"error\":\"simulated_permanent_failure\"}",
+          "latency": 0,
+          "statusCode": 500,
+          "label": "Permanent failure (header x-sim-fault-mode: always_fail)",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [
+            {
+              "target": "header",
+              "modifier": "x-sim-fault-mode",
+              "operator": "equals",
+              "value": "always_fail",
+              "invert": false
+            }
+          ],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": false,
+          "crudKey": "id",
+          "callbacks": []
+        },
+        {
+          "uuid": "a1000000-0000-4000-8000-00000000000e",
+          "body": "{\"action_type\":\"RESTART_SERVICE\",\"service_name\":\"payments-api\",\"status\":\"SUCCEEDED\",\"result_code\":\"RESTART_OK\",\"summary\":\"ok\",\"observed_at\":\"2026-01-01T00:00:00Z\"}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Action success (default)",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ]
+    },
+    {
+      "uuid": "b1000000-0000-4000-8000-000000000010",
+      "method": "get",
+      "endpoint": "services",
+      "type": "http",
+      "documentation": "",
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0,
+      "responses": [
+        {
+          "uuid": "a1000000-0000-4000-8000-000000000008",
+          "body": "{\"services\":[\"payments-api\"],\"count\":1}",
+          "latency": 0,
+          "statusCode": 503,
+          "label": "Service unhealthy (header x-sim-health-state: unhealthy)",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [
+            {
+              "target": "header",
+              "modifier": "x-sim-health-state",
+              "operator": "equals",
+              "value": "unhealthy",
+              "invert": false
+            }
+          ],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": false,
+          "crudKey": "id",
+          "callbacks": []
+        },
+        {
+          "uuid": "a1000000-0000-4000-8000-000000000009",
+          "body": "{\"services\":[\"payments-api\"],\"count\":1}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Service degraded (header x-sim-health-state: degraded)",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [
+            {
+              "target": "header",
+              "modifier": "x-sim-health-state",
+              "operator": "equals",
+              "value": "degraded",
+              "invert": false
+            }
+          ],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": false,
+          "crudKey": "id",
+          "callbacks": []
+        },
+        {
+          "uuid": "a1000000-0000-4000-8000-00000000000a",
+          "body": "{\"services\":[\"payments-api\"],\"count\":1}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Service healthy (default)",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ]
+    }
+  ],
+  "rootChildren": [],
+  "proxyMode": false,
+  "proxyHost": "",
+  "proxyRemovePrefix": false,
+  "tlsOptions": {
+    "enabled": false,
+    "type": "CERT",
+    "pfxPath": "",
+    "certPath": "",
+    "keyPath": "",
+    "caPath": "",
+    "passphrase": ""
+  },
+  "cors": true,
+  "headers": [],
+  "proxyReqHeaders": [
+    {
+      "key": "",
+      "value": ""
+    }
+  ],
+  "proxyResHeaders": [
+    {
+      "key": "",
+      "value": ""
+    }
+  ],
+  "data": [],
+  "callbacks": []
+}
