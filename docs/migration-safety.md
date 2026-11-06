@@ -18,6 +18,7 @@ database.
 | `test_upgrade_adds_tenant_constraints_and_indexes` | `tenant_id` is `NOT NULL` on the workflow tables; composite tenant FKs, the `(tenant_id, id)` uniqueness anchor, and tenant indexes exist |
 | `test_injected_failing_migration_is_not_recorded` | A failing migration is rolled back entirely, is not recorded in `schema_migrations`, and a corrected rerun applies cleanly |
 | `test_system_tenant_rows_invisible_to_other_tenant` | A session scoped to another tenant cannot read system-tenant rows, even as `itsm_app` |
+| `test_tenant_registry_is_readable_and_insertable_but_immutable_at_runtime` | `itsm_app` can select and idempotently insert tenants, but `UPDATE`/`DELETE` fail with `42501` (migration 014) |
 
 Marker: `integration` + `security`.
 

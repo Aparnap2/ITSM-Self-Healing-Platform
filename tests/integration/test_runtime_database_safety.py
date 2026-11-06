@@ -71,7 +71,8 @@ RLS_TABLES: tuple[str, ...] = (
 #: Every table the runtime role must be able to DML, plus the SELECT-only
 #: directory table. Granting against this full list is what the production
 #: ``itsm_app`` role receives from migration 010.
-DML_TABLES: tuple[str, ...] = RLS_TABLES + ("tenants",)
+TENANT_REGISTRY_TABLES: tuple[str, ...] = ("tenants",)
+DML_TABLES: tuple[str, ...] = RLS_TABLES + TENANT_REGISTRY_TABLES
 APPEND_ONLY_TABLES: tuple[str, ...] = ("source_events", "audit_events", "erasure_tombstones")
 READ_ONLY_TABLES: tuple[str, ...] = ("reviewer_authorizations",)
 
@@ -117,6 +118,12 @@ async def _grant_dml(admin: AsyncConnection, role: str, tables: tuple[str, ...])
     for table in APPEND_ONLY_TABLES:
         await admin.execute(
             sql.SQL("REVOKE UPDATE, DELETE ON {} FROM {}").format(
+                sql.Identifier(table), sql.Identifier(role)
+            )
+        )
+    for table in TENANT_REGISTRY_TABLES:
+        await admin.execute(
+            sql.SQL("REVOKE UPDATE, DELETE, TRUNCATE ON {} FROM {}").format(
                 sql.Identifier(table), sql.Identifier(role)
             )
         )
@@ -422,6 +429,91 @@ async def test_reviewer_directory_is_not_tenant_scoped_but_issuer_scoped(
                 "DELETE FROM reviewer_authorizations WHERE issuer = %s",
                 (ISSUER,),
             )
+            await admin.execute("DELETE FROM tenants WHERE id = %s", (tenant_id,))
+        finally:
+            await admin.close()
+
+
+# ---------------------------------------------------------------------------
+# Tenant registry: SELECT + INSERT only, never UPDATE/DELETE/TRUNCATE
+# ---------------------------------------------------------------------------
+
+
+def _role_name(dsn: str) -> str:
+    return str(conninfo_to_dict(dsn)["user"])
+
+
+@pytest.mark.parametrize("privilege", ["UPDATE", "DELETE", "TRUNCATE"])
+async def test_tenant_registry_write_grant_is_rejected(
+    role_factory: RuntimeRoleFactory,
+    pg_dsn: str,
+    privilege: str,
+) -> None:
+    """Tenancy lifecycle is administration-plane; runtime must not hold it."""
+    dsn = await role_factory(tables=DML_TABLES)
+    admin = await _admin(pg_dsn)
+    try:
+        await admin.execute(
+            sql.SQL("GRANT {} ON tenants TO {}").format(
+                sql.SQL(privilege), sql.Identifier(_role_name(dsn))
+            )
+        )
+    finally:
+        await admin.close()
+
+    with pytest.raises(DatabaseSafetyError, match="tenant registry"):
+        await _as_role_assert(dsn)
+
+
+async def test_tenant_registry_requires_insert_for_idempotent_registration(
+    role_factory: RuntimeRoleFactory,
+    pg_dsn: str,
+) -> None:
+    dsn = await role_factory(tables=DML_TABLES)
+    admin = await _admin(pg_dsn)
+    try:
+        await admin.execute(
+            sql.SQL("REVOKE INSERT ON tenants FROM {}").format(sql.Identifier(_role_name(dsn)))
+        )
+    finally:
+        await admin.close()
+
+    with pytest.raises(DatabaseSafetyError, match="cannot register a tenant"):
+        await _as_role_assert(dsn)
+
+
+async def test_runtime_can_register_but_cannot_mutate_confirmed_tenants(
+    role_factory: RuntimeRoleFactory,
+    pg_dsn: str,
+) -> None:
+    """Behavioural proof, not just a catalog assertion."""
+    dsn = await role_factory(tables=DML_TABLES)
+    tenant_id = uuid.uuid4()
+    conn = await _connect(dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO tenants (id, name) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING",
+            (tenant_id, "original"),
+        )
+        # A second idempotent registration must not change the stored name.
+        await conn.execute(
+            "INSERT INTO tenants (id, name) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING",
+            (tenant_id, "attacker-renamed"),
+        )
+        row = await (
+            await conn.execute("SELECT name FROM tenants WHERE id = %s", (tenant_id,))
+        ).fetchone()
+        assert row is not None and row[0] == "original"
+
+        with pytest.raises(errors.InsufficientPrivilege):
+            await conn.execute("UPDATE tenants SET name = 'renamed' WHERE id = %s", (tenant_id,))
+        await conn.rollback()
+        with pytest.raises(errors.InsufficientPrivilege):
+            await conn.execute("DELETE FROM tenants WHERE id = %s", (tenant_id,))
+    finally:
+        await conn.close()
+        admin = await _admin(pg_dsn)
+        try:
             await admin.execute("DELETE FROM tenants WHERE id = %s", (tenant_id,))
         finally:
             await admin.close()

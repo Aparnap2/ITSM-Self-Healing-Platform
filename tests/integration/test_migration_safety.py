@@ -198,6 +198,18 @@ async def _assert_runtime_role(dsn: str) -> None:
             )
         ).fetchone()
         assert row == (False,)
+        row = await (
+            await conn.execute(
+                "SELECT has_table_privilege(current_user, 'tenants', 'SELECT'), "
+                "has_table_privilege(current_user, 'tenants', 'INSERT'), "
+                "has_table_privilege(current_user, 'tenants', 'UPDATE'), "
+                "has_table_privilege(current_user, 'tenants', 'DELETE'), "
+                "has_table_privilege(current_user, 'tenants', 'TRUNCATE')"
+            )
+        ).fetchone()
+        # Registry: enumerate + idempotent registration only. Tenancy lifecycle
+        # (rename/delete/truncate) is administration-plane.
+        assert row == (True, True, False, False, False)
         await conn.execute("RESET ROLE")
 
     async with await AsyncConnection.connect(dsn) as conn:
@@ -627,3 +639,37 @@ async def test_system_tenant_rows_invisible_to_other_tenant(
         await conn.rollback()
 
     assert visible == (0,)
+
+
+async def test_tenant_registry_is_readable_and_insertable_but_immutable_at_runtime(
+    fresh_db: str,
+) -> None:
+    """Migration 014 narrows the runtime grants on the tenant registry.
+
+    Verified behaviorally, not only through catalog flags: the runtime role can
+    register a tenant idempotently but a rename or delete is rejected by
+    PostgreSQL with insufficient privilege.
+    """
+    tenant_id = uuid.uuid4()
+    async with await AsyncConnection.connect(fresh_db) as conn:
+        await conn.execute("SET ROLE itsm_app")
+        try:
+            await conn.execute(
+                "INSERT INTO tenants (id, name) VALUES (%s, 'runtime-registered') "
+                "ON CONFLICT (id) DO NOTHING",
+                (tenant_id,),
+            )
+            with pytest.raises(Error) as update_error:
+                await conn.execute(
+                    "UPDATE tenants SET name = 'renamed' WHERE id = %s", (tenant_id,)
+                )
+            assert getattr(update_error.value, "sqlstate", None) == "42501"
+            # A rollback also reverts ``SET ROLE``; re-enter the runtime role.
+            await conn.rollback()
+            await conn.execute("SET ROLE itsm_app")
+            with pytest.raises(Error) as delete_error:
+                await conn.execute("DELETE FROM tenants WHERE id = %s", (tenant_id,))
+            assert getattr(delete_error.value, "sqlstate", None) == "42501"
+        finally:
+            await conn.rollback()
+            await conn.execute("RESET ROLE")

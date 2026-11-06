@@ -73,7 +73,10 @@ security on every tenant-owned table:
 - `FORCE ROW LEVEL SECURITY` makes the policy apply to the table owner too.
   Only a superuser or a role with `BYPASSRLS` escapes.
 - A `tenants` registry lets the relay and retention jobs enumerate tenants
-  without reading tenant-owned rows.
+  without reading tenant-owned rows. The runtime role may `SELECT` it and
+  `INSERT` idempotently on ingest, but `UPDATE`/`DELETE`/`TRUNCATE` are
+  revoked (`migrations/014_least_privilege_tenant_registry.sql`): tenancy
+  lifecycle belongs to the administration plane.
 - `evidence_references` gained a `tenant_id` plus composite foreign keys
   `(tenant_id, finding_id) → findings(tenant_id, id)`, so even a query-level
   bypass cannot attach evidence to another tenant's finding.

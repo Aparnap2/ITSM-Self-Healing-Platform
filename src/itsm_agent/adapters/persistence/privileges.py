@@ -20,6 +20,8 @@ Checks performed:
 5. The role holds the DML privileges the application needs.
 6. Append-only tables are not writable beyond INSERT (no UPDATE/DELETE) and
    no table grants TRUNCATE.
+7. The tenant registry is SELECT + INSERT only: tenancy lifecycle
+   (UPDATE/DELETE/TRUNCATE) is administration-plane.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ __all__ = [
     "DatabaseSafetyError",
     "READ_ONLY_TABLES",
     "RUNTIME_DML_TABLES",
+    "TENANT_REGISTRY_TABLES",
     "TENANT_RLS_TABLES",
     "assert_runtime_database_safety",
     "verify_runtime_database",
@@ -64,11 +67,17 @@ TENANT_RLS_TABLES: tuple[str, ...] = (
 
 #: Tables the runtime role must be able to read and write (append-only tables
 #: need SELECT + INSERT; the check below only requires the common DML surface).
+#: ``tenants`` is deliberately excluded: it is administration-plane data with
+#: its own narrower contract below.
 RUNTIME_DML_TABLES: tuple[str, ...] = TENANT_RLS_TABLES + (
-    "tenants",
     "retention_policies",
     "legal_holds",
 )
+
+#: Tenant registry: the runtime role may read it and idempotently register a
+#: tenant during ingestion (``ON CONFLICT DO NOTHING``), but must never rename
+#: or delete tenancy. Tenant lifecycle is an administration-plane operation.
+TENANT_REGISTRY_TABLES: tuple[str, ...] = ("tenants",)
 
 #: Directory table the runtime role may READ (SELECT only) but never write.
 #: Requiring full DML here would force a write grant on the administration
@@ -207,6 +216,30 @@ async def _privilege_safety(conn: AsyncConnection) -> list[str]:
             row = await cur.fetchone()
             if row is None or not row[0]:
                 violations.append(f"{table}: runtime role cannot read the directory")
+
+        for table in TENANT_REGISTRY_TABLES:
+            await cur.execute(
+                "SELECT has_table_privilege(current_user, %s, 'SELECT'), "
+                "has_table_privilege(current_user, %s, 'INSERT'), "
+                "has_table_privilege(current_user, %s, 'UPDATE'), "
+                "has_table_privilege(current_user, %s, 'DELETE'), "
+                "has_table_privilege(current_user, %s, 'TRUNCATE')",
+                (table, table, table, table, table),
+            )
+            row = await cur.fetchone()
+            if row is None:  # pragma: no cover - defensive
+                violations.append(f"{table}: privilege lookup failed")
+                continue
+            if not row[0]:
+                violations.append(f"{table}: runtime role cannot read the tenant registry")
+            if not row[1]:
+                violations.append(f"{table}: runtime role cannot register a tenant")
+            if row[2]:
+                violations.append(f"{table}: runtime role can UPDATE the tenant registry")
+            if row[3]:
+                violations.append(f"{table}: runtime role can DELETE from the tenant registry")
+            if row[4]:
+                violations.append(f"{table}: runtime role can TRUNCATE the tenant registry")
 
         await cur.execute(
             "SELECT has_table_privilege(current_user, 'reviewer_authorizations', 'INSERT')"
