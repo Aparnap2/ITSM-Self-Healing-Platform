@@ -51,7 +51,11 @@ def _needs(*, failed: tuple[str, ...] = ()) -> str:
 
 
 def _run(
-    reports: Path, needs: str | None, *, summary_file: Path | None = None
+    reports: Path,
+    needs: str | None,
+    *,
+    summary_file: Path | None = None,
+    optional_jobs: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     args = [
         sys.executable,
@@ -68,6 +72,8 @@ def _run(
     env = {key: value for key, value in os.environ.items() if key != "GITHUB_STEP_SUMMARY"}
     if summary_file is not None:
         env["GITHUB_STEP_SUMMARY"] = str(summary_file)
+    if optional_jobs is not None:
+        args.extend(["--optional-jobs", optional_jobs])
     return subprocess.run(args, capture_output=True, text=True, check=False, env=env)
 
 
@@ -106,7 +112,7 @@ def test_skipped_optional_job_exits_zero(tmp_path: Path) -> None:
     for filename in REPORTS:
         _junit(tmp_path / filename)
     payload = json.loads(_needs())
-    payload["dependency-review"] = {"result": "skipped"}
+    payload["dast"] = {"result": "skipped"}
 
     result = _run(tmp_path, json.dumps(payload))
 

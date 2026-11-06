@@ -118,7 +118,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--optional-jobs",
-        default="dependency-review,dast",
+        default="dast",
         help="Comma-separated jobs allowed to be skipped without failing.",
     )
     args = parser.parse_args()

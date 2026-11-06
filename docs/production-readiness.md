@@ -33,7 +33,7 @@
 - Moto (Apache-2.0), LocalStack (optional, license unverified), Mockoon (MIT).
 - pip-audit runs in CI (`make audit-deps`); Trivy adds OS/library, secret, and
   misconfiguration scanning for both the source tree and the built image.
-- PRs also run `actions/dependency-review-action` and zizmor workflow auditing.
+- PRs also run zizmor workflow auditing; dependency review is disabled until Dependency Graph is enabled.
 - See `docs/security-ci.md` for the full gate map.
 
 ## CI qualification

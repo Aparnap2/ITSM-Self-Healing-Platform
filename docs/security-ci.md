@@ -12,7 +12,7 @@ prove, and — deliberately — what it cannot. It is a companion to
 | Static typing | `typecheck` | mypy `--strict` | Non-zero exit |
 | Secret scanning | `secret-scan` | gitleaks | Any finding |
 | Workflow security | `workflow-security` | zizmor (pinned action) | Findings at/above medium severity + high confidence (`advanced-security: false` makes findings fail the job) |
-| Dependency review | `dependency-review` | `actions/dependency-review-action` | New dependency at/above high severity (PR only; non-blocking until Dependency Graph is enabled) |
+| Dependency vulnerability audit | `supply-chain` | pip-audit | Any known vulnerability in the locked manifest |
 | SAST | `supply-chain` | Bandit (`make sast`) | Any finding |
 | Dependency audit | `supply-chain` | pip-audit (`make audit-deps`) | Any known vulnerability |
 | IaC / misconfig / secret | `supply-chain` | Trivy `fs` (`vuln,misconfig,secret`) | CRITICAL/HIGH, fixed-only |
@@ -25,8 +25,7 @@ prove, and — deliberately — what it cannot. It is a companion to
 
 `ci-summary` consumes `${{ toJSON(needs) }}` via `NEEDS_RESULTS`, so a required
 job that fails without producing a JUnit artifact still fails the summary. The
-PR-only `dependency-review` job and the `dast` job are allowed to be `skipped`
-(on non-PR events) without failing the summary.
+`dast` job may be `skipped` (e.g. when disabled) without failing the summary.
 
 ## DAST scope and honesty
 
@@ -81,7 +80,10 @@ and, optionally, execute the workflow locally with `act`; see
 - The DAST lane targets an in-memory stub, not a fully wired API process.
 - zizmor results are console-gated; SARIF upload to GitHub Advanced Security
   is intentionally not enabled.
-- Dependency review runs on pull requests only and is non-blocking until the
-  repository owner enables GitHub Dependency Graph (Settings → Security).
+- Dependency review was removed because this repository has GitHub Dependency
+  Graph disabled (a repository setting an agent cannot change), which made the
+  action fail with "not supported". pip-audit remains the blocking dependency
+  gate. To restore the action, enable Dependency Graph under Settings →
+  Security and re-add the job.
 - No release qualification is implied by a green pipeline; see the release
   gate in `docs/production-readiness.md`.
