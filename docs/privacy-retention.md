@@ -75,8 +75,12 @@ Source: `src/itsm_agent/privacy/retention.py`,
 
 ## Known limitations
 
-- Retention has **no scheduler**. Erasure is invoked programmatically (and
-  tested); expiry is not enforced automatically by a worker.
+- A resumable retention scheduler exists
+  (`src/itsm_agent/privacy/scheduler.py`) and is lifecycle-tested
+  (`tests/integration/test_retention_scheduler_lifecycle.py`), but it is not
+  wired into an always-on worker entrypoint in this baseline. Expiry is
+  therefore not automatic in a deployment; an operator must invoke
+  `run_once`/`run_forever`.
 - `RAW_EVIDENCE` erasure records a tombstone but does not delete an object
   from external object storage. Lifecycle rules on the bucket are still
   required and are not managed by this repository.

@@ -68,17 +68,23 @@ be idempotent.
 
 ### Explicitly not done yet
 
-- The HMAC bearer implementation is a minimal replacement point, not an IdP:
-  no key rotation, revocation, or server-side role freshness. A real OIDC/mTLS
-  `Authenticator` is still required for production.
-- Retention has no scheduler or object-storage lifecycle integration; erasure
-  is invoked programmatically.
+- The HMAC bearer is a minimal replaceable point, not an IdP: no key
+  rotation, revocation, or server-side role freshness. An OIDC relying party
+  is implemented (`src/itsm_agent/api/oidc.py`) with offline security tests,
+  but it is not wired into a deployed entrypoint. mTLS is still absent.
+- Retention has no always-on scheduler worker in this baseline: the
+  scheduler is implemented and lifecycle-tested
+  (`src/itsm_agent/privacy/scheduler.py`,
+  `tests/integration/test_retention_scheduler_lifecycle.py`), but it is not
+  wired to a deployed entrypoint, so erasure is invoked programmatically.
 - No pagination, no finding status transitions (decisions are append-only
   annotations), and no management API for principals, roles, or tenants.
-- Tenant RLS covers the audit domain (`source_events` → findings/decisions),
-  not the legacy incident/approval/action tables.
-- No packaged API server or audit-consumer process entrypoint — both are
-  composed programmatically and exercised by the test suites.
+- Forced RLS covers the audit domain plus the incident/workflow/action/
+  approval/audit tables added by `migrations/011_tenant_owned_workflow.sql`;
+  it does not cover tables outside that set.
+- The worker has a packaged entrypoint (`Dockerfile` CMD is
+  `python -m itsm_agent.workers.consumer`); there is no packaged console
+  entrypoint for the API server, which is composed programmatically.
 - The Jira Service Management adapter is not implemented; Mockoon remains
   the audited acceptance connector for ITSM.
 - No production deployment has been validated. Nothing here is "production

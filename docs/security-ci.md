@@ -87,3 +87,6 @@ and, optionally, execute the workflow locally with `act`; see
   Security and re-add the job.
 - No release qualification is implied by a green pipeline; see the release
   gate in `docs/production-readiness.md`.
+- Release qualification is a separate, exact-SHA evidence record; see
+  `docs/release-qualification.md`. A green pipeline here does not by itself
+  qualify a release.

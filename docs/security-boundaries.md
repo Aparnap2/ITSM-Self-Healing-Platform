@@ -113,17 +113,28 @@ constrained login role for the RLS assertions.
 - The HMAC secret is a single server-wide symmetric key; there is no key
   rotation, revocation list, or clock-skew allowance. A token is valid until
   `exp`.
-- Roles are carried in the token; there is no server-side role-revocation
-  check, and no admin API for managing principals, tenants, or roles.
-- Approval records (`approvals`, `action_intents`, `incidents`) are **not**
-  under RLS; this slice covers the audit findings/reviewer domain, not the
-  incident remediation tables.
+- The HMAC bearer carries roles in the token and has no server-side freshness
+  or revocation check. The OIDC relying party (`src/itsm_agent/api/oidc.py`)
+  resolves current tenant/role state from `reviewer_authorizations` on every
+  request. There is still no admin API for managing principals, tenants, or
+  roles.
+- Forced RLS now covers the incident/remediation tables too. Migration
+  `011_tenant_owned_workflow.sql` adds `tenant_id` and forced RLS to
+  `incidents`, `workflow_state`, `action_intents`, `approvals`, and
+  `audit_events`; they are in `TENANT_RLS_TABLES` in
+  `src/itsm_agent/adapters/persistence/privileges.py`.
 - The ingestion webhook still authenticates with the existing HMAC webhook
   signature; it is not yet tied to the reviewer principal model.
 - No rate limiting or audit trail of authentication failures beyond structured
   logs.
-- Retention has no scheduler/worker; erasure is invoked programmatically and
-  tested, not run on a timer.
+- Retention has no always-on scheduler worker in this baseline: the
+  scheduler is implemented and lifecycle-tested
+  (`src/itsm_agent/privacy/scheduler.py`,
+  `tests/integration/test_retention_scheduler_lifecycle.py`) but is not wired
+  to a deployed entrypoint, so erasure is not run on a timer.
 - RLS tests run against a real PostgreSQL role, but the project's CI service
-  account is a superuser; a production deployment must prove its own role is
-  `NOBYPASSRLS` (a startup assertion is not implemented).
+  account is a superuser; a production deployment must still prove its own
+  role is `NOBYPASSRLS`. The startup check is implemented:
+  `verify_runtime_database` (`privileges.py`) is called from the API lifespan
+  (`src/itsm_agent/api/app.py`) and worker startup
+  (`src/itsm_agent/workers/consumer.py`).
