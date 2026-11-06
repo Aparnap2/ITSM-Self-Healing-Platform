@@ -65,7 +65,9 @@ def _source_event(tenant_id: uuid.UUID) -> SourceEvent:
     )
 
 
-async def _admin_dsn(pg_dsn: str, query: str, params: tuple[object, ...] = ()) -> list[tuple]:
+async def _admin_dsn(
+    pg_dsn: str, query: str, params: tuple[object, ...] = ()
+) -> list[tuple[object, ...]]:
     async with await AsyncConnection.connect(pg_dsn) as conn:
         return list(await (await conn.execute(query, params)).fetchall())
 
