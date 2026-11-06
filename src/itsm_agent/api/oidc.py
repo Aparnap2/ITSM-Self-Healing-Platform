@@ -43,7 +43,7 @@ from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from itsm_agent.api.auth import (
     AuthenticationError,
@@ -68,6 +68,9 @@ __all__ = [
 #: (HS*) and ``none`` are deliberately absent: accepting them would let a
 #: token signed with a shared secret impersonate a public-key issuer.
 ALLOWED_ALGORITHMS: tuple[str, ...] = ("RS256", "RS384", "RS512", "ES256")
+
+#: Must match ``Principal.principal_id``'s ``max_length``.
+MAX_SUBJECT_LENGTH = 128
 
 
 class ReviewerAuthorization(BaseModel):
@@ -316,6 +319,8 @@ class OIDCAuthenticator:
             raise ValueError("algorithms must be a non-empty subset of the allowlist")
         if leeway_seconds < 0:
             raise ValueError("leeway_seconds must be non-negative")
+        if max_token_age_seconds is not None and max_token_age_seconds < 0:
+            raise ValueError("max_token_age_seconds must be non-negative or None")
         self._issuer = issuer
         self._audience = audience
         self._jwks = jwks
@@ -354,14 +359,19 @@ class OIDCAuthenticator:
         except (ValueError, TypeError) as exc:
             raise InvalidCredentialsError("server-side authorization is malformed") from exc
 
-        return Principal(
-            principal_id=subject,
-            tenant_ids=tenant_ids,
-            roles=roles,
-            auth_method="oidc",
-            issuer=issuer,
-            expires_at=expires_at,
-        )
+        try:
+            return Principal(
+                principal_id=subject,
+                tenant_ids=tenant_ids,
+                roles=roles,
+                auth_method="oidc",
+                issuer=issuer,
+                expires_at=expires_at,
+            )
+        except ValidationError as exc:
+            # Defence in depth: any contract mismatch in server-side state is
+            # a credential failure, never an unhandled 500.
+            raise InvalidCredentialsError("server-side authorization is malformed") from exc
 
     async def _resolve_key(self, kid: str) -> Any:
         keys = await self._jwks.keys()
@@ -382,7 +392,10 @@ class OIDCAuthenticator:
             raise InvalidCredentialsError("token audience mismatch")
 
         subject = claims.get("sub")
-        if not isinstance(subject, str) or not subject.strip() or len(subject) > 256:
+        # ``Principal.principal_id`` caps at 128 characters; reject oversize
+        # subjects here so the failure is a credential error (401) rather than
+        # an uncaught pydantic ValidationError (500).
+        if not isinstance(subject, str) or not subject.strip() or len(subject) > MAX_SUBJECT_LENGTH:
             raise InvalidCredentialsError("token subject is missing or invalid")
 
         exp = _numeric_date(claims, "exp")
@@ -395,7 +408,13 @@ class OIDCAuthenticator:
             nbf_ts = _numeric_date(claims, "nbf")
             if now_ts + self._leeway < nbf_ts:
                 raise InvalidCredentialsError("token is not yet valid")
-        if iat is not None:
+        if iat is None:
+            # When a maximum age is enforced, the age must be provable.
+            # Accepting a token without ``iat`` would make the control
+            # bypassable by simply omitting the claim.
+            if self._max_token_age is not None:
+                raise InvalidCredentialsError("token has no issued-at claim")
+        else:
             iat_ts = _numeric_date(claims, "iat")
             if iat_ts > now_ts + self._leeway:
                 raise InvalidCredentialsError("token issued in the future")

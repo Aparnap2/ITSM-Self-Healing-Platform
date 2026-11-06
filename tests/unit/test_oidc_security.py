@@ -707,3 +707,73 @@ async def test_es256_token_authenticates(ec_key: ec.EllipticCurvePrivateKey) -> 
 
     assert principal.principal_id == "alice"
     assert principal.roles == (Role.REVIEWER,)
+
+
+# ---------------------------------------------------------------------------
+# Regression: token age must not be bypassable by omitting ``iat``
+# ---------------------------------------------------------------------------
+
+
+async def test_token_without_iat_is_rejected_when_max_age_is_enforced(
+    rsa_key: rsa.RSAPrivateKey,
+    rsa_keys: dict[str, Any],
+) -> None:
+    """A token with no ``iat`` would otherwise have unbounded age.
+
+    ``max_token_age_seconds`` is a fail-closed control: if the relying party
+    cannot prove how old a token is, it must not accept it.
+    """
+    claims = _claims()
+    del claims["iat"]
+    token = _rs256_token(claims, rsa_key)
+
+    with pytest.raises(InvalidCredentialsError):
+        await _static_auth(rsa_keys, max_token_age_seconds=3600.0).authenticate(f"Bearer {token}")
+
+
+async def test_token_without_iat_is_accepted_only_when_max_age_is_disabled(
+    rsa_key: rsa.RSAPrivateKey,
+    rsa_keys: dict[str, Any],
+) -> None:
+    claims = _claims()
+    del claims["iat"]
+    token = _rs256_token(claims, rsa_key)
+
+    principal = await _static_auth(rsa_keys, max_token_age_seconds=None).authenticate(
+        f"Bearer {token}"
+    )
+
+    assert principal.principal_id == "alice"
+
+
+def test_constructor_rejects_negative_max_token_age(
+    rsa_keys: dict[str, Any],
+) -> None:
+    with pytest.raises(ValueError):
+        _authenticator(
+            jwks=StaticJwksProvider(rsa_keys),
+            directory=_directory({"alice": _entry()}),
+            max_token_age_seconds=-1.0,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Regression: an over-long subject must be a 401, never a 500
+# ---------------------------------------------------------------------------
+
+
+async def test_subject_longer_than_principal_limit_is_a_credential_error(
+    rsa_key: rsa.RSAPrivateKey,
+    rsa_keys: dict[str, Any],
+) -> None:
+    """``Principal.principal_id`` caps at 128 chars.
+
+    A 200-char ``sub`` previously passed claim validation and then raised an
+    uncaught pydantic ``ValidationError`` while building the ``Principal``,
+    which surfaces as HTTP 500 instead of a fail-closed 401.
+    """
+    subject = "s" * 200
+    token = _rs256_token(_claims(sub=subject), rsa_key)
+
+    with pytest.raises(InvalidCredentialsError):
+        await _static_auth(rsa_keys, entries={subject: _entry()}).authenticate(f"Bearer {token}")
