@@ -30,9 +30,11 @@ import asyncio
 import base64
 import binascii
 import json
+import math
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
@@ -168,6 +170,13 @@ class HttpJwksProvider:
         cache_seconds: float = 300.0,
         clock: Any | None = None,
     ) -> None:
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("JWKS url must be an absolute https URL")
+        if parsed.username or parsed.password:
+            raise ValueError("JWKS url must not contain credentials")
+        if not math.isfinite(cache_seconds) or cache_seconds <= 0:
+            raise ValueError("cache_seconds must be a positive finite number")
         self._url = url
         self._client = client
         self._cache_seconds = cache_seconds
@@ -182,11 +191,21 @@ class HttpJwksProvider:
                 assert self._cache is not None
                 return self._cache
             try:
-                response = await self._client.get(self._url)
-                response.raise_for_status()
-                if len(response.content) > self.MAX_BYTES:
-                    raise InvalidCredentialsError("JWKS response too large")
-                document = response.json()
+                # ``follow_redirects`` is pinned per request: an injected client
+                # configured to follow redirects must not let a cross-host
+                # redirect substitute the issuer's signing keys.
+                async with self._client.stream(
+                    "GET", self._url, follow_redirects=False
+                ) as response:
+                    response.raise_for_status()
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > self.MAX_BYTES:
+                            raise InvalidCredentialsError("JWKS response too large")
+                        chunks.append(chunk)
+                    document = json.loads(b"".join(chunks))
                 keys = _parse_jwks(document)
             except InvalidCredentialsError:
                 raise
@@ -217,7 +236,7 @@ def _parse_jwks(document: Any) -> dict[str, Any]:
             continue
         try:
             parsed[kid] = _public_key_from_jwk(jwk)
-        except (ValueError, TypeError, KeyError):
+        except (ValueError, TypeError, KeyError, InvalidCredentialsError):
             # An unsupported/malformed key is skipped, not fatal: the issuer
             # may publish keys for other algorithms. If the requested kid is
             # only present in unusable form, verification fails closed.
