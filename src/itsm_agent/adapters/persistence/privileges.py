@@ -237,7 +237,7 @@ async def _privilege_safety(conn: AsyncConnection) -> list[str]:
             if row[2]:
                 violations.append(f"{table}: runtime role can UPDATE the tenant registry")
             if row[3]:
-                violations.append(f"{table}: runtime role can DELETE from the tenant registry")
+                violations.append(f"{table}: runtime role can DELETE from the tenant registry")  # nosec B608 - message text, not SQL
             if row[4]:
                 violations.append(f"{table}: runtime role can TRUNCATE the tenant registry")
 

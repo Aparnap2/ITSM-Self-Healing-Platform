@@ -1,5 +1,5 @@
 # IMPLEMENTATION_PLAN.md
-_Last updated: 2026-11-01 by agent (durable pipeline, findings/reviewer HTTP surface, Task 11/12/14 slices recorded; Task CI-0 accepted on green CI run 41271007745)_
+_Last updated: 2026-11-06 by agent (hardening closure: OIDC/JWKS, tenant-registry least privilege, retention scheduler, 24 scenarios, runbooks, release qualification)_
 
 ## Goal
 Pivot the ITSM self-healing platform into an event-driven, evidence-first agentic security audit system (AWS + PostgreSQL + GitHub + identity/approvals), preserving the completed Phase 1/2 work on branch `checkpoint/pre-audit-pivot-phase-1-2` (commit 18af41e).
@@ -13,6 +13,12 @@ Pivot the ITSM self-healing platform into an event-driven, evidence-first agenti
 - Remaining: 0 (no unimplemented pivot tasks)
 - In progress: 0 (full local suite: 246 passed, 0 skipped under ITSM_TEST_STRICT=1 on real PostgreSQL + NATS)
 - Task CI-0: ✅ ACCEPTED — CI run 41271007745 is fully green on commit 98e83ef; the branch/PR remains draft and unmerged.
+- 2026-11-06 hardening closure — local `make verify-ci` (ITSM_TEST_STRICT=1, real PostgreSQL + NATS):
+  246 unit, 40 contract, 45 security, 113 integration, 18 fault-injection, 24 scenarios, 9 e2e — all passed; ruff/mypy/Bandit clean.
+  Slices: OIDC relying-party security tests (`test_oidc_security.py`, `test_oidc_http_jwks.py`), two fail-open fixes
+  (missing `iat`, over-long `sub`), HTTP JWKS hardening, tenant-registry least privilege (`migrations/014`),
+  retention-scheduler lifecycle tests, 24-scenario harness, runbooks SOP-02..05, and `docs/release-qualification.md`.
+  Release qualification is the exact-SHA `push` run on `main` after PR #9 merges; see that document.
 - Current branch: feat/access-audit-foundation
 
 Status semantics: ✅ DONE means the slice is implemented and its named source
