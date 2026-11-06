@@ -18,8 +18,11 @@
 
 ## Runbooks
 
-- docs/runbooks/SOP-01-start-environment.md (existing).
-- Add: ingestion failure, DLQ replay, checkpoint recovery, tenant provisioning.
+- docs/runbooks/SOP-01-start-environment.md
+- docs/runbooks/SOP-02-ingestion-failure.md
+- docs/runbooks/SOP-03-dlq-replay.md
+- docs/runbooks/SOP-04-checkpoint-recovery.md
+- docs/runbooks/SOP-05-tenant-provisioning.md
 
 ## Security review
 
@@ -38,9 +41,9 @@
 
 ## CI qualification
 
-- Gates: ruff format/check, mypy `--strict`, gitleaks, zizmor, dependency
-  review (PRs), Bandit, pip-audit, Trivy (fs + image), Docker build, compose
-  config validation, OWASP ZAP baseline DAST, and pytest
+- Gates: ruff format/check, mypy `--strict`, gitleaks, zizmor, Bandit,
+  pip-audit, Trivy (fs + image), Docker build, compose config validation,
+  OWASP ZAP baseline DAST, and pytest
   (unit/contract/security/integration/fault-injection/scenarios/e2e).
 - `ci-summary` fails on a missing JUnit report, a failed test, or any required
   job that did not succeed (via `${{ toJSON(needs) }}`), so a silent skip
@@ -62,6 +65,10 @@
 
 - Portfolio baseline: simulators only; no real production data/credentials.
 - Known limitations stated in PRD and docs.
+- A green pipeline is necessary but not sufficient: the exact-SHA evidence
+  record and disqualifying conditions are in `docs/release-qualification.md`.
+- This document is a readiness assessment, not a claim that the platform is
+  production ready.
 
 ## Known limitations
 
