@@ -164,14 +164,16 @@ not an ingestion fix.
 
 | Finding | Action |
 | --- | --- |
-| Relay not running | start it; do not republish by hand |
+| Relay not running | start the deployment's `OutboxRelay.run()` process (none is wired in `compose.yaml`; see Known limitations) |
 | NATS unreachable | restore NATS, then let `pending` rows drain |
 | `failed` rows, broker now healthy | reconcile first, then reset to `pending` (step 7) |
 | Event absent from `outbox` and `source_events` | the request never committed; the sender must retry |
 | Event present, consumer lagging | SOP-04 |
 | Event dead-lettered | SOP-03 |
 
-Restart the relay or worker after a configuration fix:
+Restart the affected process after a configuration fix. `worker` is the
+consumer; a relay process supplied by the deployment must be restarted by its
+own supervisor (there is no relay service in `compose.yaml`).
 
 ```sh
 docker compose restart worker
@@ -307,6 +309,12 @@ the incident ticket.
 
 ## Known limitations
 
+- No service in `compose.yaml` runs `OutboxRelay.run()`, and
+  `src/itsm_agent/workers/consumer.py` does not start one. In the local stack
+  a webhook can commit `event_inbox` + `outbox` and the outbox row will stay
+  `pending` until a relay process is run. The integration tests instantiate
+  `OutboxRelay` directly (`tests/integration/test_outbox_relay.py`); a
+  deployment must supply its own relay entrypoint.
 - `event_inbox` status is not advanced on the source-event path:
   `PsycopgSourceEventSink` inserts `RECEIVED` and the consumer records
   progress in `processing_records`, not in the inbox

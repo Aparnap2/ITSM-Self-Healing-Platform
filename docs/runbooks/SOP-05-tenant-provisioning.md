@@ -229,10 +229,12 @@ even when the table has rows for the tenant verified in the previous step.
 This is the fail-closed property implemented by
 `src/itsm_agent/adapters/persistence/tenant.py:30-47`.
 
-### 8. Verify the application boundary (optional, requires a token)
+### 8. Verify the application boundary (optional, deployment-dependent)
 
-Use a token issued by the configured authenticator; do not paste it into the
-ticket or shell history.
+This check requires a process that actually serves `create_app`; the
+repository has no packaged API server entrypoint, so skip it when the local
+stack does not expose one. Use a token issued by the configured
+authenticator; do not paste it into the ticket or shell history.
 
 ```sh
 curl -sS -o /dev/null -w '%{http_code}\n' \

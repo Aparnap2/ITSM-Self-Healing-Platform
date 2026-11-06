@@ -195,7 +195,9 @@ detection is wrong, the supported mechanism is a new `processing_version`
 If `source_events` has the row, no `processing_records` row exists, and no
 NATS message remains, the event fell between publish and processing. Use the
 bounded replay helper from SOP-02 (step 8). It creates a
-`SourceEventReplayed` outbox row; it does not rewrite evidence.
+`SourceEventReplayed` outbox row; it does not rewrite evidence. This assumes
+an outbox relay is running; if the deployment has none, the new row will also
+stay `pending` (SOP-02, Known limitations).
 
 Before replaying, reconcile:
 
