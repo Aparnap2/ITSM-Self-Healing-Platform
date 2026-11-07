@@ -1,5 +1,5 @@
 # IMPLEMENTATION_PLAN.md
-_Last updated: 2026-11-06 by agent (hardening closure: OIDC/JWKS, tenant-registry least privilege, retention scheduler, 24 scenarios, runbooks, release qualification)_
+_Last updated: 2026-11-07 by agent (PR #9 merged; main push run 42214887310 qualified with 444 unique tests)_
 
 ## Goal
 Pivot the ITSM self-healing platform into an event-driven, evidence-first agentic security audit system (AWS + PostgreSQL + GitHub + identity/approvals), preserving the completed Phase 1/2 work on branch `checkpoint/pre-audit-pivot-phase-1-2` (commit 18af41e).
@@ -12,7 +12,14 @@ Pivot the ITSM self-healing platform into an event-driven, evidence-first agenti
 - 🟡 IMPLEMENTED (slice committed; independent acceptance verification pending): 8 (Tasks 6, 11, 12, 14, 15, 16, 17, 18)
 - Remaining: 0 (no unimplemented pivot tasks)
 - In progress: 0 (full local suite: 246 passed, 0 skipped under ITSM_TEST_STRICT=1 on real PostgreSQL + NATS)
-- Task CI-0: ✅ ACCEPTED — CI run 41271007745 is fully green on commit 98e83ef; the branch/PR remains draft and unmerged.
+- Task CI-0: ✅ ACCEPTED — CI run 41271007745 was fully green on commit 98e83ef.
+- **2026-11-06 merge:** PR #9 squash-merged into `main` as
+  `57c9d8cd049dd243d13c7610c5fe75270a687af2`. The `push` run
+  `42214887310` on `main` is 15/15 jobs `success`, with 444 unique tests,
+  0 failures + errors, and all seven mandatory JUnit artifacts present
+  (see `docs/release-qualification.md`). Issues #2-#5 closed by the merge.
+  Remaining gap: `main` has no branch protection, recorded as a governance
+  gap rather than a pass.
 - 2026-11-06 hardening closure — local `make verify-ci` (ITSM_TEST_STRICT=1, real PostgreSQL + NATS):
   246 unit, 40 contract, 45 security, 113 integration, 18 fault-injection, 24 scenarios, 9 e2e — all passed; ruff/mypy/Bandit clean.
   Slices: OIDC relying-party security tests (`test_oidc_security.py`, `test_oidc_http_jwks.py`), two fail-open fixes

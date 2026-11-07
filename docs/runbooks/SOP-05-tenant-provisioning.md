@@ -9,7 +9,7 @@ credentials are never used for provisioning.
 
 Create a tenant that the outbox relay and retention jobs can enumerate,
 attach a reviewer who may act for it, prove that row-level security (RLS)
-fails closed, and retire the tenant without orphaning records.
+fails closed, and retire access without orphaning retained records.
 
 Provisioning is an administration-plane action. The runtime role can register
 a tenant idempotently during ingestion but cannot rename or delete one
@@ -32,7 +32,9 @@ and data-erasure policy changes.
 
 ## Preconditions
 
-- Migrations `migrations/010_runtime_role.sql`,
+- Migrations `migrations/007_tenant_isolation.sql`,
+  `migrations/008_retention_erasure.sql`,
+  `migrations/010_runtime_role.sql`,
   `migrations/011_tenant_owned_workflow.sql`, and
   `migrations/014_least_privilege_tenant_registry.sql` are applied. Verify:
 
@@ -58,7 +60,7 @@ uv run python -m migrations.apply --dsn "$ADMIN_DATABASE_URL"
 | New customer or environment | no registry row; the relay will not enumerate it |
 | Reviewer joins or changes scope | authorization row missing or stale |
 | Reviewer leaves | authorization must be deactivated |
-| Tenant offboarding | data must be erased before the registry row is removed |
+| Tenant offboarding | access must be revoked and retention/erasure run before any registry-row removal |
 | Suspected cross-tenant read | verify RLS flags and runtime role before changing data |
 
 A missing `tenants` row is not only a metadata gap: `OutboxRelay.run()`
@@ -189,7 +191,8 @@ WHERE n.nspname = 'public'
       'access_facts', 'findings', 'evidence_references', 'coverage_status',
       'review_decisions', 'processing_records', 'event_inbox', 'outbox',
       'incidents', 'workflow_state', 'action_intents', 'approvals',
-      'audit_events', 'erasure_requests', 'erasure_tombstones'
+      'audit_events', 'erasure_requests', 'erasure_tombstones',
+      'retention_policies', 'legal_holds'
   ])
 ORDER BY c.relname;
 ```
@@ -299,29 +302,80 @@ so an operator must invoke `run_once`/`run_forever`
 deleted from `source_events`; derived `access_facts` may be deleted; findings
 and review decisions are retained audit records.
 
-### 3. Verify no tenant-owned rows remain
+### 3. Verify erasure and inventory retained rows
+
+First confirm the erasure request completed and the tombstones exist. Erasure
+does not delete `source_events`; it records a tombstone carrying the original
+`payload_hash` (`src/itsm_agent/privacy/retention.py`,
+`src/itsm_agent/adapters/persistence/repositories.py:1494-1555`).
 
 ```sql
-SELECT 'source_events' AS table_name, count(*) FROM source_events WHERE tenant_id = '<tenant-uuid>'::uuid
-UNION ALL SELECT 'event_inbox', count(*) FROM event_inbox WHERE tenant_id = '<tenant-uuid>'::uuid
-UNION ALL SELECT 'outbox', count(*) FROM outbox WHERE tenant_id = '<tenant-uuid>'::uuid
+SELECT id, status, completed_at, last_error
+FROM erasure_requests
+WHERE tenant_id = '<tenant-uuid>'::uuid
+ORDER BY requested_at DESC;
+
+SELECT data_class, count(*) AS tombstones
+FROM erasure_tombstones
+WHERE tenant_id = '<tenant-uuid>'::uuid
+GROUP BY data_class;
+```
+
+A `BLOCKED` request means an active legal hold: do not delete anything, and
+escalate. A `FAILED` request means erasure is incomplete: do not delete the
+registry row.
+
+Then inventory the remaining tenant-owned rows. This is not a zero-row
+assertion: canonical events, findings, decisions, and audit records are
+retained by design.
+
+```sql
+-- Replace <tenant-uuid>. Every tenant-owned table is listed so nothing is
+-- hidden by looking at only the obvious ones.
+SELECT 'source_events' AS table_name, count(*) AS row_count FROM source_events WHERE tenant_id = '<tenant-uuid>'::uuid
+UNION ALL SELECT 'source_checkpoints', count(*) FROM source_checkpoints WHERE tenant_id = '<tenant-uuid>'::uuid
+UNION ALL SELECT 'identity_mappings', count(*) FROM identity_mappings WHERE tenant_id = '<tenant-uuid>'::uuid
+UNION ALL SELECT 'access_facts', count(*) FROM access_facts WHERE tenant_id = '<tenant-uuid>'::uuid
 UNION ALL SELECT 'findings', count(*) FROM findings WHERE tenant_id = '<tenant-uuid>'::uuid
+UNION ALL SELECT 'evidence_references', count(*) FROM evidence_references WHERE tenant_id = '<tenant-uuid>'::uuid
+UNION ALL SELECT 'coverage_status', count(*) FROM coverage_status WHERE tenant_id = '<tenant-uuid>'::uuid
 UNION ALL SELECT 'review_decisions', count(*) FROM review_decisions WHERE tenant_id = '<tenant-uuid>'::uuid
 UNION ALL SELECT 'processing_records', count(*) FROM processing_records WHERE tenant_id = '<tenant-uuid>'::uuid
+UNION ALL SELECT 'event_inbox', count(*) FROM event_inbox WHERE tenant_id = '<tenant-uuid>'::uuid
+UNION ALL SELECT 'outbox', count(*) FROM outbox WHERE tenant_id = '<tenant-uuid>'::uuid
 UNION ALL SELECT 'incidents', count(*) FROM incidents WHERE tenant_id = '<tenant-uuid>'::uuid
 UNION ALL SELECT 'workflow_state', count(*) FROM workflow_state WHERE tenant_id = '<tenant-uuid>'::uuid
 UNION ALL SELECT 'action_intents', count(*) FROM action_intents WHERE tenant_id = '<tenant-uuid>'::uuid
 UNION ALL SELECT 'approvals', count(*) FROM approvals WHERE tenant_id = '<tenant-uuid>'::uuid
 UNION ALL SELECT 'audit_events', count(*) FROM audit_events WHERE tenant_id = '<tenant-uuid>'::uuid
-UNION ALL SELECT 'erasure_requests', count(*) FROM erasure_requests WHERE tenant_id = '<tenant-uuid>'::uuid;
+UNION ALL SELECT 'erasure_requests', count(*) FROM erasure_requests WHERE tenant_id = '<tenant-uuid>'::uuid
+UNION ALL SELECT 'erasure_tombstones', count(*) FROM erasure_tombstones WHERE tenant_id = '<tenant-uuid>'::uuid
+UNION ALL SELECT 'retention_policies', count(*) FROM retention_policies WHERE tenant_id = '<tenant-uuid>'::uuid
+UNION ALL SELECT 'legal_holds', count(*) FROM legal_holds WHERE tenant_id = '<tenant-uuid>'::uuid
+ORDER BY table_name;
 ```
 
-Do not remove the `tenants` row while any count is non-zero. Migration 014's
-header warns that deletion can orphan tenant-owned rows that the relay and
-retention scheduler enumerate
+- `access_facts` rows older than the erasure cutoff should be gone; derived
+  projections are the only rows the scheduler deletes. The inventory counts
+  all rows, so newer rows may remain.
+- `source_events`, `findings`, `review_decisions`, `audit_events`,
+  `erasure_requests`, and `erasure_tombstones` are expected to remain. A
+  tenant that has ingested events will normally not reach zero.
+- `event_inbox`, `outbox`, `processing_records`, `incidents`,
+  `workflow_state`, `action_intents`, and `approvals` are operational rows;
+  retention does not delete them either.
+
+If every count is zero, the tenant is empty and step 4 may remove the registry
+row. If any count is non-zero, do not delete the registry row: deactivate
+access (step 1), finish erasure (step 2), record the inventory, and escalate
+physical deletion to `<data-owner>`. Migration 014's header warns that deleting
+the registry row orphans tenant-owned rows that the relay and retention
+scheduler enumerate
 (`migrations/014_least_privilege_tenant_registry.sql:4-14`).
 
-### 4. Remove the registry row (administration only)
+### 4. Remove the registry row (empty tenants only)
+
+Only after every count in step 3 is zero:
 
 ```sql
 DELETE FROM tenants
@@ -334,8 +388,9 @@ WHERE id = '<tenant-uuid>'::uuid
   );
 ```
 
-The `NOT EXISTS` guards are intentionally narrow; the full check is the
-step-3 query. The runtime role cannot execute this statement.
+The two `NOT EXISTS` guards are a final tripwire, not the full check; the
+step-3 inventory is authoritative. The runtime role cannot execute this
+statement.
 
 ### 5. Revoke external access
 
@@ -347,8 +402,9 @@ SOP does not manage identity-provider credentials.
 - A wrongly created tenant with zero rows: delete the registry row and the
   authorization row; there is nothing else to undo.
 - A wrongly created tenant with rows: do not delete the registry row.
-  Deactivate it, follow the retention policy, and escalate. Deleting the row
-  first makes the rows invisible to the relay and retention enumeration.
+  Deactivate its reviewer authorizations, follow the retention policy, and
+  escalate. Deleting the row first makes the rows invisible to the relay and
+  retention enumeration.
 - A wrongly attached reviewer: set `active = false`, increment
   `authorization_version`, and record the correction.
 - Migrations are forward-only; there is no down migration
@@ -374,7 +430,8 @@ SOP does not manage identity-provider credentials.
 - Output of the privilege, RLS, and context checks.
 - The HTTP status codes from the boundary check (not the token).
 - For offboarding: erasure request id, tombstone count, and the step-3
-  zero-row result.
+  inventory. Retained canonical, finding, decision, and audit rows are
+  expected; record them rather than treating them as a failure.
 - Timestamps in UTC.
 
 ## Known limitations
