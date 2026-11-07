@@ -29,6 +29,14 @@ Pivot the ITSM self-healing platform into an event-driven, evidence-first agenti
   18 fault-injection, 24 scenarios, 9 e2e — all passed; ruff/mypy/Bandit clean.
   Manual smoke: API `/healthz` 200, unsigned webhook 401, graceful shutdown;
   relay starts and exits 0 on SIGTERM; missing-config paths exit 2.
+- **2026-11-07 retention worker:** packaged
+  `python -m itsm_agent.workers.retention` runs the resumable erasure
+  scheduler on a bounded interval, asserts the runtime role cannot bypass RLS
+  before the first pass, drains an in-flight pass on SIGTERM/SIGINT, and exits
+  2 on missing or invalid configuration. Compose runs it as the `retention`
+  service against `itsm_app`. Unit tests cover config bounds, scheduler
+  wiring, and exit codes; the existing lifecycle tests cover leasing, legal
+  holds, retry exhaustion, and idempotent replay.
 - 2026-11-06 hardening closure — local `make verify-ci` (ITSM_TEST_STRICT=1, real PostgreSQL + NATS):
   246 unit, 40 contract, 45 security, 113 integration, 18 fault-injection, 24 scenarios, 9 e2e — all passed; ruff/mypy/Bandit clean.
   Slices: OIDC relying-party security tests (`test_oidc_security.py`, `test_oidc_http_jwks.py`), two fail-open fixes

@@ -76,11 +76,11 @@ Source: `src/itsm_agent/privacy/retention.py`,
 ## Known limitations
 
 - A resumable retention scheduler exists
-  (`src/itsm_agent/privacy/scheduler.py`) and is lifecycle-tested
-  (`tests/integration/test_retention_scheduler_lifecycle.py`), but it is not
-  wired into an always-on worker entrypoint in this baseline. Expiry is
-  therefore not automatic in a deployment; an operator must invoke
-  `run_once`/`run_forever`.
+  (`src/itsm_agent/privacy/scheduler.py`), is lifecycle-tested
+  (`tests/integration/test_retention_scheduler_lifecycle.py`), and runs as the
+  packaged `python -m itsm_agent.workers.retention` process (compose service
+  `retention`). It leases due requests, honors legal holds, and escalates
+  retry exhaustion; expiry is automatic once the process is deployed.
 - `RAW_EVIDENCE` erasure records a tombstone but does not delete an object
   from external object storage. Lifecycle rules on the bucket are still
   required and are not managed by this repository.

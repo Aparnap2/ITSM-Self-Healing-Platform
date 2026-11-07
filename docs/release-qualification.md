@@ -285,8 +285,9 @@ simulator-only, portfolio baseline. A qualified run does not prove:
 - that the HMAC bearer is an identity provider: there is no key rotation,
   revocation list, or clock-skew allowance
   (`docs/security-boundaries.md:113-115`);
-- that retention runs automatically: the scheduler is implemented and
-  lifecycle-tested but is not wired into an always-on entrypoint
+- that retention deletes raw evidence from object storage: the packaged
+  scheduler (`python -m itsm_agent.workers.retention`) tombstones it and
+  deletes derived rows, but bucket lifecycle rules are still required
   (`src/itsm_agent/privacy/scheduler.py`,
   `tests/integration/test_retention_scheduler_lifecycle.py`);
 - that NATS is highly available: the repository tests a single node

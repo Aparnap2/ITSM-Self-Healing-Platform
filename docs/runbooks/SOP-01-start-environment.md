@@ -56,6 +56,7 @@ docker compose ps        # all services healthy/running
 | api | 8000 | application API (`python -m itsm_agent.api`); `/healthz` |
 | worker | — | detection consumer (`python -m itsm_agent.workers.consumer`) |
 | relay | — | outbox → NATS relay (`python -m itsm_agent.workers.relay`) |
+| retention | — | erasure scheduler (`python -m itsm_agent.workers.retention`) |
 | prometheus | 9090 | metrics UI |
 | otel-collector | 4317 / 4318 | OTLP gRPC / HTTP |
 | localstack | 4566 | opt-in: `docker compose --profile localstack up -d` |

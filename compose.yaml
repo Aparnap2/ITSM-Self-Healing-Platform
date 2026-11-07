@@ -271,6 +271,44 @@ services:
       - no-new-privileges:true
 
   # ---------------------------------------------------------------------------
+  # Retention scheduler — leases due erasure requests, applies policy and legal
+  # holds, and commits deletions with their audit record. Destructive, so it
+  # fails closed at startup unless the role is NOBYPASSRLS.
+  # ---------------------------------------------------------------------------
+  retention:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://itsm_app:${ITSM_RUNTIME_DB_PASSWORD:?ITSM_RUNTIME_DB_PASSWORD must be set in .env (see .env.example)}@postgres:5432/${POSTGRES_DB:-itsm}
+      ITSM_RETENTION_INTERVAL_SECONDS: ${ITSM_RETENTION_INTERVAL_SECONDS:-60}
+      ITSM_RETENTION_BATCH_SIZE: ${ITSM_RETENTION_BATCH_SIZE:-10}
+      ITSM_RETENTION_LEASE_SECONDS: ${ITSM_RETENTION_LEASE_SECONDS:-60}
+      ITSM_RETENTION_MAX_ATTEMPTS: ${ITSM_RETENTION_MAX_ATTEMPTS:-5}
+      ITSM_RETENTION_BACKOFF_SECONDS: ${ITSM_RETENTION_BACKOFF_SECONDS:-30}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ITSM_LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    command: ["python", "-m", "itsm_agent.workers.retention"]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  # ---------------------------------------------------------------------------
   # LocalStack — QUARANTINED (ADR-0003). Opt-in only via:
   #   docker compose --profile localstack up -d localstack
   # License/plan terms must be verified before any use beyond local
