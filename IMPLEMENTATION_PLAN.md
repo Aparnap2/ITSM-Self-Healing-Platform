@@ -20,6 +20,15 @@ Pivot the ITSM self-healing platform into an event-driven, evidence-first agenti
   (see `docs/release-qualification.md`). Issues #2-#5 closed by the merge.
   Remaining gap: `main` has no branch protection, recorded as a governance
   gap rather than a pass.
+- **2026-11-07 runtime entrypoints:** packaged `python -m itsm_agent.api`
+  (HMAC and OIDC wired; `/healthz`, findings routes, RLS startup check) and
+  `python -m itsm_agent.workers.relay` (tenant-scoped outbox relay with
+  graceful SIGTERM). Compose now runs `api`, `worker`, and `relay` as the
+  constrained `itsm_app` login created by the postgres first-boot hook.
+  Local `make verify-ci`: 268 unit, 40 contract, 45 security, 113 integration,
+  18 fault-injection, 24 scenarios, 9 e2e — all passed; ruff/mypy/Bandit clean.
+  Manual smoke: API `/healthz` 200, unsigned webhook 401, graceful shutdown;
+  relay starts and exits 0 on SIGTERM; missing-config paths exit 2.
 - 2026-11-06 hardening closure — local `make verify-ci` (ITSM_TEST_STRICT=1, real PostgreSQL + NATS):
   246 unit, 40 contract, 45 security, 113 integration, 18 fault-injection, 24 scenarios, 9 e2e — all passed; ruff/mypy/Bandit clean.
   Slices: OIDC relying-party security tests (`test_oidc_security.py`, `test_oidc_http_jwks.py`), two fail-open fixes

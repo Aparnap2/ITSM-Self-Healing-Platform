@@ -70,8 +70,9 @@ be idempotent.
 
 - The HMAC bearer is a minimal replaceable point, not an IdP: no key
   rotation, revocation, or server-side role freshness. An OIDC relying party
-  is implemented (`src/itsm_agent/api/oidc.py`) with offline security tests,
-  but it is not wired into a deployed entrypoint. mTLS is still absent.
+  is implemented and wired into the API entrypoint (`ITSM_AUTH_MODE=oidc`:
+  cached HTTPS JWKS plus the Postgres reviewer directory). mTLS is still
+  absent.
 - Retention has no always-on scheduler worker in this baseline: the
   scheduler is implemented and lifecycle-tested
   (`src/itsm_agent/privacy/scheduler.py`,
@@ -82,9 +83,12 @@ be idempotent.
 - Forced RLS covers the audit domain plus the incident/workflow/action/
   approval/audit tables added by `migrations/011_tenant_owned_workflow.sql`;
   it does not cover tables outside that set.
-- The worker has a packaged entrypoint (`Dockerfile` CMD is
-  `python -m itsm_agent.workers.consumer`); there is no packaged console
-  entrypoint for the API server, which is composed programmatically.
+- Packaged process entrypoints exist for the API
+  (`python -m itsm_agent.api`), the consumer
+  (`python -m itsm_agent.workers.consumer`, the image CMD), and the outbox
+  relay (`python -m itsm_agent.workers.relay`). The compose stack wires all
+  three against the constrained `itsm_app` role; the security-audit detection
+  consumer is still composed programmatically in tests.
 - The Jira Service Management adapter is not implemented; Mockoon remains
   the audited acceptance connector for ITSM.
 - No production deployment has been validated. Nothing here is "production
@@ -112,7 +116,8 @@ src/itsm_agent/
   ports/             protocols (repositories, adapters, LLM)
   adapters/          psycopg repositories, NATS bus, sources, simulators
   api/               FastAPI ingestion webhook + findings/reviewer surface
-  workers/           long-running consumer entrypoints
+                     (entrypoint: python -m itsm_agent.api)
+  workers/           consumer and outbox-relay process entrypoints
 simulators/          Mockoon fixtures, infrastructure simulator, seeds
 tests/               unit, contract, integration, security,
                      fault_injection, scenarios, e2e
@@ -244,8 +249,29 @@ Environment: `ITSM_POSTGRES_DSN`/`DATABASE_URL`,
 (default 42). The worker subscribes to `itsm.events.>` on the `ITSM_EVENTS`
 stream (durable consumer `itsm-workflow`), ACKs only after durable
 processing, NAKs transient failures, and dead-letters poison messages.
-The security-audit consumer is composed the same way but has no packaged
-entrypoint yet (see limitations).
+The security-audit detection consumer is composed the same way and still has
+no packaged entrypoint (see limitations).
+
+### Running the API and the outbox relay
+
+Both read the runtime DSN (`ITSM_POSTGRES_DSN`/`DATABASE_URL`) and the NATS
+URL, connect as the constrained `itsm_app` role, and fail closed at startup if
+that role can bypass row-level security.
+
+```bash
+python -m itsm_agent.api        # webhook + findings API; GET /healthz
+
+python -m itsm_agent.workers.relay
+# bounds: ITSM_RELAY_BATCH_SIZE (10), ITSM_RELAY_POLL_SECONDS (1.0),
+# ITSM_RELAY_LEASE_SECONDS (60.0)
+```
+
+The API also needs `ITSM_WEBHOOK_SECRET`, `ITSM_AUTH_MODE`, and
+`ITSM_AUTH_HMAC_SECRET` (or the OIDC issuer/audience/JWKS triplet); see
+`.env.example`. In the compose stack, `api`, `worker`, and `relay` all run
+against `itsm_app`: the postgres first-boot hook creates that login from
+`ITSM_RUNTIME_DB_PASSWORD`, and migrations must be applied before the
+application startup check can pass.
 
 ## Safety invariants
 

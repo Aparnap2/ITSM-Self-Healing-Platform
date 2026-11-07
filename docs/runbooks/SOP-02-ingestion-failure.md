@@ -182,7 +182,7 @@ not an ingestion fix.
 
 | Finding | Action |
 | --- | --- |
-| Relay not running | start the deployment's `OutboxRelay.run()` process (none is wired in `compose.yaml`; see Known limitations) |
+| Relay not running | start the `relay` service (or `python -m itsm_agent.workers.relay`); see Known limitations |
 | NATS unreachable | restore NATS, then let `pending` rows drain |
 | `failed` rows, broker now healthy | reconcile first, then reset to `pending` (step 7) |
 | Event absent from `outbox` (and from `source_events` on the source-event path) | the request never committed; the sender must retry |
@@ -190,10 +190,10 @@ not an ingestion fix.
 | Event dead-lettered | SOP-03 |
 
 Restart the affected process after a configuration fix. `worker` is the
-consumer; a relay process supplied by the deployment must be restarted by its
-own supervisor (there is no relay service in `compose.yaml`).
+consumer, `relay` publishes the outbox, and `api` serves the webhook.
 
 ```sh
+docker compose restart relay
 docker compose restart worker
 ```
 
@@ -333,20 +333,18 @@ the incident ticket.
 
 ## Known limitations
 
-- The `api` service in `compose.yaml` sets no `command`, so it inherits the
-  image `CMD` (`python -m itsm_agent.workers.consumer`, `Dockerfile:33`).
-  There is no packaged ASGI/uvicorn entrypoint for the application
-  (`tools/dast_target.py` is a test target, not a deployment entrypoint), and
-  the baseline stack runs two worker processes rather than an HTTP server. The
-  webhook contracts in this SOP apply to a deployment that supplies
-  `create_app`; in the local stack the ingestion path must be exercised through
-  the integration tests or a separate ASGI entrypoint.
-- No service in `compose.yaml` runs `OutboxRelay.run()`, and
-  `src/itsm_agent/workers/consumer.py` does not start one. In the local stack
-  a webhook can commit `event_inbox` + `outbox` and the outbox row will stay
-  `pending` until a relay process is run. The integration tests instantiate
-  `OutboxRelay` directly (`tests/integration/test_outbox_relay.py`); a
-  deployment must supply its own relay entrypoint.
+- `api`, `worker`, and `relay` in `compose.yaml` all connect as the
+  constrained `itsm_app` role. The postgres first-boot hook creates that login
+  from `ITSM_RUNTIME_DB_PASSWORD`, but the hook runs only on a fresh volume:
+  an existing volume needs `make compose-reset` or an equivalent
+  `ALTER ROLE itsm_app LOGIN PASSWORD ...` before the services can pass the
+  startup RLS assertion.
+- `api` runs `python -m itsm_agent.api` and `relay` runs
+  `python -m itsm_agent.workers.relay`; neither is the consumer. If either
+  process is absent, outbox rows stay `pending` (relay) or the webhook is not
+  served over HTTP (api). The integration tests still exercise
+  `OutboxRelay` directly (`tests/integration/test_outbox_relay.py`), so a
+  passing test suite does not prove the compose processes are running.
 - `event_inbox` status is not advanced by either sink. Both
   `PsycopgIngestionSink` and `PsycopgSourceEventSink` insert `RECEIVED`
   (`src/itsm_agent/adapters/persistence/ingestion_sink.py:44-66,80-105`); the
