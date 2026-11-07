@@ -300,8 +300,11 @@ jobs:
     timeout-minutes: 20
     needs: [unit-tests, security-invariants, contract-tests]
     env:
-      # Ephemeral, test-only value so `docker compose config` can interpolate.
+      # Ephemeral, test-only values so `docker compose config` can interpolate.
       POSTGRES_PASSWORD: ci-config-check-password
+      ITSM_RUNTIME_DB_PASSWORD: ci-config-check-runtime-password
+      ITSM_WEBHOOK_SECRET: ci-config-check-webhook-secret
+      ITSM_AUTH_HMAC_SECRET: ci-config-check-hmac-secret
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

@@ -27,10 +27,13 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-itsm}
       # Fail closed: no default password. Provide POSTGRES_PASSWORD in .env.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (see .env.example)}
+      # Used only by the first-boot init hook that creates the itsm_app login.
+      ITSM_RUNTIME_DB_PASSWORD: ${ITSM_RUNTIME_DB_PASSWORD:?ITSM_RUNTIME_DB_PASSWORD must be set in .env (see .env.example)}
     ports:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/01-runtime-role.sh:/docker-entrypoint-initdb.d/01-runtime-role.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -154,13 +157,23 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-itsm}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (see .env.example)}@postgres:5432/${POSTGRES_DB:-itsm}
+      # Constrained runtime role; the app lifespan rejects a role that can
+      # bypass RLS, so the admin user must not be used here.
+      DATABASE_URL: postgresql://itsm_app:${ITSM_RUNTIME_DB_PASSWORD:?ITSM_RUNTIME_DB_PASSWORD must be set in .env (see .env.example)}@postgres:5432/${POSTGRES_DB:-itsm}
       NATS_URL: nats://nats:4222
-      ITSM_API_BASE_URL: http://mockoon:3001
-      IDENTITY_API_BASE_URL: http://mockoon:3001
-      INFRA_API_BASE_URL: http://mockoon:3001
+      ITSM_ENV: local
+      ITSM_API_HOST: 0.0.0.0
+      ITSM_API_PORT: "8000"
+      ITSM_WEBHOOK_SECRET: ${ITSM_WEBHOOK_SECRET:?ITSM_WEBHOOK_SECRET must be set in .env (see .env.example)}
+      ITSM_AUTH_MODE: ${ITSM_AUTH_MODE:-hmac}
+      ITSM_AUTH_HMAC_SECRET: ${ITSM_AUTH_HMAC_SECRET:?ITSM_AUTH_HMAC_SECRET must be set in .env (see .env.example)}
+      ITSM_MOCKOON_ITSM_BASE_URL: http://mockoon:3001
+      ITSM_MOCKOON_IDENTITY_BASE_URL: http://mockoon:3001
+      ITSM_MOCKOON_INFRASTRUCTURE_BASE_URL: http://mockoon:3001
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ITSM_LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    command: ["python", "-m", "itsm_agent.api"]
     ports:
       - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
     depends_on:
@@ -190,13 +203,14 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-itsm}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (see .env.example)}@postgres:5432/${POSTGRES_DB:-itsm}
+      DATABASE_URL: postgresql://itsm_app:${ITSM_RUNTIME_DB_PASSWORD:?ITSM_RUNTIME_DB_PASSWORD must be set in .env (see .env.example)}@postgres:5432/${POSTGRES_DB:-itsm}
       NATS_URL: nats://nats:4222
       ITSM_API_BASE_URL: http://mockoon:3001
       IDENTITY_API_BASE_URL: http://mockoon:3001
       INFRA_API_BASE_URL: http://mockoon:3001
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ITSM_LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       postgres:
         condition: service_healthy
@@ -212,6 +226,42 @@ services:
       resources:
         limits:
           memory: 512m
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  # ---------------------------------------------------------------------------
+  # Outbox relay — PostgreSQL outbox -> NATS JetStream. Separate process from
+  # the consumer so a broker outage cannot stop both sides of the pipeline.
+  # Runs one RLS-scoped pass per tenant (`OutboxRelay.run`).
+  # ---------------------------------------------------------------------------
+  relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://itsm_app:${ITSM_RUNTIME_DB_PASSWORD:?ITSM_RUNTIME_DB_PASSWORD must be set in .env (see .env.example)}@postgres:5432/${POSTGRES_DB:-itsm}
+      NATS_URL: nats://nats:4222
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ITSM_LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    command: ["python", "-m", "itsm_agent.workers.relay"]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256m
     read_only: true
     tmpfs:
       - /tmp
