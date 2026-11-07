@@ -73,8 +73,8 @@ assume old entries are still present after a long delay.
 
 ### 2. Read the dead-letter entries (bounded, no acknowledgement)
 
-Run from the repository root. The script stops after 100 entries or 20
-empty polls, whichever comes first.
+Run from the repository root. The script stops after 100 entries, or as soon
+as a 0.5-second poll returns no message.
 
 ```sh
 uv run python - <<'PY'
@@ -153,8 +153,8 @@ consumer; the consumer's `processing_records` idempotency ledger prevents a
 duplicate finding if the event already completed
 (`migrations/006_audit_processing.sql:28`).
 
-Set `MAX` deliberately. The loop below stops at `MAX` entries and at 50
-empty fetches.
+Set `MAX` deliberately. The loop below stops at `MAX` entries, or as soon as
+a 0.5-second fetch returns no message.
 
 ```sh
 # Replace <ticket-id> in the printed output only; MAX is the hard bound.
@@ -257,7 +257,7 @@ WHERE tenant_id = '<tenant-uuid>'::uuid
   string and the affected subject; do not keep replaying.
 - Update the incident ticket with the evidence list below.
 
-## Audit evidence
+## Evidence to capture
 
 `ITSM_DLQ` is NATS transport state, not a PostgreSQL audit ledger. There is
 no `dlq` table in `migrations/`. The durable audit record for a processed
@@ -307,6 +307,12 @@ original payload.
 
 - There is no shipped DLQ inspection or replay CLI. The scripts above are
   operator-run and must be bounded by the operator.
+- The inspection and replay scripts create ephemeral pull consumers with
+  `DeliverPolicy.ALL` and no durable name. Each run re-reads retained
+  `ITSM_DLQ` entries from the start of the stream, so a later run can replay
+  an entry an earlier run already replayed. Record the stream sequence or
+  payload hash of every replayed entry in the ticket; do not rely on the
+  script to remember.
 - No component consumes `itsm.dlq.escalation` in this repository; it is an
   observability signal, not an automated pager.
 - `ITSM_DLQ` uses limits retention with no configured `max_msgs` in

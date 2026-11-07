@@ -215,7 +215,7 @@ SELECT
 Large gaps are an incident, not a routine replay. Do not bulk-replay a
 window larger than the helper's `limit` (1-1000) without a written plan.
 
-### 8. Verify forward progress
+## Verification
 
 - `ITSM_EVENTS.state.messages` is 0 or decreasing, and the consumer's
   `num_ack_pending` returns to 0.
@@ -265,7 +265,7 @@ Do these checks in order; stop at the first mismatch:
   lost from the ledger; replay the source window only after reconciling
   against `source_events`.
 - Migrations are forward-only; there is no schema rollback
-  (`docs/migration-safety.md`).
+  (`docs/production-readiness.md:10-11`).
 
 ## Escalation
 
