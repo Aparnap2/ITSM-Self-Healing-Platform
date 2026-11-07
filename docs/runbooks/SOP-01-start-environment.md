@@ -53,7 +53,9 @@ docker compose ps        # all services healthy/running
 | postgres | 5432 | durable business state (source of truth) |
 | nats | 4222 | JetStream; monitor port 8222 |
 | mockoon | 3001 | ITSM + identity + infra simulators |
-| api | 8000 | application API (app slice) |
+| api | 8000 | application API (`python -m itsm_agent.api`); `/healthz` |
+| worker | — | detection consumer (`python -m itsm_agent.workers.consumer`) |
+| relay | — | outbox → NATS relay (`python -m itsm_agent.workers.relay`) |
 | prometheus | 9090 | metrics UI |
 | otel-collector | 4317 / 4318 | OTLP gRPC / HTTP |
 | localstack | 4566 | opt-in: `docker compose --profile localstack up -d` |
