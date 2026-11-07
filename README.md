@@ -73,11 +73,12 @@ be idempotent.
   is implemented and wired into the API entrypoint (`ITSM_AUTH_MODE=oidc`:
   cached HTTPS JWKS plus the Postgres reviewer directory). mTLS is still
   absent.
-- Retention has no always-on scheduler worker in this baseline: the
-  scheduler is implemented and lifecycle-tested
-  (`src/itsm_agent/privacy/scheduler.py`,
-  `tests/integration/test_retention_scheduler_lifecycle.py`), but it is not
-  wired to a deployed entrypoint, so erasure is invoked programmatically.
+- Retention runs on a schedule: the resumable scheduler
+  (`src/itsm_agent/privacy/scheduler.py`) is packaged as
+  `python -m itsm_agent.workers.retention` and run by the compose `retention`
+  service. It leases due requests, honors legal holds, and marks retry
+  exhaustion `FAILED`; raw evidence is tombstoned rather than removed from
+  external object storage.
 - No pagination, no finding status transitions (decisions are append-only
   annotations), and no management API for principals, roles, or tenants.
 - Forced RLS covers the audit domain plus the incident/workflow/action/
@@ -117,7 +118,7 @@ src/itsm_agent/
   adapters/          psycopg repositories, NATS bus, sources, simulators
   api/               FastAPI ingestion webhook + findings/reviewer surface
                      (entrypoint: python -m itsm_agent.api)
-  workers/           consumer and outbox-relay process entrypoints
+  workers/           consumer, outbox-relay, and retention entrypoints
 simulators/          Mockoon fixtures, infrastructure simulator, seeds
 tests/               unit, contract, integration, security,
                      fault_injection, scenarios, e2e
@@ -252,11 +253,11 @@ processing, NAKs transient failures, and dead-letters poison messages.
 The security-audit detection consumer is composed the same way and still has
 no packaged entrypoint (see limitations).
 
-### Running the API and the outbox relay
+### Running the API, outbox relay, and retention scheduler
 
-Both read the runtime DSN (`ITSM_POSTGRES_DSN`/`DATABASE_URL`) and the NATS
-URL, connect as the constrained `itsm_app` role, and fail closed at startup if
-that role can bypass row-level security.
+All three read the runtime DSN (`ITSM_POSTGRES_DSN`/`DATABASE_URL`), connect
+as the constrained `itsm_app` role, and fail closed at startup if that role
+can bypass row-level security. The relay additionally needs the NATS URL.
 
 ```bash
 python -m itsm_agent.api        # webhook + findings API; GET /healthz
@@ -264,12 +265,18 @@ python -m itsm_agent.api        # webhook + findings API; GET /healthz
 python -m itsm_agent.workers.relay
 # bounds: ITSM_RELAY_BATCH_SIZE (10), ITSM_RELAY_POLL_SECONDS (1.0),
 # ITSM_RELAY_LEASE_SECONDS (60.0)
+
+python -m itsm_agent.workers.retention
+# bounds: ITSM_RETENTION_INTERVAL_SECONDS (60), ITSM_RETENTION_BATCH_SIZE (10),
+# ITSM_RETENTION_LEASE_SECONDS (60), ITSM_RETENTION_MAX_ATTEMPTS (5),
+# ITSM_RETENTION_BACKOFF_SECONDS (30)
 ```
 
 The API also needs `ITSM_WEBHOOK_SECRET`, `ITSM_AUTH_MODE`, and
 `ITSM_AUTH_HMAC_SECRET` (or the OIDC issuer/audience/JWKS triplet); see
-`.env.example`. In the compose stack, `api`, `worker`, and `relay` all run
-against `itsm_app`: the postgres first-boot hook creates that login from
+`.env.example`. In the compose stack, `api`, `worker`, `relay`, and
+`retention` all run against `itsm_app`: the postgres first-boot hook creates
+that login from
 `ITSM_RUNTIME_DB_PASSWORD`, and migrations must be applied before the
 application startup check can pass.
 

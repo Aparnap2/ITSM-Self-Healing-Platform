@@ -127,11 +127,13 @@ constrained login role for the RLS assertions.
   signature; it is not yet tied to the reviewer principal model.
 - No rate limiting or audit trail of authentication failures beyond structured
   logs.
-- Retention has no always-on scheduler worker in this baseline: the
-  scheduler is implemented and lifecycle-tested
+- Retention runs on a timer via the packaged
+  `python -m itsm_agent.workers.retention` process (compose service
+  `retention`). The scheduler is implemented and lifecycle-tested
   (`src/itsm_agent/privacy/scheduler.py`,
-  `tests/integration/test_retention_scheduler_lifecycle.py`) but is not wired
-  to a deployed entrypoint, so erasure is not run on a timer.
+  `tests/integration/test_retention_scheduler_lifecycle.py`); the worker
+  refuses to start against a role that can bypass RLS. Raw evidence is
+  tombstoned, not deleted from external object storage.
 - RLS tests run against a real PostgreSQL role, but the project's CI service
   account is a superuser; a production deployment must still prove its own
   role is `NOBYPASSRLS`. The startup check is implemented:

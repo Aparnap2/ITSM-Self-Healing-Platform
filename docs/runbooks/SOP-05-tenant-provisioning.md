@@ -295,9 +295,9 @@ others, and still increment `authorization_version`.
 
 Erasure is programmatic and tenant-scoped
 (`src/itsm_agent/privacy/retention.py`,
-`migrations/008_retention_erasure.sql`). The scheduler is implemented and
-lifecycle-tested but is not wired into an always-on worker in this baseline,
-so an operator must invoke `run_once`/`run_forever`
+`migrations/008_retention_erasure.sql`). The scheduler runs as the compose
+`retention` service (`python -m itsm_agent.workers.retention`); an operator
+can also invoke `run_once`/`run_forever` directly
 (`src/itsm_agent/privacy/scheduler.py`). Raw evidence is tombstoned, not
 deleted from `source_events`; derived `access_facts` may be deleted; findings
 and review decisions are retained audit records.
@@ -452,11 +452,12 @@ SOP does not manage identity-provider credentials.
 - The `system-legacy` tenant (`00000000-0000-0000-0000-000000000001`) is
   infrastructure. No reviewer may be a member; migration 011 assigns
   unmatched legacy rows to it.
-- Retention has no always-on scheduler worker in this baseline: the
-  scheduler exists and is lifecycle-tested
+- Retention runs as the compose `retention` service
+  (`python -m itsm_agent.workers.retention`), which leases due requests and
+  escalates retry exhaustion. Offboarding still depends on a due erasure
+  request being recorded and on the scheduler being healthy; a stopped worker
+  leaves requests pending rather than silently erasing them.
   (`src/itsm_agent/privacy/scheduler.py`,
-  `tests/integration/test_retention_scheduler_lifecycle.py`), but it is not
-  wired to a deployed entrypoint, so offboarding erasure remains
-  operator-driven and can be incomplete if the step is skipped.
+  `tests/integration/test_retention_scheduler_lifecycle.py`).
 - The startup RLS assertion proves the role is `NOBYPASSRLS`; it does not
   prove the deployed database is the one you intended to connect to.
