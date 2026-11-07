@@ -10,12 +10,22 @@ prove. It is a companion to `docs/security-ci.md` and
 - Portfolio baseline: simulators only (Mockoon, Moto, the in-process
   infrastructure simulator). No real production data, credentials, or
   external SaaS mutations.
-- The vehicle for this qualification is the merge of PR #9
-  (`feat/access-audit-foundation` into `main`). At the time of writing
-  (2026-11-06) the PR is open and has no merge commit; re-check before use:
-  `gh pr view 9 --json state,mergeCommit,headRefOid`.
-- No run id, merge SHA, or result is recorded here until it is observed.
-  Placeholders below are intentional.
+- The vehicle for this qualification was the merge of PR #9
+  (`feat/access-audit-foundation` into `main`), squash-merged on 2026-11-06 as
+  `57c9d8cd049dd243d13c7610c5fe75270a687af2`.
+- **Recorded qualification (observed 2026-11-06).** The `push` run
+  `42214887310` on `main` has `headSha`
+  `57c9d8cd049dd243d13c7610c5fe75270a687af2`, event `push`, conclusion
+  `success`, and all 15 jobs `success`. Its summary reports **444 unique
+  tests, 0 failures + errors, 0 skipped**, and all seven mandatory JUnit
+  artifacts are present and unexpired. This satisfies items 1-5 below. Item 6
+  is **not** satisfied: `main` has no branch protection, so repository
+  governance remains an unverified gap.
+- Re-verify before citing:
+  `gh run view 42214887310 --json headSha,event,conclusion,jobs` and
+  `gh api repos/<owner>/<repo>/actions/runs/42214887310/artifacts`.
+- A later run supersedes this record; a green `pull_request` run on the head
+  branch is supporting evidence, not the qualified run.
 
 ## Definition of release qualified
 
@@ -90,22 +100,22 @@ Fill this in from the qualified run. Use `success` / `failure` / `skipped` /
 
 | Gate | Job name | Result | Artifact/link | Notes |
 | --- | --- | --- | --- | --- |
-| Formatting and lint | Lint & Format | `<fill-in>` | `<fill-in>` | |
-| Static typing | Type Check (mypy --strict) | `<fill-in>` | `<fill-in>` | |
-| Secret scanning | Secret Scan (gitleaks) | `<fill-in>` | `<fill-in>` | |
-| Workflow security | Workflow Security (zizmor) | `<fill-in>` | `<fill-in>` | |
-| Supply chain, SAST, SBOM | Supply Chain (pip-audit, bandit, SBOM) | `<fill-in>` | `<fill-in>` | |
-| Build and compose | Build & Compose Config | `<fill-in>` | `<fill-in>` | |
-| DAST | DAST (OWASP ZAP baseline, isolated target) | `<fill-in>` | `<fill-in>` | |
-| Unit tests | Unit Tests | `<fill-in>` | `<fill-in>` | |
-| Contract tests | Contract Tests (simulators, offline) | `<fill-in>` | `<fill-in>` | |
-| Security invariants | Security Invariant Tests | `<fill-in>` | `<fill-in>` | |
-| Integration | Integration Tests | `<fill-in>` | `<fill-in>` | includes migration harness |
-| Fault injection | Fault Injection Tests | `<fill-in>` | `<fill-in>` | |
-| E2E | E2E Tests | `<fill-in>` | `<fill-in>` | |
-| Scenario harness | Scenario Harness | `<fill-in>` | `<fill-in>` | |
-| Summary | CI Verification Summary | `<fill-in>` | `<fill-in>` | 0 failures, 0 missing groups |
-| Run binding | `headSha` = `<merge-sha>` | `<fill-in>` | `<fill-in>` | event must be `push` on `main` |
+| Formatting and lint | Lint & Format | `success` | run `42214887310` | |
+| Static typing | Type Check (mypy --strict) | `success` | run `42214887310` | 148 source files |
+| Secret scanning | Secret Scan (gitleaks) | `success` | `gitleaks-results.sarif` | no finding |
+| Workflow security | Workflow Security (zizmor) | `success` | run `42214887310` | |
+| Supply chain, SAST, SBOM | Supply Chain (pip-audit, bandit, SBOM) | `success` | `sbom` | Bandit/pip-audit/Trivy clean |
+| Build and compose | Build & Compose Config | `success` | run `42214887310` | |
+| DAST | DAST (OWASP ZAP baseline, isolated target) | `success` | `dast-report` | no FAIL rule |
+| Unit tests | Unit Tests | `success` | `unit-junit` | 246 tests, 0 failed |
+| Contract tests | Contract Tests (simulators, offline) | `success` | `contract-junit` | 40 tests, 0 failed |
+| Security invariants | Security Invariant Tests | `success` | `security-junit` | 45 tests, 0 failed |
+| Integration | Integration Tests | `success` | `integration-junit` | 113 tests, 0 failed; includes migration harness |
+| Fault injection | Fault Injection Tests | `success` | `fault-injection-junit` | 18 tests, 0 failed |
+| E2E | E2E Tests | `success` | `e2e-junit` | 9 tests, 0 failed |
+| Scenario harness | Scenario Harness | `success` | `scenarios-junit` | 24 tests, 0 failed |
+| Summary | CI Verification Summary | `success` | run `42214887310` | 444 unique tests, 0 failures + errors, 0 missing groups |
+| Run binding | `headSha` = `57c9d8cd049dd243d13c7610c5fe75270a687af2` | `success` | run `42214887310` | event `push` on `main` |
 
 ## Disqualifying conditions
 
@@ -219,7 +229,7 @@ git show <merge-sha>:.github/workflows/ci.yml | grep -nE 'continue-on-error|if: 
 # Expected: no output (exit 1).
 
 git show <merge-sha>:.github/workflows/ci.yml \
-  | sed -n '/^  ci-summary:/,/^  [a-z-]*:/p' | grep -E '^      - '
+  | sed -n '/^  ci-summary:/,/^    steps:/p' | grep -E '^      - '
 # Expected: the fourteen required jobs listed above.
 ```
 
