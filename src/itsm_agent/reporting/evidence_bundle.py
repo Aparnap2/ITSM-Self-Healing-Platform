@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 from itsm_agent.domain.models import EvidenceReference, Finding
+from itsm_agent.privacy.redaction import redact_secrets
 
 
 def build_evidence_bundle(
@@ -35,7 +36,7 @@ def build_evidence_bundle(
                 "source_event_id": str(e.source_event_id) if e.source_event_id else None,
                 "access_fact_id": str(e.access_fact_id) if e.access_fact_id else None,
                 "content_hash": e.content_hash,
-                "excerpt": e.excerpt,
+                "excerpt": redact_secrets(e.excerpt) if e.excerpt is not None else None,
                 "trust_level": e.trust_level,
                 "collected_at": e.collected_at.isoformat(),
             }
