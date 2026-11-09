@@ -31,7 +31,6 @@ from itsm_agent.detection.engine import (
 from itsm_agent.domain.events import InvestigationProposal, InvestigationRequest, SourceEvent
 from itsm_agent.domain.models import ApprovalEvidence, EvidenceReference, Finding, Severity
 from itsm_agent.investigations.orchestrator import run_investigation
-from itsm_agent.privacy.redaction import redact_secrets
 from itsm_agent.reporting.evidence_bundle import build_evidence_bundle
 
 pytestmark = pytest.mark.scenarios
@@ -707,12 +706,13 @@ def test_wrong_action_and_cross_tenant_approvals_are_treated_as_missing() -> Non
 
 
 def test_evidence_bundle_hash_is_stable_and_redaction_boundary_is_explicit() -> None:
-    """Evidence bundle: hashes are stable and redaction is caller-applied.
+    """Evidence bundle: hashes are stable and excerpts are redacted.
 
-    ``build_evidence_bundle`` is deterministic for identical inputs, but it
-    copies ``excerpt`` verbatim: the caller must run ``redact_secrets`` before
-    including untrusted text. The collector-level pgAudit SQL redaction is
-    already applied to ``correlation_metadata["sql_redacted"]``.
+    ``build_evidence_bundle`` is deterministic for identical inputs, and it
+    runs every excerpt through ``redact_secrets`` before serialization and
+    before the bundle hash is computed (docs/findings-api.md §2a). The
+    collector-level pgAudit SQL redaction is already applied to
+    ``correlation_metadata["sql_redacted"]``.
     """
     tenant = uuid4()
     event = ct_norm(
@@ -741,10 +741,11 @@ def test_evidence_bundle_hash_is_stable_and_redaction_boundary_is_explicit() -> 
     assert len(bundle_a["bundle_hash"]) == 64
     assert bundle_a["evidence"][0]["content_hash"] == event.payload_hash
 
-    # The bundle copies excerpts verbatim; redaction is the caller's duty.
+    # The bundle gate redacts excerpts before serialization and hashing
+    # (docs/findings-api.md §2a); the raw key never enters bundle output.
     excerpt = str(bundle_a["evidence"][0]["excerpt"])
-    assert "AKIAIOSFODNN7EXAMPLE" in excerpt
-    assert "AKIAIOSFODNN7EXAMPLE" not in redact_secrets(excerpt)
+    assert "[REDACTED_AWS_KEY]" in excerpt
+    assert "AKIAIOSFODNN7EXAMPLE" not in excerpt
 
     # Tampering with evidence content changes the deterministic hash.
     tampered = EvidenceReference(
