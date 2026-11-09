@@ -30,7 +30,12 @@ from psycopg_pool import AsyncConnectionPool
 
 from itsm_agent.adapters.persistence.tenant import tenant_transaction
 from itsm_agent.domain.events import SourceEvent
-from itsm_agent.domain.models import Finding, IdentityMapping, ReviewDecision
+from itsm_agent.domain.models import (
+    EvidenceReference,
+    Finding,
+    IdentityMapping,
+    ReviewDecision,
+)
 from itsm_agent.domain.tenancy import SYSTEM_TENANT_ID
 from itsm_agent.ports.repositories import (
     ActionIntent,
@@ -856,6 +861,37 @@ class PsycopgReviewDecisionRepository(_BaseRepository):
                 decided_at=r["decided_at"],
                 rationale=r["rationale"],
                 evidence_pack_ref=r["evidence_pack_ref"],
+            )
+            for r in rows
+        ]
+
+
+class PsycopgEvidenceReferenceRepository(_BaseRepository):
+    async def list_for_tenant_finding(
+        self, tenant_id: UUID, finding_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> list[EvidenceReference]:
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT id, finding_id, source_event_id, access_fact_id,
+                       content_hash, excerpt, trust_level, collected_at
+                FROM evidence_references
+                WHERE tenant_id = %s AND finding_id = %s
+                ORDER BY collected_at, id
+                """,
+                (tenant_id, finding_id),
+            )
+            rows = await cur.fetchall()
+        return [
+            EvidenceReference(
+                id=r["id"],
+                finding_id=r["finding_id"],
+                source_event_id=r["source_event_id"],
+                access_fact_id=r["access_fact_id"],
+                content_hash=r["content_hash"],
+                excerpt=r["excerpt"],
+                trust_level=r["trust_level"],
+                collected_at=r["collected_at"],
             )
             for r in rows
         ]
@@ -1711,6 +1747,7 @@ class RepositoryBundle:
         self.source_checkpoints = PsycopgSourceCheckpointRepository(pool, tenant_id)
         self.identity_mappings = PsycopgIdentityMappingRepository(pool, tenant_id)
         self.review_decisions = PsycopgReviewDecisionRepository(pool, tenant_id)
+        self.evidence_references = PsycopgEvidenceReferenceRepository(pool, tenant_id)
         self.findings = PsycopgFindingRepository(pool, tenant_id)
         self.processing_records = PsycopgProcessingRecordRepository(pool, tenant_id)
         self.tenants = PsycopgTenantRepository(pool)

@@ -24,6 +24,7 @@ from itsm_agent.api import security
 from itsm_agent.api.auth import Authenticator
 from itsm_agent.api.routes.findings import (
     DecisionsStore,
+    EvidenceReferencesReader,
     FindingsDeps,
     FindingsReader,
 )
@@ -47,6 +48,7 @@ def create_app(
     sink: IngestionSink,
     findings_repo: FindingsReader | None = None,
     review_decisions_repo: DecisionsStore | None = None,
+    evidence_references_repo: EvidenceReferencesReader | None = None,
     authenticator: Authenticator | None = None,
     database_pool: AsyncConnectionPool[AsyncConnection] | None = None,
 ) -> FastAPI:
@@ -112,6 +114,7 @@ def create_app(
         app.state.findings_deps = FindingsDeps(
             findings_repo=findings_repo,
             review_decisions_repo=review_decisions_repo,
+            evidence_references_repo=evidence_references_repo,
             authenticator=authenticator,
         )
         app.include_router(findings_router)

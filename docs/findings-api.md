@@ -36,8 +36,31 @@ closed with `503`; the router never serves unauthenticated data.
 | GET | `/v1/findings/{finding_id}` | `findings:read`, `decisions:read` | `200` JSON object |
 | POST | `/v1/findings/{finding_id}/decisions` | `decisions:write` + permission for the decision type | `201` |
 | GET | `/v1/findings/{finding_id}/decisions` | `decisions:read` | `200` JSON array |
+| GET | `/v1/findings/{finding_id}/bundle` | `findings:read`, `decisions:read` | `200` JSON object |
 
 There is no finding-status transition endpoint; see §9.
+
+### 2a. Evidence bundle
+
+`GET /v1/findings/{finding_id}/bundle?tenant_id=...` returns the deterministic
+compliance-evidence bundle for one finding:
+
+- `finding`: the same JSON object shape as the single-finding endpoint;
+- `evidence`: the finding's evidence references, sorted by id, with each
+  `excerpt` passed through `redact_secrets` **before** hashing and before the
+  response is built;
+- `review_decisions`: the finding's decision history in the same JSON shape as
+  the decisions list endpoint;
+- `limitations`: an always-present list stating the bundle is evidence, not
+  certification;
+- `bundle_hash`: SHA-256 of the canonical JSON of the bundle built above
+  (sort_keys, no whitespace). Identical data yields an identical hash, so two
+  fetches of an unchanged finding must agree.
+
+The route fails closed with `503` when the evidence-reference store is not
+wired, returns `401`/`403`/`404` the same way the single-finding endpoint does,
+and requires the same `tenant_id` query parameter. Refusal reasons follow the
+standard status table (§7).
 
 ## 3. Authentication and tenant scoping
 

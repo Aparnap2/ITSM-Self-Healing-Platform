@@ -107,6 +107,11 @@ constrained login role for the RLS assertions.
   cascading delete of audit history.
 - An active legal hold blocks execution and the request is marked `BLOCKED`.
 - Policy lookup fails closed to `RETAIN` for an unknown data class.
+- Evidence excerpts served by the API
+  (`GET /v1/findings/{finding_id}/bundle`, `docs/findings-api.md` §2a) are
+  passed through `redact_secrets` (`src/itsm_agent/privacy/redaction.py`)
+  before serialization and before the bundle hash is computed, so no bundle
+  output carries an unredacted secret pattern.
 
 ## 5. Not covered (honest gaps)
 

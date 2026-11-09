@@ -69,6 +69,33 @@ async def _ensure_tenant(pool: Pool, tenant_id: UUID) -> None:
         )
 
 
+async def _seed_evidence(
+    pool: Pool, tenant_id: UUID, finding_id: UUID, *, excerpt: str | None = None
+) -> UUID:
+    from itsm_agent.adapters.persistence.tenant import tenant_transaction
+
+    evidence_id = uuid.uuid4()
+    async with tenant_transaction(pool, tenant_id) as conn:
+        await conn.execute(
+            """
+            INSERT INTO evidence_references (
+                id, tenant_id, finding_id, source_event_id,
+                content_hash, excerpt, trust_level, collected_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, now())
+            """,
+            (
+                evidence_id,
+                tenant_id,
+                finding_id,
+                None,
+                "e" * 64,
+                excerpt,
+                "SIMULATOR_OBSERVATION",
+            ),
+        )
+    return evidence_id
+
+
 def _build_app(pool: Pool) -> FastAPI:
     bundle = RepositoryBundle(pool)
     authenticator = TokenAuthenticator(secret=SECRET)
@@ -76,6 +103,7 @@ def _build_app(pool: Pool) -> FastAPI:
         FindingsDeps(
             findings_repo=bundle.findings,
             review_decisions_repo=bundle.review_decisions,
+            evidence_references_repo=bundle.evidence_references,
             authenticator=authenticator,
         )
     )
@@ -84,6 +112,7 @@ def _build_app(pool: Pool) -> FastAPI:
         sink=FakeSink(),
         findings_repo=bundle.findings,
         review_decisions_repo=bundle.review_decisions,
+        evidence_references_repo=bundle.evidence_references,
         authenticator=authenticator,
     )
 
@@ -303,3 +332,74 @@ async def test_identical_decisions_append_without_dedup(pool: Pool) -> None:
     assert second.status_code == 201
     stored = await PsycopgReviewDecisionRepository(pool).list_for_finding(tenant, finding.id)
     assert len(stored) == 2
+
+
+async def test_bundle_is_tenant_scoped_with_redacted_excerpts(pool: Pool) -> None:
+    findings = PsycopgFindingRepository(pool)
+    tenant_a, tenant_b = uuid.uuid4(), uuid.uuid4()
+    await _ensure_tenant(pool, tenant_a)
+    await _ensure_tenant(pool, tenant_b)
+    a1 = await findings.upsert(_finding(tenant_a))
+    await _seed_evidence(pool, tenant_a, a1.id, excerpt="Bearer abc123def")
+    headers = _token(principal_id="secops.carol", tenant_id=tenant_a)
+    body = _decision_body(rationale="matches the exposed admin role")
+
+    async with _client(_build_app(pool)) as client:
+        posted = await client.post(
+            f"/v1/findings/{a1.id}/decisions",
+            params={"tenant_id": str(tenant_a)},
+            headers=headers,
+            json=body,
+        )
+        bundle = await client.get(
+            f"/v1/findings/{a1.id}/bundle",
+            params={"tenant_id": str(tenant_a)},
+            headers=headers,
+        )
+        cross = await client.get(
+            f"/v1/findings/{a1.id}/bundle",
+            params={"tenant_id": str(tenant_b)},
+            headers=_token(tenants=(tenant_a, tenant_b)),
+        )
+
+    assert posted.status_code == 201
+    assert bundle.status_code == 200
+    payload = bundle.json()
+    assert payload["finding"]["id"] == str(a1.id)
+    assert payload["finding"]["outcome"] == "VIOLATION"
+    assert len(payload["evidence"]) == 1
+    assert payload["evidence"][0]["excerpt"] == "Bearer [REDACTED]"
+    assert [d["reviewer_id"] for d in payload["review_decisions"]] == ["secops.carol"]
+    assert payload["limitations"]
+    assert len(payload["bundle_hash"]) == 64
+    # Cross-tenant read over the same token is a 404, never a leak.
+    assert cross.status_code == 404
+
+
+async def test_bundle_hash_is_deterministic_and_survives_a_rebuild(pool: Pool) -> None:
+    findings = PsycopgFindingRepository(pool)
+    tenant = uuid.uuid4()
+    await _ensure_tenant(pool, tenant)
+    finding = await findings.upsert(_finding(tenant))
+    await _seed_evidence(pool, tenant, finding.id, excerpt="request included api_key=secret123")
+    headers = _token(tenant_id=tenant)
+
+    async with _client(_build_app(pool)) as first_app:
+        first = await first_app.get(
+            f"/v1/findings/{finding.id}/bundle",
+            params={"tenant_id": str(tenant)},
+            headers=headers,
+        )
+    async with _client(_build_app(pool)) as second_app:
+        second = await second_app.get(
+            f"/v1/findings/{finding.id}/bundle",
+            params={"tenant_id": str(tenant)},
+            headers=headers,
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["bundle_hash"] == second.json()["bundle_hash"]
+    joined = " ".join(e["excerpt"] or "" for e in second.json()["evidence"])
+    assert "api_key=[REDACTED]" in joined
+    assert "secret123" not in joined

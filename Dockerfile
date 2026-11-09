@@ -1,5 +1,14 @@
 FROM python:3.12-slim
 
+# Security patch: pull the fixed Debian release of zlib1g (trivy HIGH findings
+# CVE-2026-76844 / CVE-2026-85091 ship in the base tag's zlib1g). The base tag
+# itself is not yet rebuilt with the security update, so upgrade it here
+# instead of weakening the CI gate.
+# NOTE: revisit once python:3.12-slim ships > 1.3.dfsg+really1.3.1-1+deb13u1.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 

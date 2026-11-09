@@ -59,4 +59,48 @@ def test_bundle_empty_evidence() -> None:
     assert "bundle_hash" in b
 
 
+def test_bundle_excerpts_are_redacted_and_hash_deterministic() -> None:
+    tenant = uuid.uuid4()
+    finding = Finding(
+        id=uuid.uuid4(),
+        tenant_id=tenant,
+        finding_type="PRIVILEGE_ESCALATION",
+        severity=Severity.P2,
+        status="OPEN",
+        title="t",
+        description="d",
+        detected_at=datetime.now(UTC),
+        rule_version="v1",
+        outcome="SUSPICIOUS",
+    )
+    ev1 = EvidenceReference(
+        id=uuid.uuid4(),
+        finding_id=finding.id,
+        source_event_id=uuid.uuid4(),
+        content_hash="a" * 64,
+        excerpt="Bearer abc123def",
+        trust_level="SIMULATOR_OBSERVATION",
+        collected_at=datetime.now(UTC),
+    )
+    ev2 = EvidenceReference(
+        id=uuid.uuid4(),
+        finding_id=finding.id,
+        source_event_id=uuid.uuid4(),
+        content_hash="b" * 64,
+        excerpt="request included api_key=secret123",
+        trust_level="SIMULATOR_OBSERVATION",
+        collected_at=datetime.now(UTC),
+    )
+    b1 = build_evidence_bundle(finding, [ev1, ev2])
+    b2 = build_evidence_bundle(finding, [ev1, ev2])
+
+    excerpts = [e["excerpt"] for e in b1["evidence"]]
+    assert "Bearer [REDACTED]" in excerpts
+    assert any("api_key=[REDACTED]" in e for e in excerpts)
+    assert "abc123def" not in b1["evidence"][0]["excerpt"]
+    assert "secret123" not in b1["evidence"][1]["excerpt"]
+    # Redaction happens before hashing: identical input → identical bundle hash.
+    assert b1["bundle_hash"] == b2["bundle_hash"]
+
+
 pytestmark = pytest.mark.unit

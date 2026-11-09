@@ -37,6 +37,13 @@ Pivot the ITSM self-healing platform into an event-driven, evidence-first agenti
   service against `itsm_app`. Unit tests cover config bounds, scheduler
   wiring, and exit codes; the existing lifecycle tests cover leasing, legal
   holds, retry exhaustion, and idempotent replay.
+- **2026-11-09 evidence surface (PRD G3+G2):** `build_evidence_bundle` now
+  gates every excerpt through `redact_secrets` before serialization and
+  hashing, and `GET /v1/findings/{finding_id}/bundle` exposes the bundle at
+  runtime (previously reachable only from tests). Tenant-scoped
+  reader added for `evidence_references`; local gates: ruff clean, mypy strict
+  155 files, unit suite green, findings API integration 9/9 with redaction +
+  cross-tenant 404 + bundle-hash determinism checked against real PostgreSQL.
 - 2026-11-06 hardening closure — local `make verify-ci` (ITSM_TEST_STRICT=1, real PostgreSQL + NATS):
   246 unit, 40 contract, 45 security, 113 integration, 18 fault-injection, 24 scenarios, 9 e2e — all passed; ruff/mypy/Bandit clean.
   Slices: OIDC relying-party security tests (`test_oidc_security.py`, `test_oidc_http_jwks.py`), two fail-open fixes

@@ -26,7 +26,8 @@ from itsm_agent.api.rbac import (
     authorize_decision,
     require_permission,
 )
-from itsm_agent.domain.models import Finding, ReviewDecision
+from itsm_agent.domain.models import EvidenceReference, Finding, ReviewDecision
+from itsm_agent.reporting.evidence_bundle import build_evidence_bundle
 
 router = APIRouter(prefix="/v1/findings", tags=["findings"])
 
@@ -50,6 +51,12 @@ class FindingsReader(Protocol):
     async def list_for_tenant(self, tenant_id: uuid.UUID) -> list[Finding]: ...
 
 
+class EvidenceReferencesReader(Protocol):
+    async def list_for_tenant_finding(
+        self, tenant_id: uuid.UUID, finding_id: uuid.UUID
+    ) -> list[EvidenceReference]: ...
+
+
 class DecisionsStore(Protocol):
     async def record(self, decision: ReviewDecision) -> ReviewDecision: ...
 
@@ -65,10 +72,12 @@ class FindingsDeps:
         findings_repo: FindingsReader | None,
         review_decisions_repo: DecisionsStore | None,
         authenticator: Authenticator | None,
+        evidence_references_repo: EvidenceReferencesReader | None = None,
     ) -> None:
         self.findings_repo = findings_repo
         self.review_decisions_repo = review_decisions_repo
         self.authenticator = authenticator
+        self.evidence_references_repo = evidence_references_repo
 
 
 _deps: FindingsDeps | None = None
@@ -259,6 +268,34 @@ async def list_decisions(
         raise HTTPException(status_code=404, detail="finding not found")
     decisions = await deps.review_decisions_repo.list_for_finding(tenant_id, finding_id)
     return [_decision_json(d) for d in decisions]
+
+
+@router.get("/{finding_id}/bundle")
+async def get_evidence_bundle(
+    request: Request,
+    finding_id: uuid.UUID,
+    tenant_id: Annotated[uuid.UUID, Query()],
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, Any]:
+    deps = _configured_deps(request)
+    if deps.evidence_references_repo is None:
+        # Fail closed: an evidence bundle without its store cannot be served.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="evidence reference store not configured",
+        )
+    principal = await _authenticated_principal(request, authorization)
+    _authorize_tenant(principal, tenant_id)
+    _authorize(principal, Permission.FINDINGS_READ)
+    _authorize(principal, Permission.DECISIONS_READ)
+    assert deps.findings_repo is not None
+    assert deps.review_decisions_repo is not None
+    finding = await deps.findings_repo.get(tenant_id, finding_id)
+    if finding is None:
+        raise HTTPException(status_code=404, detail="finding not found")
+    evidence = await deps.evidence_references_repo.list_for_tenant_finding(tenant_id, finding_id)
+    decisions = await deps.review_decisions_repo.list_for_finding(tenant_id, finding_id)
+    return build_evidence_bundle(finding, evidence, [_decision_json(d) for d in decisions])
 
 
 __all__ = [
