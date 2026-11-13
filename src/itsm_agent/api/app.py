@@ -27,6 +27,7 @@ from itsm_agent.api.routes.findings import (
     EvidenceReferencesReader,
     FindingsDeps,
     FindingsReader,
+    FindingTransitionsStore,
 )
 from itsm_agent.api.routes.findings import (
     router as findings_router,
@@ -49,6 +50,7 @@ def create_app(
     findings_repo: FindingsReader | None = None,
     review_decisions_repo: DecisionsStore | None = None,
     evidence_references_repo: EvidenceReferencesReader | None = None,
+    finding_transitions: FindingTransitionsStore | None = None,
     authenticator: Authenticator | None = None,
     database_pool: AsyncConnectionPool[AsyncConnection] | None = None,
 ) -> FastAPI:
@@ -56,6 +58,10 @@ def create_app(
 
     When ``database_pool`` is supplied the startup hook asserts that the
     runtime role cannot bypass tenant RLS and fails closed otherwise.
+
+    ``finding_transitions`` is optional: without it the lifecycle transition
+    endpoints fail closed with ``503`` while the rest of the findings surface
+    keeps working.
     """
 
     @asynccontextmanager
@@ -115,6 +121,7 @@ def create_app(
             findings_repo=findings_repo,
             review_decisions_repo=review_decisions_repo,
             evidence_references_repo=evidence_references_repo,
+            finding_transitions=finding_transitions,
             authenticator=authenticator,
         )
         app.include_router(findings_router)
