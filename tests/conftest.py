@@ -68,6 +68,8 @@ TABLES = (
     "reviewer_authorizations",
     "tenants",
     "finding_transitions",
+    "investigation_requests",
+    "investigation_proposals",
 )
 
 

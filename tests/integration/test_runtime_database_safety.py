@@ -67,6 +67,8 @@ RLS_TABLES: tuple[str, ...] = (
     "retention_policies",
     "legal_holds",
     "finding_transitions",
+    "investigation_requests",
+    "investigation_proposals",
 )
 
 #: Every table the runtime role must be able to DML, plus the SELECT-only
@@ -79,6 +81,8 @@ APPEND_ONLY_TABLES: tuple[str, ...] = (
     "audit_events",
     "erasure_tombstones",
     "finding_transitions",
+    "investigation_requests",
+    "investigation_proposals",
 )
 READ_ONLY_TABLES: tuple[str, ...] = ("reviewer_authorizations",)
 
