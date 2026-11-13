@@ -1,0 +1,536 @@
+[
+  {
+    "id": "benign-ct-s3-getobject",
+    "label": "benign",
+    "source": "cloudtrail",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": false,
+    "expect_outcome": null,
+    "note": "Routine read of a report object by an IAM user. No privileged verb, no failure, no approval requirement.",
+    "event": {
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAALICE",
+        "arn": "arn:aws:iam::123:user/alice",
+        "accountId": "123",
+        "userName": "alice"
+      },
+      "eventTime": "2026-01-01T09:15:00Z",
+      "eventSource": "s3.amazonaws.com",
+      "eventName": "GetObject",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "198.51.100.10",
+      "requestParameters": {
+        "bucketName": "arn:aws:s3:::acme-reports",
+        "key": "q1-summary.csv"
+      },
+      "requestID": "req-b1",
+      "eventID": "evt-b1",
+      "readOnly": true,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123",
+      "eventCategory": "Data"
+    }
+  },
+  {
+    "id": "benign-ct-s3-listbucket",
+    "label": "benign",
+    "source": "cloudtrail",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": false,
+    "expect_outcome": null,
+    "note": "Routine bucket listing by an IAM user. Read-only, successful, unprivileged.",
+    "event": {
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAALICE",
+        "arn": "arn:aws:iam::123:user/alice",
+        "accountId": "123",
+        "userName": "alice"
+      },
+      "eventTime": "2026-01-01T09:16:00Z",
+      "eventSource": "s3.amazonaws.com",
+      "eventName": "ListBucket",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "198.51.100.10",
+      "requestParameters": {
+        "bucketName": "arn:aws:s3:::acme-reports",
+        "prefix": "q1/"
+      },
+      "requestID": "req-b2",
+      "eventID": "evt-b2",
+      "readOnly": true,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123",
+      "eventCategory": "Data"
+    }
+  },
+  {
+    "id": "benign-pg-select",
+    "label": "benign",
+    "source": "pgaudit",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": false,
+    "expect_outcome": null,
+    "note": "Ordinary application SELECT against the orders table. Successful, no privilege change.",
+    "log_line": "2026-01-01 09:20:00 UTC: [pid=4242]:app@itsm:db=itsm,user=app,app=client AUDIT: SESSION,1,1,READ,SELECT,TABLE,public.orders,SELECT id, total FROM public.orders WHERE id = 4711,,,"
+  },
+  {
+    "id": "benign-pg-insert",
+    "label": "benign",
+    "source": "pgaudit",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": false,
+    "expect_outcome": null,
+    "note": "Ordinary application INSERT into the audit log table. Successful write, no privilege change.",
+    "log_line": "2026-01-01 09:21:00 UTC: [pid=4242]:app@itsm:db=itsm,user=app,app=client AUDIT: SESSION,2,1,WRITE,INSERT,TABLE,public.audit_log,INSERT INTO public.audit_log (actor, action) VALUES ('app', 'rotate'),,,"
+  },
+  {
+    "id": "benign-github-team-repo-add",
+    "label": "benign",
+    "source": "github",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": false,
+    "expect_outcome": null,
+    "note": "Routine onboarding: an on-call team is granted access to a repository. Not an identity or credential change.",
+    "event": {
+      "_document_id": "gh-b5-0001",
+      "@timestamp": 1767268800000,
+      "action": "team.add_repository",
+      "actor": "alice",
+      "org": "acme",
+      "repo": "acme/payments",
+      "team": "payments-oncall"
+    }
+  },
+  {
+    "id": "benign-ct-ec2-attach-volume",
+    "label": "benign",
+    "source": "cloudtrail",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": false,
+    "expect_outcome": null,
+    "note": "Routine operations work: an engineer attaches an EBS volume to a running instance. It grants no IAM privilege. The escalation rule is a substring heuristic that matches 'attach' inside 'AttachVolume', so this benign action is expected to be reported; it is kept in the dataset so the false-positive rate measures a real rule defect instead of being zero by construction.",
+    "event": {
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAOPS",
+        "arn": "arn:aws:iam::123:user/ops",
+        "accountId": "123",
+        "userName": "ops"
+      },
+      "eventTime": "2026-01-01T09:30:00Z",
+      "eventSource": "ec2.amazonaws.com",
+      "eventName": "AttachVolume",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "198.51.100.11",
+      "requestParameters": {
+        "volumeId": "vol-0a1b2c3d4e5f60718",
+        "instanceId": "i-0123456789abcdef0",
+        "device": "/dev/sdf"
+      },
+      "requestID": "req-b6",
+      "eventID": "evt-b6",
+      "readOnly": false,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123",
+      "eventCategory": "Management"
+    }
+  },
+  {
+    "id": "benign-ct-approved-assumerole",
+    "label": "benign",
+    "source": "cloudtrail",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": false,
+    "expect_outcome": null,
+    "note": "Sanctioned break-glass escalation: a valid, exact-action-bound, unexpired approval exists for this principal, action and resource, so the approval rule must stay silent. The unconditional escalation heuristic does not consult approval evidence and is expected to report anyway; counted as a false positive.",
+    "approvals": [
+      {
+        "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+        "approver": "secops-lead",
+        "action": "AssumeRole",
+        "resource_id": "arn:aws:iam::123:role/Admin",
+        "actor_id": "arn:aws:iam::123:user/dana",
+        "status": "APPROVED",
+        "valid_from": "2026-01-01T11:00:00Z",
+        "valid_to": "2026-01-01T13:00:00Z"
+      }
+    ],
+    "covered_sources": [
+      "cloudtrail"
+    ],
+    "event": {
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDADANA",
+        "arn": "arn:aws:iam::123:user/dana",
+        "accountId": "123",
+        "userName": "dana"
+      },
+      "eventTime": "2026-01-01T12:00:00Z",
+      "eventSource": "sts.amazonaws.com",
+      "eventName": "AssumeRole",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "198.51.100.12",
+      "requestParameters": {
+        "roleArn": "arn:aws:iam::123:role/Admin"
+      },
+      "requestID": "req-b7",
+      "eventID": "evt-b7",
+      "readOnly": false,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123",
+      "eventCategory": "Management"
+    }
+  },
+  {
+    "id": "mal-ct-assumerole-admin",
+    "label": "malicious",
+    "source": "cloudtrail",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": true,
+    "expect_outcome": "SUSPICIOUS",
+    "expect_finding_type": "PRIVILEGE_ESCALATION",
+    "note": "Privilege escalation: an IAM user assumes the Admin role. Approval evidence is not supplied for this scenario, so only the escalation rule is exercised.",
+    "event": {
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAMALLORY",
+        "arn": "arn:aws:iam::123:user/mallory",
+        "accountId": "123",
+        "userName": "mallory"
+      },
+      "eventTime": "2026-01-01T12:00:00Z",
+      "eventSource": "sts.amazonaws.com",
+      "eventName": "AssumeRole",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.5",
+      "requestParameters": {
+        "roleArn": "arn:aws:iam::123:role/Admin"
+      },
+      "requestID": "req-m1",
+      "eventID": "evt-m1",
+      "readOnly": false,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123",
+      "eventCategory": "Management"
+    }
+  },
+  {
+    "id": "mal-ct-missing-approval",
+    "label": "malicious",
+    "source": "cloudtrail",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": true,
+    "expect_outcome": "SUSPICIOUS",
+    "expect_finding_type": "MISSING_APPROVAL",
+    "note": "Same escalation, but the approval store is reachable and holds no approval for it. Source coverage is complete and the identity is known, so the absence of approval is reportable as suspicious rather than as a confirmed violation.",
+    "approvals": [],
+    "covered_sources": [
+      "cloudtrail"
+    ],
+    "event": {
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAMALLORY",
+        "arn": "arn:aws:iam::123:user/mallory",
+        "accountId": "123",
+        "userName": "mallory"
+      },
+      "eventTime": "2026-01-01T12:05:00Z",
+      "eventSource": "sts.amazonaws.com",
+      "eventName": "AssumeRole",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.5",
+      "requestParameters": {
+        "roleArn": "arn:aws:iam::123:role/Admin"
+      },
+      "requestID": "req-m2",
+      "eventID": "evt-m2",
+      "readOnly": false,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123",
+      "eventCategory": "Management"
+    }
+  },
+  {
+    "id": "mal-ct-denied-approval",
+    "label": "malicious",
+    "source": "cloudtrail",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": true,
+    "expect_outcome": "VIOLATION",
+    "expect_finding_type": "DENIED_APPROVAL",
+    "note": "Escalation performed against an explicit approval refusal. The approver rejected the request, so the action is a confirmed violation.",
+    "approvals": [
+      {
+        "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+        "approver": "secops-lead",
+        "action": "AssumeRole",
+        "resource_id": "arn:aws:iam::123:role/Admin",
+        "actor_id": "arn:aws:iam::123:user/eve",
+        "status": "REJECTED",
+        "valid_from": "2026-01-01T11:00:00Z",
+        "valid_to": "2026-01-01T13:00:00Z"
+      }
+    ],
+    "covered_sources": [
+      "cloudtrail"
+    ],
+    "event": {
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAEVE",
+        "arn": "arn:aws:iam::123:user/eve",
+        "accountId": "123",
+        "userName": "eve"
+      },
+      "eventTime": "2026-01-01T12:10:00Z",
+      "eventSource": "sts.amazonaws.com",
+      "eventName": "AssumeRole",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.6",
+      "requestParameters": {
+        "roleArn": "arn:aws:iam::123:role/Admin"
+      },
+      "requestID": "req-m3",
+      "eventID": "evt-m3",
+      "readOnly": false,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123",
+      "eventCategory": "Management"
+    }
+  },
+  {
+    "id": "mal-ct-mismatched-approval",
+    "label": "malicious",
+    "source": "cloudtrail",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": true,
+    "expect_outcome": "VIOLATION",
+    "expect_finding_type": "APPROVAL_MISMATCH",
+    "note": "Escalation covered by an approval for a different role. An approval must be exact-action-bound, so this approval does not authorize the action.",
+    "approvals": [
+      {
+        "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+        "approver": "secops-lead",
+        "action": "AssumeRole",
+        "resource_id": "arn:aws:iam::123:role/ReadOnly",
+        "actor_id": "arn:aws:iam::123:user/mallory",
+        "status": "APPROVED",
+        "valid_from": "2026-01-01T11:00:00Z",
+        "valid_to": "2026-01-01T13:00:00Z"
+      }
+    ],
+    "covered_sources": [
+      "cloudtrail"
+    ],
+    "event": {
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAMALLORY",
+        "arn": "arn:aws:iam::123:user/mallory",
+        "accountId": "123",
+        "userName": "mallory"
+      },
+      "eventTime": "2026-01-01T12:15:00Z",
+      "eventSource": "sts.amazonaws.com",
+      "eventName": "AssumeRole",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.5",
+      "requestParameters": {
+        "roleArn": "arn:aws:iam::123:role/Admin"
+      },
+      "requestID": "req-m4",
+      "eventID": "evt-m4",
+      "readOnly": false,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123",
+      "eventCategory": "Management"
+    }
+  },
+  {
+    "id": "mal-ct-cross-tenant-approval",
+    "label": "malicious",
+    "source": "cloudtrail",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": true,
+    "expect_outcome": "SUSPICIOUS",
+    "expect_finding_type": "MISSING_APPROVAL",
+    "note": "An approval that belongs to a different tenant exists for the same action. Tenant isolation must reject it, so the action is treated as unapproved rather than authorised.",
+    "approvals": [
+      {
+        "tenant_id": "1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d",
+        "approver": "other-tenant-lead",
+        "action": "AssumeRole",
+        "resource_id": "arn:aws:iam::123:role/Admin",
+        "actor_id": "arn:aws:iam::123:user/mallory",
+        "status": "APPROVED",
+        "valid_from": "2026-01-01T11:00:00Z",
+        "valid_to": "2026-01-01T13:00:00Z"
+      }
+    ],
+    "covered_sources": [
+      "cloudtrail"
+    ],
+    "event": {
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAMALLORY",
+        "arn": "arn:aws:iam::123:user/mallory",
+        "accountId": "123",
+        "userName": "mallory"
+      },
+      "eventTime": "2026-01-01T12:20:00Z",
+      "eventSource": "sts.amazonaws.com",
+      "eventName": "AssumeRole",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.5",
+      "requestParameters": {
+        "roleArn": "arn:aws:iam::123:role/Admin"
+      },
+      "requestID": "req-m5",
+      "eventID": "evt-m5",
+      "readOnly": false,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123",
+      "eventCategory": "Management"
+    }
+  },
+  {
+    "id": "mal-ct-identity-ambiguous",
+    "label": "malicious",
+    "source": "cloudtrail",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": true,
+    "expect_outcome": "INCONCLUSIVE",
+    "expect_finding_type": "UNRESOLVED_IDENTITY",
+    "forbid_outcomes": [
+      "VIOLATION"
+    ],
+    "note": "Escalation whose acting principal cannot be resolved (service identity without an ARN or principal id). Approval evidence cannot be attributed, so the deterministic layer must preserve the uncertainty instead of confirming a violation.",
+    "approvals": [],
+    "covered_sources": [
+      "cloudtrail"
+    ],
+    "event": {
+      "userIdentity": {
+        "type": "AWSService",
+        "invokedBy": "arn:aws:iam::123:role/LegacyPipeline"
+      },
+      "eventTime": "2026-01-01T12:25:00Z",
+      "eventSource": "sts.amazonaws.com",
+      "eventName": "AssumeRole",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.7",
+      "requestParameters": {
+        "roleArn": "arn:aws:iam::123:role/Admin"
+      },
+      "requestID": "req-m6",
+      "eventID": "evt-m6",
+      "readOnly": false,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123",
+      "eventCategory": "Management"
+    }
+  },
+  {
+    "id": "mal-ct-coverage-gap",
+    "label": "malicious",
+    "source": "cloudtrail",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": true,
+    "expect_outcome": "COVERAGE_GAP",
+    "expect_finding_type": "COVERAGE_GAP",
+    "forbid_outcomes": [
+      "VIOLATION"
+    ],
+    "note": "Escalation observed while the CloudTrail source is not covered end to end (a delayed/missing event window). With incomplete coverage the layer must report a coverage gap rather than accuse a principal of a confirmed violation.",
+    "approvals": [],
+    "covered_sources": [],
+    "event": {
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAMALLORY",
+        "arn": "arn:aws:iam::123:user/mallory",
+        "accountId": "123",
+        "userName": "mallory"
+      },
+      "eventTime": "2026-01-01T12:30:00Z",
+      "eventSource": "sts.amazonaws.com",
+      "eventName": "AssumeRole",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.5",
+      "requestParameters": {
+        "roleArn": "arn:aws:iam::123:role/Admin"
+      },
+      "requestID": "req-m7",
+      "eventID": "evt-m7",
+      "readOnly": false,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123",
+      "eventCategory": "Management"
+    }
+  },
+  {
+    "id": "mal-ct-access-denied",
+    "label": "malicious",
+    "source": "cloudtrail",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": true,
+    "expect_outcome": "SUSPICIOUS",
+    "expect_finding_type": "FAILED_ACCESS",
+    "note": "Unauthorised object read rejected by the data plane. A denied access is reported as suspicious rather than as a confirmed violation.",
+    "event": {
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAMALLORY",
+        "arn": "arn:aws:iam::123:user/mallory",
+        "accountId": "123",
+        "userName": "mallory"
+      },
+      "eventTime": "2026-01-01T12:35:00Z",
+      "eventSource": "s3.amazonaws.com",
+      "eventName": "GetObject",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.8",
+      "requestParameters": {
+        "bucketName": "arn:aws:s3:::acme-secrets",
+        "key": "prod/master.key"
+      },
+      "requestID": "req-m8",
+      "eventID": "evt-m8",
+      "readOnly": true,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123",
+      "eventCategory": "Data",
+      "errorCode": "AccessDenied",
+      "errorMessage": "Access Denied"
+    }
+  },
+  {
+    "id": "mal-pg-alter-role-superuser",
+    "label": "malicious",
+    "source": "pgaudit",
+    "tenant_id": "0f9d5b3e-6c1a-4f2b-9a77-3d5c8b2e1f00",
+    "expect_finding": true,
+    "expect_outcome": null,
+    "expect_finding_type": null,
+    "known_gap": true,
+    "note": "Database privilege escalation: a deployment account grants SUPERUSER to the application role. The deterministic rule set has no PostgreSQL privilege rule, so this scenario is expected to produce no finding. It is labelled known_gap so the miss is reported instead of being hidden.",
+    "log_line": "2026-01-01 09:40:00 UTC: [pid=5150]:deploy@itsm:db=itsm,user=deploy,app=client AUDIT: SESSION,7,1,WRITE,ALTER ROLE,ROLE,postgres,ALTER ROLE app WITH SUPERUSER,,,"
+  }
+]
