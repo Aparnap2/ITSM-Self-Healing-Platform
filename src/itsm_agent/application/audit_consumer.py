@@ -22,10 +22,47 @@ from itsm_agent.adapters.persistence.repositories import (
 )
 from itsm_agent.adapters.persistence.tenant import tenant_transaction
 from itsm_agent.domain.events import SourceEvent
+from itsm_agent.domain.investigation_policy import should_investigate
+from itsm_agent.domain.models import Finding
 
 logger = logging.getLogger(__name__)
 
 PROCESSING_VERSION = "detection-v1"
+
+#: Actor recorded on investigation requests raised by the detection pipeline.
+INVESTIGATION_REQUESTER = "detection-pipeline"
+
+
+async def _run_investigation_stage(
+    *,
+    tenant_id: UUID,
+    findings: list[Finding],
+    service: Any | None,
+    enabled: bool,
+) -> None:
+    """Run the optional agentic investigation stage for selected findings.
+
+    The stage is advisory and optional. Detection is the source of truth, so a
+    failure here is logged and swallowed: it must never undo or hide the
+    deterministic detection result. Each request is written in its own
+    tenant-scoped transaction (inside the ledger repository), after the
+    detection transaction has committed.
+    """
+    if service is None:
+        logger.warning("investigation stage enabled but no service configured; skipping")
+        return
+    for finding in findings:
+        if not should_investigate(finding, enabled=enabled):
+            continue
+        try:
+            await service.investigate_finding(
+                tenant_id=tenant_id,
+                finding=finding,
+                evidence_snapshot_ids=(),
+                requested_by=INVESTIGATION_REQUESTER,
+            )
+        except Exception as exc:  # noqa: BLE001 - detection stays authoritative
+            logger.warning("investigation stage failed for finding %s: %s", finding.id, exc)
 
 
 async def process_source_event(
@@ -39,11 +76,17 @@ async def process_source_event(
     source_coverage: object = None,
     processing_version: str = PROCESSING_VERSION,
     clock_now: Callable[[], datetime],
+    investigation_enabled: bool = False,
+    investigation_service: Any | None = None,
 ) -> tuple[bool, list[UUID]]:
     """Process one source event into findings. Returns (already_processed, finding_ids).
 
     Idempotent: a COMPLETED processing record short-circuits. All writes happen
     in a single PostgreSQL transaction.
+
+    The optional investigation stage (``investigation_enabled``) runs AFTER that
+    transaction commits, in its own tenant-scoped transaction, so a failed
+    investigation can never roll back detection.
     """
     from itsm_agent.detection.engine import run_detection
 
@@ -54,6 +97,7 @@ async def process_source_event(
     src_repo = PsycopgSourceEventRepository(pool)
     failure: Exception | None = None
     result: tuple[bool, list[UUID]] = (False, [])
+    persisted_findings: list[Finding] = []
     async with tenant_transaction(pool, event.tenant_id) as conn:
         canonical = await src_repo.get_for_tenant(
             event.tenant_id,
@@ -100,6 +144,9 @@ async def process_source_event(
                 for f in findings:
                     persisted = await findings_repo.upsert(f, conn=conn)
                     finding_ids.append(persisted.id)
+                    # The persisted finding is authoritative: ``upsert`` may
+                    # return a different id when the finding already exists.
+                    persisted_findings.append(persisted)
                 await processing_repo.complete(
                     record_id,
                     finding_ids,
@@ -120,6 +167,15 @@ async def process_source_event(
                 )
     if failure is not None:
         raise failure
+    if investigation_enabled and not result[0]:
+        # Runs AFTER the detection transaction committed, in its own
+        # tenant-scoped transaction.
+        await _run_investigation_stage(
+            tenant_id=tenant_id,
+            findings=persisted_findings,
+            service=investigation_service,
+            enabled=investigation_enabled,
+        )
     return result
 
 
@@ -134,6 +190,8 @@ async def consume_source_event(
     source_coverage: object = None,
     processing_version: str = PROCESSING_VERSION,
     clock_now: Callable[[], datetime],
+    investigation_enabled: bool = False,
+    investigation_service: Any | None = None,
     max_deliver: int = 5,
     timeout_seconds: float = 1.0,
 ) -> str:
@@ -168,6 +226,8 @@ async def consume_source_event(
             source_coverage=source_coverage,
             processing_version=processing_version,
             clock_now=clock_now,
+            investigation_enabled=investigation_enabled,
+            investigation_service=investigation_service,
         )
     except RuntimeError as exc:
         # Retryable (processing in progress / transient).

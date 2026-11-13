@@ -63,6 +63,9 @@ TENANT_RLS_TABLES: tuple[str, ...] = (
     "erasure_tombstones",
     "retention_policies",
     "legal_holds",
+    "finding_transitions",
+    "investigation_requests",
+    "investigation_proposals",
 )
 
 #: Tables the runtime role must be able to read and write (append-only tables
@@ -89,6 +92,9 @@ APPEND_ONLY_TABLES: tuple[str, ...] = (
     "source_events",
     "audit_events",
     "erasure_tombstones",
+    "finding_transitions",
+    "investigation_requests",
+    "investigation_proposals",
 )
 
 

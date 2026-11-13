@@ -36,9 +36,11 @@ closed with `503`; the router never serves unauthenticated data.
 | GET | `/v1/findings/{finding_id}` | `findings:read`, `decisions:read` | `200` JSON object |
 | POST | `/v1/findings/{finding_id}/decisions` | `decisions:write` + permission for the decision type | `201` |
 | GET | `/v1/findings/{finding_id}/decisions` | `decisions:read` | `200` JSON array |
+| GET | `/v1/findings/{finding_id}/transitions` | `findings:read` | `200` JSON array |
 | GET | `/v1/findings/{finding_id}/bundle` | `findings:read`, `decisions:read` | `200` JSON object |
 
-There is no finding-status transition endpoint; see §9.
+Lifecycle transitions are applied by `POST /v1/findings/{finding_id}/transition`
+(§2b).
 
 ### 2a. Evidence bundle
 
@@ -61,6 +63,45 @@ The route fails closed with `503` when the evidence-reference store is not
 wired, returns `401`/`403`/`404` the same way the single-finding endpoint does,
 and requires the same `tenant_id` query parameter. Refusal reasons follow the
 standard status table (§7).
+
+### 2b. Lifecycle transition
+
+`POST /v1/findings/{finding_id}/transition?tenant_id=...` applies one
+lifecycle transition to a finding.
+
+Request body (strict; unknown fields rejected, so a caller cannot smuggle an
+actor):
+
+```json
+{"to_status": "RESOLVED", "reason": "admin role revoked and verified in IAM"}
+```
+
+- `to_status` is one of the allowlisted lifecycle statuses; `reason` is
+  required and non-empty (max 1000 characters).
+- The actor is taken from the verified credential. `reviewer_id` is not
+  accepted in the body.
+- Permissions: `finding:transition` for every target except `VERIFIED`, which
+  requires the stronger `finding:verify`. Both are granted to `reviewer` and
+  `admin`; `auditor` and `analyst` hold neither.
+- The transition graph itself lives in
+  `itsm_agent.domain.finding_lifecycle` and is enforced server-side: an
+  illegal edge, a terminal source status, an unknown status, or a missing
+  reason is refused. Authorization never depends on mutable finding state, and
+  a proposed transition is never itself authorization.
+- `VERIFIED` additionally requires an **independent verifier**: the actor that
+  performed the `RESOLVED` close-out cannot verify it. A finding resolved
+  before the ledger existed has no recorded close-out actor, so it fails
+  closed rather than assuming one.
+- Every applied transition appends one row to the `finding_transitions`
+  ledger (append-only, tenant-isolated). `GET
+  /v1/findings/{finding_id}/transitions` returns that history, newest first.
+
+Responses: `200` with the updated finding; `401` missing/invalid credential;
+`403` tenant not in the principal's memberships or missing permission;
+`404` finding not found for that tenant; `409` illegal transition or
+non-independent verifier (the body carries the machine-readable `code`);
+`422` invalid body; `503` transition store not configured. No write happens on
+any refusal.
 
 ## 3. Authentication and tenant scoping
 
@@ -218,8 +259,10 @@ Authorization happens before any write: an under-privileged or cross-tenant
 - **No update or delete.** The repository exposes only `INSERT` and `SELECT`;
   append-only is enforced by the application and by the absence of routes,
   not by a database trigger on `review_decisions`.
-- **No finding status transition.** Recording a decision does not change
-  `findings.status`.
+- **No finding status transition on a decision.** Recording a reviewer
+  decision does not change `findings.status`; lifecycle status changes only
+  through the transition endpoint (§2b), which requires its own permission
+  and records an append-only ledger row.
 - **No evidence-link validation.** `evidence_pack_ref` is stored as an opaque
   optional string and is not resolved against an evidence bundle.
 - **No rate limiting.** The sliding-window limiter is wired to the ingestion

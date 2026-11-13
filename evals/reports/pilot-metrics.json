@@ -1,0 +1,515 @@
+{
+  "artifact_version": "1.0",
+  "dataset": {
+    "path": "evals/datasets/pilot_scenarios.json",
+    "scenario_count": 16,
+    "sha256": "48ad14f9d0a18871f8ab832f4e092f59566d1fffec8bc7483efe9339ed27e226"
+  },
+  "latency": {
+    "max_ms": 0.0596,
+    "mean_ms": 0.0448,
+    "measurement": "monotonic clock (time.perf_counter_ns) around normalize + detect",
+    "min_ms": 0.0245,
+    "p50_ms": 0.0464,
+    "p95_ms": 0.0595,
+    "per_scenario_ms": {
+      "benign-ct-approved-assumerole": 0.0546,
+      "benign-ct-ec2-attach-volume": 0.0357,
+      "benign-ct-s3-getobject": 0.0289,
+      "benign-ct-s3-listbucket": 0.0245,
+      "benign-github-team-repo-add": 0.0256,
+      "benign-pg-insert": 0.0446,
+      "benign-pg-select": 0.0481,
+      "mal-ct-access-denied": 0.0367,
+      "mal-ct-assumerole-admin": 0.0339,
+      "mal-ct-coverage-gap": 0.0595,
+      "mal-ct-cross-tenant-approval": 0.0577,
+      "mal-ct-denied-approval": 0.059,
+      "mal-ct-identity-ambiguous": 0.0596,
+      "mal-ct-mismatched-approval": 0.0554,
+      "mal-ct-missing-approval": 0.0412,
+      "mal-pg-alter-role-superuser": 0.0519
+    },
+    "scenario_count": 16,
+    "unit": "milliseconds",
+    "warm_up_pass": "one unmeasured pass over the same dataset precedes the measured pass so that one-off first-call costs are not attributed to scenario latency"
+  },
+  "limitations": [
+    "Simulated sources only: no real tenant, no production telemetry.",
+    "Small labelled dataset: these rates are not statistically meaningful benchmarks.",
+    "Measures the deterministic detection layer only; the agentic investigation layer is not exercised by these numbers.",
+    "Not a certification and not a production-readiness claim.",
+    "No real approval, identity or ITSM system was consulted."
+  ],
+  "measured_on": "2026-11-13",
+  "method": {
+    "detected_definition": "a malicious scenario counts as detected when the engine produces at least one finding whose finding_type and outcome satisfy the scenario's expect_finding_type and expect_outcome",
+    "environment": {
+      "data": "simulated only",
+      "database": "not used",
+      "llm": "not used",
+      "network": "not used"
+    },
+    "evidence_preservation_definition": "a finding preserves evidence when the evidence bundle built for it carries the content hash of the raw source record that produced it",
+    "false_positive_definition": "a benign scenario counts as a false positive when the engine produces any finding at all",
+    "false_positive_rate_definition": "benign scenarios producing any finding / all labelled benign scenarios",
+    "latency_measurement": "monotonic clock (time.perf_counter_ns) around normalize + detect, per scenario; one unmeasured warm-up pass over the same dataset precedes the measured pass",
+    "layer_measured": "deterministic detection layer (itsm_agent.detection.engine)",
+    "matched_finding_ratio_definition": "share of the findings raised on malicious scenarios that match the scenario's expected finding type and outcome; the remainder are extra findings the engine raised alongside the expected one (for example the generic escalation heuristic in addition to the specific approval finding)",
+    "recall_definition": "detected malicious scenarios / all labelled malicious scenarios",
+    "recall_supported_rules_definition": "detected malicious scenarios / malicious scenarios that the current rule set claims to support (scenarios flagged known_gap are excluded)",
+    "reproduce_command": "uv run pytest tests/e2e/test_pilot_metrics.py -q",
+    "scenario_source": "hand-labelled simulated pilot dataset (no production data)"
+  },
+  "metrics": {
+    "benign_scenario_count": 7,
+    "detection": {
+      "false_negative_scenarios": 1,
+      "false_positive_rate": 0.2857,
+      "false_positive_scenarios": 2,
+      "precision": 0.8,
+      "recall": 0.8889,
+      "recall_supported_rules": 1.0,
+      "true_negative_scenarios": 5,
+      "true_positive_scenarios": 8
+    },
+    "false_positive_breakdown_by_finding_type": {
+      "PRIVILEGE_ESCALATION": 2
+    },
+    "findings": {
+      "evidence_preservation_ratio": 1.0,
+      "findings_matching_expectation": 8,
+      "findings_on_malicious_scenarios": 14,
+      "findings_with_evidence": 16,
+      "findings_without_evidence": 0,
+      "matched_finding_ratio": 0.5714,
+      "total_findings": 16
+    },
+    "known_gap_scenario_count": 1,
+    "malicious_scenario_count": 9,
+    "scenario_count": 16,
+    "scenarios": [
+      {
+        "evidence_content_hashes": [
+          "2b64d96edab173d67e390fbbd86497a4bf7fac69de87b90fae31cc466d3c02aa"
+        ],
+        "expect_finding": false,
+        "expect_finding_type": null,
+        "expect_outcome": null,
+        "false_negative": false,
+        "false_positive": true,
+        "finding_count": 1,
+        "finding_outcomes": [
+          "SUSPICIOUS"
+        ],
+        "finding_types": [
+          "PRIVILEGE_ESCALATION"
+        ],
+        "findings_with_evidence": 1,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "benign-ct-approved-assumerole",
+        "known_gap": false,
+        "label": "benign",
+        "matched_expectation": null,
+        "matching_finding_count": 0,
+        "produced_finding": true,
+        "source": "cloudtrail"
+      },
+      {
+        "evidence_content_hashes": [
+          "9a4e6e5d919458fc74a38693e5f225942c335d5d82f79ed334e14a60e720ee01"
+        ],
+        "expect_finding": false,
+        "expect_finding_type": null,
+        "expect_outcome": null,
+        "false_negative": false,
+        "false_positive": true,
+        "finding_count": 1,
+        "finding_outcomes": [
+          "SUSPICIOUS"
+        ],
+        "finding_types": [
+          "PRIVILEGE_ESCALATION"
+        ],
+        "findings_with_evidence": 1,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "benign-ct-ec2-attach-volume",
+        "known_gap": false,
+        "label": "benign",
+        "matched_expectation": null,
+        "matching_finding_count": 0,
+        "produced_finding": true,
+        "source": "cloudtrail"
+      },
+      {
+        "evidence_content_hashes": [
+          "3c7883b5747743a379f1436e6bced1bf91d04688790a8396ce88f5ea41e306d7"
+        ],
+        "expect_finding": false,
+        "expect_finding_type": null,
+        "expect_outcome": null,
+        "false_negative": false,
+        "false_positive": false,
+        "finding_count": 0,
+        "finding_outcomes": [],
+        "finding_types": [],
+        "findings_with_evidence": 0,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "benign-ct-s3-getobject",
+        "known_gap": false,
+        "label": "benign",
+        "matched_expectation": null,
+        "matching_finding_count": 0,
+        "produced_finding": false,
+        "source": "cloudtrail"
+      },
+      {
+        "evidence_content_hashes": [
+          "89941592f1866918c57c27b7bf7b354dcc83a92fbbe9a97465b72dcdb0c77f79"
+        ],
+        "expect_finding": false,
+        "expect_finding_type": null,
+        "expect_outcome": null,
+        "false_negative": false,
+        "false_positive": false,
+        "finding_count": 0,
+        "finding_outcomes": [],
+        "finding_types": [],
+        "findings_with_evidence": 0,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "benign-ct-s3-listbucket",
+        "known_gap": false,
+        "label": "benign",
+        "matched_expectation": null,
+        "matching_finding_count": 0,
+        "produced_finding": false,
+        "source": "cloudtrail"
+      },
+      {
+        "evidence_content_hashes": [
+          "5ad4df5360539aa509bbc557084ce168c0bb4d74bb93fe1b835838cd62fb946f"
+        ],
+        "expect_finding": false,
+        "expect_finding_type": null,
+        "expect_outcome": null,
+        "false_negative": false,
+        "false_positive": false,
+        "finding_count": 0,
+        "finding_outcomes": [],
+        "finding_types": [],
+        "findings_with_evidence": 0,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "benign-github-team-repo-add",
+        "known_gap": false,
+        "label": "benign",
+        "matched_expectation": null,
+        "matching_finding_count": 0,
+        "produced_finding": false,
+        "source": "github"
+      },
+      {
+        "evidence_content_hashes": [
+          "d0b7f859a0db5916fc52448603925f7aaaacba07c18830f60619f59fa0fee9dd"
+        ],
+        "expect_finding": false,
+        "expect_finding_type": null,
+        "expect_outcome": null,
+        "false_negative": false,
+        "false_positive": false,
+        "finding_count": 0,
+        "finding_outcomes": [],
+        "finding_types": [],
+        "findings_with_evidence": 0,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "benign-pg-insert",
+        "known_gap": false,
+        "label": "benign",
+        "matched_expectation": null,
+        "matching_finding_count": 0,
+        "produced_finding": false,
+        "source": "pgaudit"
+      },
+      {
+        "evidence_content_hashes": [
+          "e1266f3bf88fb0fe1cd54ed399e44d1d5b7032e71db4b990d6f236bb65d9e8dd"
+        ],
+        "expect_finding": false,
+        "expect_finding_type": null,
+        "expect_outcome": null,
+        "false_negative": false,
+        "false_positive": false,
+        "finding_count": 0,
+        "finding_outcomes": [],
+        "finding_types": [],
+        "findings_with_evidence": 0,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "benign-pg-select",
+        "known_gap": false,
+        "label": "benign",
+        "matched_expectation": null,
+        "matching_finding_count": 0,
+        "produced_finding": false,
+        "source": "pgaudit"
+      },
+      {
+        "evidence_content_hashes": [
+          "8b36246ddb0f6e2e4371d436af237e4d288825b96a6a0da54e95a39bdfaaac64"
+        ],
+        "expect_finding": true,
+        "expect_finding_type": "FAILED_ACCESS",
+        "expect_outcome": "SUSPICIOUS",
+        "false_negative": false,
+        "false_positive": false,
+        "finding_count": 1,
+        "finding_outcomes": [
+          "SUSPICIOUS"
+        ],
+        "finding_types": [
+          "FAILED_ACCESS"
+        ],
+        "findings_with_evidence": 1,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "mal-ct-access-denied",
+        "known_gap": false,
+        "label": "malicious",
+        "matched_expectation": true,
+        "matching_finding_count": 1,
+        "produced_finding": true,
+        "source": "cloudtrail"
+      },
+      {
+        "evidence_content_hashes": [
+          "63b4bd6c82f6d2966afa66241f268a8a18d4c4c8f57eef8716cc5d310c4ea2db"
+        ],
+        "expect_finding": true,
+        "expect_finding_type": "PRIVILEGE_ESCALATION",
+        "expect_outcome": "SUSPICIOUS",
+        "false_negative": false,
+        "false_positive": false,
+        "finding_count": 1,
+        "finding_outcomes": [
+          "SUSPICIOUS"
+        ],
+        "finding_types": [
+          "PRIVILEGE_ESCALATION"
+        ],
+        "findings_with_evidence": 1,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "mal-ct-assumerole-admin",
+        "known_gap": false,
+        "label": "malicious",
+        "matched_expectation": true,
+        "matching_finding_count": 1,
+        "produced_finding": true,
+        "source": "cloudtrail"
+      },
+      {
+        "evidence_content_hashes": [
+          "98571d1cbaa42c9e9695658a522be169b378c425a15ad9e5846bb211b05f9885"
+        ],
+        "expect_finding": true,
+        "expect_finding_type": "COVERAGE_GAP",
+        "expect_outcome": "COVERAGE_GAP",
+        "false_negative": false,
+        "false_positive": false,
+        "finding_count": 2,
+        "finding_outcomes": [
+          "COVERAGE_GAP",
+          "SUSPICIOUS"
+        ],
+        "finding_types": [
+          "COVERAGE_GAP",
+          "PRIVILEGE_ESCALATION"
+        ],
+        "findings_with_evidence": 2,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "mal-ct-coverage-gap",
+        "known_gap": false,
+        "label": "malicious",
+        "matched_expectation": true,
+        "matching_finding_count": 1,
+        "produced_finding": true,
+        "source": "cloudtrail"
+      },
+      {
+        "evidence_content_hashes": [
+          "016da721f4c7e9292c835647c5d6b0da2b4b7b75868c0926acdc5439ed59353d"
+        ],
+        "expect_finding": true,
+        "expect_finding_type": "MISSING_APPROVAL",
+        "expect_outcome": "SUSPICIOUS",
+        "false_negative": false,
+        "false_positive": false,
+        "finding_count": 2,
+        "finding_outcomes": [
+          "SUSPICIOUS",
+          "SUSPICIOUS"
+        ],
+        "finding_types": [
+          "MISSING_APPROVAL",
+          "PRIVILEGE_ESCALATION"
+        ],
+        "findings_with_evidence": 2,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "mal-ct-cross-tenant-approval",
+        "known_gap": false,
+        "label": "malicious",
+        "matched_expectation": true,
+        "matching_finding_count": 1,
+        "produced_finding": true,
+        "source": "cloudtrail"
+      },
+      {
+        "evidence_content_hashes": [
+          "e2bfb9af80863399ea84fd431705d4f8c0fd499dd4c0061738a5074b985f0ac2"
+        ],
+        "expect_finding": true,
+        "expect_finding_type": "DENIED_APPROVAL",
+        "expect_outcome": "VIOLATION",
+        "false_negative": false,
+        "false_positive": false,
+        "finding_count": 2,
+        "finding_outcomes": [
+          "SUSPICIOUS",
+          "VIOLATION"
+        ],
+        "finding_types": [
+          "DENIED_APPROVAL",
+          "PRIVILEGE_ESCALATION"
+        ],
+        "findings_with_evidence": 2,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "mal-ct-denied-approval",
+        "known_gap": false,
+        "label": "malicious",
+        "matched_expectation": true,
+        "matching_finding_count": 1,
+        "produced_finding": true,
+        "source": "cloudtrail"
+      },
+      {
+        "evidence_content_hashes": [
+          "5662643965fa87e896a3c6abadb7405c6715a2c417d8f6cc6641066d4f5ad7fa"
+        ],
+        "expect_finding": true,
+        "expect_finding_type": "UNRESOLVED_IDENTITY",
+        "expect_outcome": "INCONCLUSIVE",
+        "false_negative": false,
+        "false_positive": false,
+        "finding_count": 2,
+        "finding_outcomes": [
+          "INCONCLUSIVE",
+          "SUSPICIOUS"
+        ],
+        "finding_types": [
+          "PRIVILEGE_ESCALATION",
+          "UNRESOLVED_IDENTITY"
+        ],
+        "findings_with_evidence": 2,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "mal-ct-identity-ambiguous",
+        "known_gap": false,
+        "label": "malicious",
+        "matched_expectation": true,
+        "matching_finding_count": 1,
+        "produced_finding": true,
+        "source": "cloudtrail"
+      },
+      {
+        "evidence_content_hashes": [
+          "cf60c26eb96ef761e277900915b3275229f5d733621846df6eb0015b6dac0ba3"
+        ],
+        "expect_finding": true,
+        "expect_finding_type": "APPROVAL_MISMATCH",
+        "expect_outcome": "VIOLATION",
+        "false_negative": false,
+        "false_positive": false,
+        "finding_count": 2,
+        "finding_outcomes": [
+          "SUSPICIOUS",
+          "VIOLATION"
+        ],
+        "finding_types": [
+          "APPROVAL_MISMATCH",
+          "PRIVILEGE_ESCALATION"
+        ],
+        "findings_with_evidence": 2,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "mal-ct-mismatched-approval",
+        "known_gap": false,
+        "label": "malicious",
+        "matched_expectation": true,
+        "matching_finding_count": 1,
+        "produced_finding": true,
+        "source": "cloudtrail"
+      },
+      {
+        "evidence_content_hashes": [
+          "ee354ada8ceec76daf440571f975a388d7f73548cf0aec1dc0943afe93d457c7"
+        ],
+        "expect_finding": true,
+        "expect_finding_type": "MISSING_APPROVAL",
+        "expect_outcome": "SUSPICIOUS",
+        "false_negative": false,
+        "false_positive": false,
+        "finding_count": 2,
+        "finding_outcomes": [
+          "SUSPICIOUS",
+          "SUSPICIOUS"
+        ],
+        "finding_types": [
+          "MISSING_APPROVAL",
+          "PRIVILEGE_ESCALATION"
+        ],
+        "findings_with_evidence": 2,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "mal-ct-missing-approval",
+        "known_gap": false,
+        "label": "malicious",
+        "matched_expectation": true,
+        "matching_finding_count": 1,
+        "produced_finding": true,
+        "source": "cloudtrail"
+      },
+      {
+        "evidence_content_hashes": [
+          "8c018748c5dd931b31c9d2293030caa3a962e8ecde34dbc635643632cea7f67c"
+        ],
+        "expect_finding": true,
+        "expect_finding_type": null,
+        "expect_outcome": null,
+        "false_negative": true,
+        "false_positive": false,
+        "finding_count": 0,
+        "finding_outcomes": [],
+        "finding_types": [],
+        "findings_with_evidence": 0,
+        "findings_without_evidence": 0,
+        "forbidden_outcome_violations": [],
+        "id": "mal-pg-alter-role-superuser",
+        "known_gap": true,
+        "label": "malicious",
+        "matched_expectation": false,
+        "matching_finding_count": 0,
+        "produced_finding": false,
+        "source": "pgaudit"
+      }
+    ]
+  },
+  "rule_version": "detection-rules-v1"
+}

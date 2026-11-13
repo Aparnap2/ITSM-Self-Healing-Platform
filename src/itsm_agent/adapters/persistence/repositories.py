@@ -23,13 +23,23 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from psycopg import AsyncConnection
+from psycopg import AsyncConnection, AsyncCursor
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from itsm_agent.adapters.persistence.tenant import tenant_transaction
-from itsm_agent.domain.events import SourceEvent
+from itsm_agent.domain.events import InvestigationProposal, InvestigationRequest, SourceEvent
+from itsm_agent.domain.finding_lifecycle import (
+    FindingStatus,
+    FindingTransition,
+    assert_verifier_independent,
+    validate_transition,
+)
+from itsm_agent.domain.investigation_policy import (
+    InvestigationProposalRecord,
+    InvestigationRequestRecord,
+)
 from itsm_agent.domain.models import (
     EvidenceReference,
     Finding,
@@ -861,6 +871,365 @@ class PsycopgReviewDecisionRepository(_BaseRepository):
                 decided_at=r["decided_at"],
                 rationale=r["rationale"],
                 evidence_pack_ref=r["evidence_pack_ref"],
+            )
+            for r in rows
+        ]
+
+
+class PsycopgInvestigationRepository(_BaseRepository):
+    """Append-only ledger of investigation requests and proposals.
+
+    The ledger records what the optional agentic stage was asked and what it
+    proposed. It never carries authority over the finding lifecycle: a recorded
+    ``recommended_disposition`` is stored verbatim and is never applied to
+    ``findings.status``.
+
+    Append-only semantics: a request row is never rewritten. The canonical row
+    carries the request identity (``id == investigation_id``); a stage that ran
+    a model leaves a ``REQUESTED`` row followed by an appended terminal row.
+    """
+
+    _STATUSES = ("REQUESTED", "COMPLETED", "SKIPPED", "FAILED")
+
+    async def record_request(
+        self,
+        request: InvestigationRequest,
+        *,
+        requested_by: str,
+        status: str = "REQUESTED",
+        row_id: UUID | None = None,
+        created_at: datetime | None = None,
+        conn: AsyncConnection | None = None,
+    ) -> InvestigationRequestRecord:
+        """Append one request-state row.
+
+        ``requested_by`` is required because it is a NOT NULL ledger column and
+        the domain request model carries no actor. ``row_id`` defaults to the
+        request identity; a terminal row is appended under its own id so the
+        canonical row is never updated.
+        """
+        if status not in self._STATUSES:
+            raise ValueError(f"invalid investigation request status: {status}")
+        record_id = row_id or request.investigation_id
+        when = created_at or _utcnow()
+        async with (
+            self._session_for(request.tenant_id, conn) as c,
+            c.cursor(row_factory=dict_row) as cur,
+        ):
+            await cur.execute(
+                """
+                INSERT INTO investigation_requests (
+                    id, tenant_id, finding_id, requested_by, question,
+                    evidence_snapshot_ids, max_tool_calls, max_model_calls,
+                    status, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO NOTHING
+                RETURNING id, tenant_id, finding_id, requested_by, question,
+                          evidence_snapshot_ids, max_tool_calls, max_model_calls,
+                          status, created_at
+                """,
+                (
+                    record_id,
+                    request.tenant_id,
+                    request.finding_id,
+                    requested_by,
+                    request.question,
+                    list(request.evidence_snapshot_ids),
+                    request.max_tool_calls,
+                    request.max_model_calls,
+                    status,
+                    when,
+                ),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                # Already recorded (idempotent re-run): read the durable row.
+                await cur.execute(
+                    """
+                    SELECT id, tenant_id, finding_id, requested_by, question,
+                           evidence_snapshot_ids, max_tool_calls, max_model_calls,
+                           status, created_at
+                    FROM investigation_requests
+                    WHERE tenant_id = %s AND id = %s
+                    """,
+                    (request.tenant_id, record_id),
+                )
+                row = await cur.fetchone()
+        if row is None:  # pragma: no cover - the row was written or read above
+            raise LookupError(f"investigation request not recorded: {record_id}")
+        return _investigation_request_from_row(row)
+
+    async def record_proposal(
+        self,
+        proposal: InvestigationProposal,
+        *,
+        tenant_id: UUID,
+        request_id: UUID,
+        finding_id: UUID,
+        model_calls_used: int,
+        created_at: datetime | None = None,
+        conn: AsyncConnection | None = None,
+    ) -> InvestigationProposalRecord:
+        """Append one proposal row (the model's opinion, stored verbatim)."""
+        record_id = uuid4()
+        when = created_at or _utcnow()
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                INSERT INTO investigation_proposals (
+                    id, tenant_id, request_id, finding_id, hypothesis,
+                    supporting_evidence, contradicting_evidence, missing_evidence,
+                    uncertainty, recommended_disposition, model_calls_used, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, tenant_id, request_id, finding_id, hypothesis,
+                          supporting_evidence, contradicting_evidence, missing_evidence,
+                          uncertainty, recommended_disposition, model_calls_used,
+                          created_at
+                """,
+                (
+                    record_id,
+                    tenant_id,
+                    request_id,
+                    finding_id,
+                    proposal.hypothesis,
+                    list(proposal.supporting_evidence),
+                    list(proposal.contradicting_evidence),
+                    list(proposal.missing_evidence),
+                    proposal.uncertainty,
+                    proposal.recommended_disposition,
+                    model_calls_used,
+                    when,
+                ),
+            )
+            row = await cur.fetchone()
+        if row is None:  # pragma: no cover - the insert returns exactly one row
+            raise LookupError(f"investigation proposal not recorded: {record_id}")
+        return _investigation_proposal_from_row(row)
+
+    async def list_requests_for_finding(
+        self, tenant_id: UUID, finding_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> list[InvestigationRequestRecord]:
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT id, tenant_id, finding_id, requested_by, question,
+                       evidence_snapshot_ids, max_tool_calls, max_model_calls,
+                       status, created_at
+                FROM investigation_requests
+                WHERE tenant_id = %s AND finding_id = %s
+                ORDER BY created_at, id
+                """,
+                (tenant_id, finding_id),
+            )
+            rows = await cur.fetchall()
+        return [_investigation_request_from_row(r) for r in rows]
+
+    async def list_proposals_for_finding(
+        self, tenant_id: UUID, finding_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> list[InvestigationProposalRecord]:
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT id, tenant_id, request_id, finding_id, hypothesis,
+                       supporting_evidence, contradicting_evidence, missing_evidence,
+                       uncertainty, recommended_disposition, model_calls_used, created_at
+                FROM investigation_proposals
+                WHERE tenant_id = %s AND finding_id = %s
+                ORDER BY created_at, id
+                """,
+                (tenant_id, finding_id),
+            )
+            rows = await cur.fetchall()
+        return [_investigation_proposal_from_row(r) for r in rows]
+
+
+def _investigation_request_from_row(row: dict[str, Any]) -> InvestigationRequestRecord:
+    return InvestigationRequestRecord(
+        id=row["id"],
+        tenant_id=row["tenant_id"],
+        finding_id=row["finding_id"],
+        requested_by=row["requested_by"],
+        question=row["question"],
+        evidence_snapshot_ids=list(row["evidence_snapshot_ids"] or []),
+        max_tool_calls=row["max_tool_calls"],
+        max_model_calls=row["max_model_calls"],
+        status=row["status"],
+        created_at=row["created_at"],
+    )
+
+
+def _investigation_proposal_from_row(row: dict[str, Any]) -> InvestigationProposalRecord:
+    return InvestigationProposalRecord(
+        id=row["id"],
+        tenant_id=row["tenant_id"],
+        request_id=row["request_id"],
+        finding_id=row["finding_id"],
+        hypothesis=row["hypothesis"],
+        supporting_evidence=list(row["supporting_evidence"] or []),
+        contradicting_evidence=list(row["contradicting_evidence"] or []),
+        missing_evidence=list(row["missing_evidence"] or []),
+        uncertainty=row["uncertainty"],
+        recommended_disposition=row["recommended_disposition"],
+        model_calls_used=row["model_calls_used"],
+        created_at=row["created_at"],
+    )
+
+
+class PsycopgFindingTransitionRepository(_BaseRepository):
+    """Append-only lifecycle transitions for findings.
+
+    A transition is applied in ONE tenant transaction: the current finding is
+    locked, the domain state machine validates the edge, the ledger row is
+    appended, and the finding row is updated. Nothing is written when the
+    edge is invalid, so a rejected transition leaves no trace of a partial
+    state change.
+    """
+
+    async def apply_transition(
+        self,
+        tenant_id: UUID,
+        finding_id: UUID,
+        to_status: str,
+        *,
+        actor_id: str,
+        reason: str,
+        verifier_id: str | None = None,
+        conn: AsyncConnection | None = None,
+    ) -> Finding | None:
+        """Apply one lifecycle transition.
+
+        Returns the updated finding, or ``None`` when no finding exists for
+        this tenant (the caller maps that to a 404). Raises
+        :class:`InvalidTransitionError` for a disallowed edge and
+        :class:`VerifierNotIndependentError` when VERIFIED cannot be proven
+        independent of the actor that closed the finding out.
+        """
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT id, tenant_id, finding_type, severity, status, title,
+                       description, detected_at, rule_version, risk_score, outcome
+                FROM findings
+                WHERE tenant_id = %s AND id = %s
+                FOR UPDATE
+                """,
+                (tenant_id, finding_id),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return None
+
+            current_status = str(row["status"])
+            validate_transition(current_status, to_status, reason=reason)
+
+            if str(to_status) == FindingStatus.VERIFIED:
+                resolver_id = await self._resolver_actor(cur, tenant_id, finding_id)
+                assert_verifier_independent(verifier_id, resolver_id)
+
+            await cur.execute(
+                """
+                INSERT INTO finding_transitions (
+                    id, tenant_id, finding_id, from_status, to_status,
+                    actor_id, verifier_id, reason, transitioned_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())
+                """,
+                (
+                    uuid4(),
+                    tenant_id,
+                    finding_id,
+                    current_status,
+                    str(to_status),
+                    actor_id,
+                    verifier_id,
+                    reason,
+                ),
+            )
+
+            if str(to_status) == FindingStatus.VERIFIED:
+                await cur.execute(
+                    """
+                    UPDATE findings
+                    SET status = %s, verified_by = %s, verified_at = now()
+                    WHERE tenant_id = %s AND id = %s
+                    """,
+                    (str(to_status), verifier_id, tenant_id, finding_id),
+                )
+            else:
+                await cur.execute(
+                    """
+                    UPDATE findings
+                    SET status = %s
+                    WHERE tenant_id = %s AND id = %s
+                    """,
+                    (str(to_status), tenant_id, finding_id),
+                )
+
+            await cur.execute(
+                """
+                SELECT id, tenant_id, finding_type, severity, status, title,
+                       description, detected_at, rule_version, risk_score, outcome
+                FROM findings
+                WHERE tenant_id = %s AND id = %s
+                """,
+                (tenant_id, finding_id),
+            )
+            updated = await cur.fetchone()
+        if updated is None:  # pragma: no cover - the row was locked above
+            return None
+        return _finding_from_row(updated)
+
+    async def _resolver_actor(
+        self,
+        cur: AsyncCursor[dict[str, Any]],
+        tenant_id: UUID,
+        finding_id: UUID,
+    ) -> str | None:
+        """Actor that performed the most recent RESOLVED transition.
+
+        ``None`` means no close-out is recorded, so independence cannot be
+        established and the caller must fail closed.
+        """
+        await cur.execute(
+            """
+            SELECT actor_id
+            FROM finding_transitions
+            WHERE tenant_id = %s AND finding_id = %s AND to_status = %s
+            ORDER BY transitioned_at DESC, id DESC
+            LIMIT 1
+            """,
+            (tenant_id, finding_id, FindingStatus.RESOLVED),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return str(row["actor_id"])
+
+    async def list_for_finding(
+        self, tenant_id: UUID, finding_id: UUID, *, conn: AsyncConnection | None = None
+    ) -> list[FindingTransition]:
+        async with self._session_for(tenant_id, conn) as c, c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT id, tenant_id, finding_id, from_status, to_status,
+                       actor_id, verifier_id, reason, transitioned_at
+                FROM finding_transitions
+                WHERE tenant_id = %s AND finding_id = %s
+                ORDER BY transitioned_at DESC, id DESC
+                """,
+                (tenant_id, finding_id),
+            )
+            rows = await cur.fetchall()
+        return [
+            FindingTransition(
+                id=r["id"],
+                tenant_id=r["tenant_id"],
+                finding_id=r["finding_id"],
+                from_status=r["from_status"],
+                to_status=r["to_status"],
+                actor_id=r["actor_id"],
+                verifier_id=r["verifier_id"],
+                reason=r["reason"],
+                transitioned_at=r["transitioned_at"],
             )
             for r in rows
         ]
@@ -1747,7 +2116,9 @@ class RepositoryBundle:
         self.source_checkpoints = PsycopgSourceCheckpointRepository(pool, tenant_id)
         self.identity_mappings = PsycopgIdentityMappingRepository(pool, tenant_id)
         self.review_decisions = PsycopgReviewDecisionRepository(pool, tenant_id)
+        self.investigation = PsycopgInvestigationRepository(pool, tenant_id)
         self.evidence_references = PsycopgEvidenceReferenceRepository(pool, tenant_id)
+        self.finding_transitions = PsycopgFindingTransitionRepository(pool, tenant_id)
         self.findings = PsycopgFindingRepository(pool, tenant_id)
         self.processing_records = PsycopgProcessingRecordRepository(pool, tenant_id)
         self.tenants = PsycopgTenantRepository(pool)

@@ -66,6 +66,9 @@ RLS_TABLES: tuple[str, ...] = (
     "erasure_tombstones",
     "retention_policies",
     "legal_holds",
+    "finding_transitions",
+    "investigation_requests",
+    "investigation_proposals",
 )
 
 #: Every table the runtime role must be able to DML, plus the SELECT-only
@@ -73,7 +76,14 @@ RLS_TABLES: tuple[str, ...] = (
 #: ``itsm_app`` role receives from migration 010.
 TENANT_REGISTRY_TABLES: tuple[str, ...] = ("tenants",)
 DML_TABLES: tuple[str, ...] = RLS_TABLES + TENANT_REGISTRY_TABLES
-APPEND_ONLY_TABLES: tuple[str, ...] = ("source_events", "audit_events", "erasure_tombstones")
+APPEND_ONLY_TABLES: tuple[str, ...] = (
+    "source_events",
+    "audit_events",
+    "erasure_tombstones",
+    "finding_transitions",
+    "investigation_requests",
+    "investigation_proposals",
+)
 READ_ONLY_TABLES: tuple[str, ...] = ("reviewer_authorizations",)
 
 ISSUER = "https://issuer.example.test"
