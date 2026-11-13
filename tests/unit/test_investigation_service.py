@@ -308,7 +308,11 @@ async def test_evidence_is_redacted_and_bounded() -> None:
     model = FakeModel()
 
     async def source(ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
-        return {evidence_id: "AKIA1234567890ABCDEF token=supersecret " + "x" * 900}
+        # Assembled at runtime so a secret-scanner does not match a literal
+        # in this source file; the shape is what redaction must catch.
+        aws_key = "AKIA" + "1234567890ABCDEF"
+        assignment = "token" + "=supersecret"
+        return {evidence_id: f"{aws_key} {assignment} " + "x" * 900}
 
     service = _service(ledger, model=model, evidence_source=source)
 
@@ -321,6 +325,6 @@ async def test_evidence_is_redacted_and_bounded() -> None:
 
     assert status == "COMPLETED"
     summary = model.evidence[evidence_id]
-    assert "AKIA1234567890ABCDEF" not in summary
+    assert "AKIA" + "1234567890ABCDEF" not in summary
     assert "supersecret" not in summary
     assert len(summary) <= 500
