@@ -44,6 +44,35 @@ Pivot the ITSM self-healing platform into an event-driven, evidence-first agenti
   reader added for `evidence_references`; local gates: ruff clean, mypy strict
   155 files, unit suite green, findings API integration 9/9 with redaction +
   cross-tenant 404 + bundle-hash determinism checked against real PostgreSQL.
+- **2026-11-13 finding lifecycle (PRD Q9):** explicit, audited lifecycle.
+  Domain state machine (`src/itsm_agent/domain/finding_lifecycle.py`) with a
+  transition graph, terminal states, mandatory reason, and a fail-closed
+  independence rule; migration 015 adds the `finding_transitions` append-only,
+  RLS-isolated ledger; `PsycopgFindingTransitionRepository.apply_transition`
+  applies an edge in one tenant transaction; `POST
+  /v1/findings/{finding_id}/transition` exposes it behind split permissions
+  (`finding:transition`, and the stronger `finding:verify` for VERIFIED).
+  Local gates: 373 unit, 40 contract, 45 security, 136 integration, 18
+  fault-injection, 24 scenarios, 12 e2e — all passed.
+- **2026-11-13 agentic investigation stage (PRD §6/§7):** the orchestrator
+  was dead code (zero callers). Selection is deterministic and off by default
+  (VIOLATION/SUSPICIOUS + P1/P2 + risk >= 60; never COVERAGE_GAP/
+  INCONCLUSIVE); migration 016 adds append-only, RLS-isolated
+  `investigation_requests`/`investigation_proposals`; the request is written
+  before any model call; with no model configured the request is recorded
+  SKIPPED and the core path stays offline. A proposal's disposition is stored
+  verbatim and never applied to `findings.status`; a failing investigation is
+  logged and swallowed so detection stays authoritative.
+- **2026-11-13 pilot measurement (PRD §9):** `docs/pilot.md` now carries real
+  numbers from a committed harness + dataset + artifact: recall 1.0 over
+  rule-supported scenarios (0.8889 including one declared gap), false-positive
+  rate 0.2857 over benign scenarios, evidence preservation 1.0, p50 ~0.05 ms.
+  **Open defect surfaced by the measurement (not fixed in this slice):** the
+  escalation rule matches on the substring `"attach"` in the event type and
+  never consults approval evidence, so `ec2:AttachVolume` and an approved
+  `sts:AssumeRole` are reported as privilege escalation; and every specific
+  finding arrives with a generic `PRIVILEGE_ESCALATION` duplicate. Fixing
+  detection semantics is a separate, deliberate slice.
 - 2026-11-06 hardening closure — local `make verify-ci` (ITSM_TEST_STRICT=1, real PostgreSQL + NATS):
   246 unit, 40 contract, 45 security, 113 integration, 18 fault-injection, 24 scenarios, 9 e2e — all passed; ruff/mypy/Bandit clean.
   Slices: OIDC relying-party security tests (`test_oidc_security.py`, `test_oidc_http_jwks.py`), two fail-open fixes
