@@ -1,5 +1,6 @@
 """Deterministic detection engine (Task 12). Pure domain logic, no LLM."""
 
+from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -8,6 +9,75 @@ from itsm_agent.domain.events import SourceEvent, ensure_utc
 from itsm_agent.domain.models import Finding, Severity
 
 RULE_VERSION = "detection-rules-v1"
+
+# ---------------------------------------------------------------------------
+# Action allowlists
+# ---------------------------------------------------------------------------
+# The privilege rules match an EXPLICIT list of API actions and never a
+# substring of the action name. The previous heuristic ("attach" in name)
+# reported routine ``ec2:AttachVolume`` operations as privilege escalation
+# (measured false positive in the committed pilot report of 2026-11-13).
+# Matching is case-insensitive equality against the bare action name, after a
+# service qualifier ("iam:", "sts.amazonaws.com:") has been stripped.
+
+#: IAM API actions that constitute a privilege-escalation attempt: assuming a
+#: role, minting a credential, or granting a permission to a principal.
+PRIVILEGE_ESCALATION_ACTIONS: frozenset[str] = frozenset(
+    {
+        "AssumeRole",
+        "AssumeRoleWithSAML",
+        "AssumeRoleWithWebIdentity",
+        "CreateUser",
+        "CreateRole",
+        "CreateAccessKey",
+        "CreateLoginProfile",
+        "UpdateLoginProfile",
+        "UpdateAssumeRolePolicy",
+        "AttachUserPolicy",
+        "AttachRolePolicy",
+        "AttachGroupPolicy",
+        "AttachPolicy",
+        "PutUserPolicy",
+        "PutRolePolicy",
+        "PutGroupPolicy",
+        "AddUserToGroup",
+        "CreatePolicyVersion",
+        "SetDefaultPolicyVersion",
+    }
+)
+
+#: Actions that require approval evidence: the escalation set plus the
+#: privilege-reducing and credential-administration actions that still need an
+#: authorized, exact-action-bound approval (removing a permission, rotating or
+#: revoking a key, changing a password, managing a group or a service-linked
+#: role). Unrelated operations (``ec2:AttachVolume`` and friends) are
+#: deliberately absent, so the approval rule stops demanding approval evidence
+#: for them.
+PRIVILEGED_ACTIONS: frozenset[str] = PRIVILEGE_ESCALATION_ACTIONS | frozenset(
+    {
+        "RemoveUserFromGroup",
+        "UpdateAccessKey",
+        "DeactivateAccessKey",
+        "DeleteAccessKey",
+        "DeleteUser",
+        "DeleteRole",
+        "DeleteUserPolicy",
+        "DeleteRolePolicy",
+        "DeleteGroupPolicy",
+        "ChangePassword",
+        "CreateGroup",
+        "DeleteGroup",
+        "CreateServiceLinkedRole",
+    }
+)
+
+#: Lower-cased lookup views of the allowlists (matching is case-insensitive).
+_PRIVILEGE_ESCALATION_ACTIONS_LOWER: frozenset[str] = frozenset(
+    action.lower() for action in PRIVILEGE_ESCALATION_ACTIONS
+)
+_PRIVILEGED_ACTIONS_LOWER: frozenset[str] = frozenset(
+    action.lower() for action in PRIVILEGED_ACTIONS
+)
 
 
 def _finding(
@@ -34,28 +104,102 @@ def _finding(
     )
 
 
-def detect_privilege_escalation(events: list[SourceEvent]) -> list[Finding]:
+def _bare_action_name(name: str) -> str:
+    """Return the bare, lower-cased API action name.
+
+    A service qualifier is stripped first, so ``iam:CreateUser`` and
+    ``sts.amazonaws.com:AssumeRole`` reduce to ``createuser`` / ``assumerole``.
+    """
+    candidate = name.strip()
+    if ":" in candidate:
+        candidate = candidate.rsplit(":", 1)[-1]
+    return candidate.strip().lower()
+
+
+def _event_action_names(ev: SourceEvent) -> tuple[str, ...]:
+    """The bare action names an event carries (``event_type`` and ``action``)."""
+    names: list[str] = []
+    for raw in (ev.event_type, ev.action):
+        bare = _bare_action_name(raw)
+        if bare and bare not in names:
+            names.append(bare)
+    return tuple(names)
+
+
+def _action_is_allowlisted(ev: SourceEvent, allowlist_lower: frozenset[str]) -> bool:
+    """True when the event's action is explicitly listed in the allowlist."""
+    return any(name in allowlist_lower for name in _event_action_names(ev))
+
+
+def _evaluation_instant(ev: SourceEvent, now: datetime) -> datetime:
+    """The instant at which approval coverage for ``ev`` is evaluated.
+
+    Approval validity is anchored to the event time: an approval authorizes an
+    action only when it was valid at the moment the action happened, which is
+    the same validity notion the approval rule applies. ``now`` is the
+    evaluation instant of the rule and is only a fallback for an event that
+    carries no usable timestamp.
+    """
+    event_time = ev.event_time
+    if isinstance(event_time, datetime):
+        return ensure_utc(event_time)
+    return now
+
+
+def detect_privilege_escalation(
+    events: list[SourceEvent],
+    approvals: list[object] | None = None,
+    *,
+    now: datetime | None = None,
+    reported_event_ids: Collection[UUID] | None = None,
+) -> list[Finding]:
+    """Generic privilege-escalation detection.
+
+    An event is reported only when its action is explicitly listed in
+    ``PRIVILEGE_ESCALATION_ACTIONS`` (exact, case-insensitive match on the bare
+    action name -- never a substring test) and no valid approval authorizes it.
+
+    Suppression rules:
+
+      - ``reported_event_ids`` holds the events an approval-aware rule already
+        reported. The more specific approval finding is kept and the generic
+        one is not repeated, so one event yields at most one escalation-family
+        finding.
+      - ``approvals`` (when supplied) suppress an event that a valid, matching,
+        unexpired approval covers. An approval owned by another tenant, a
+        denied / revoked / expired approval, or an approval whose dimensions do
+        not match the event never suppresses anything.
+
+    ``now`` is the evaluation instant of the rule (default: the current time).
+    Approval validity is evaluated against the event time, as in the approval
+    rule; ``now`` is the fallback reference for an event without a usable
+    timestamp.
+    """
+    evaluation_now = now or datetime.now(tz=UTC)
+    already_reported = (
+        frozenset(reported_event_ids) if reported_event_ids is not None else frozenset()
+    )
+    norm_approvals = [_as_approval(a) for a in approvals] if approvals is not None else []
     findings: list[Finding] = []
     for ev in events:
-        name = ev.event_type.lower()
-        if (
-            "assumerole" in name
-            or "attach" in name
-            or "putrolepolicy" in name
-            or "createuser" in name
-        ):
-            findings.append(
-                _finding(
-                    ev.tenant_id,
-                    "PRIVILEGE_ESCALATION",
-                    Severity.P2,
-                    f"Privileged action: {ev.event_type}",
-                    f"Principal {ev.principal_id or ev.actor_id} performed "
-                    f"{ev.event_type} on {ev.resource_id}",
-                    "SUSPICIOUS",
-                    70,
-                )
+        if ev.event_id in already_reported:
+            continue
+        if not _action_is_allowlisted(ev, _PRIVILEGE_ESCALATION_ACTIONS_LOWER):
+            continue
+        if _is_covered_by_approval(norm_approvals, ev, evaluation_now):
+            continue
+        findings.append(
+            _finding(
+                ev.tenant_id,
+                "PRIVILEGE_ESCALATION",
+                Severity.P2,
+                f"Privileged action: {ev.event_type}",
+                f"Principal {ev.principal_id or ev.actor_id} performed "
+                f"{ev.event_type} on {ev.resource_id}",
+                "SUSPICIOUS",
+                70,
             )
+        )
     return findings
 
 
@@ -116,17 +260,13 @@ def detect_coverage_gap(
 
 
 def _is_privileged_event(ev: SourceEvent) -> bool:
-    name = ev.event_type.lower()
-    return (
-        "assumerole" in name
-        or "attach" in name
-        or "putrolepolicy" in name
-        or "createuser" in name
-        or "putuserpolicy" in name
-        or "createaccesskey" in name
-        or "deactivateaccesskey" in name
-        or "deleteuser" in name
-    )
+    """True when the event is an action that requires approval evidence.
+
+    Membership is decided by the explicit ``PRIVILEGED_ACTIONS`` allowlist, so
+    unrelated operations (an ``ec2:AttachVolume``, a policy read) are no
+    longer examined for approval evidence.
+    """
+    return _action_is_allowlisted(ev, _PRIVILEGED_ACTIONS_LOWER)
 
 
 def _as_approval(raw: object) -> dict[str, object]:
@@ -287,28 +427,44 @@ def _classify_approval_failure(ap: dict[str, object], event_time: datetime) -> s
     return "APPROVAL_MISMATCH"
 
 
-def detect_approval_violation(
+def _approval_covers_event(ap: dict[str, object], ev: SourceEvent, event_time: datetime) -> bool:
+    """True when this single approval authorizes the event.
+
+    Tenant isolation is exact: an approval without a tenant, or one owned by
+    another tenant, never authorizes an event. The dimension match and the
+    validity window are the ones the approval rule uses, so a denied, revoked,
+    expired or dimension-mismatched approval never counts as coverage.
+    """
+    if ap.get("tenant_id") != ev.tenant_id:
+        return False
+    if not _approval_matches_event(ap, ev):
+        return False
+    return _is_valid_approval(ap, event_time)
+
+
+def _is_covered_by_approval(
+    norm_approvals: list[dict[str, object]], ev: SourceEvent, evaluation_now: datetime
+) -> bool:
+    """True when any supplied approval validly covers the event."""
+    if not norm_approvals:
+        return False
+    event_time = _evaluation_instant(ev, evaluation_now)
+    return any(_approval_covers_event(ap, ev, event_time) for ap in norm_approvals)
+
+
+def _detect_approval_violation_with_flagged(
     events: list[SourceEvent],
     approvals: list[object] | None = None,
     *,
     covered_sources: Any = None,
     source_coverage: Any = None,
     now: datetime | None = None,
-) -> list[Finding]:
-    """Approval-evidence detection (Task 12.8).
+) -> tuple[list[Finding], set[UUID]]:
+    """Approval-evidence detection, plus the events the findings were raised for.
 
-    For each privileged event, determine whether a valid, matching approval
-    exists. Produces findings only when no valid matching approval is found;
-    a valid matching approval suppresses the finding entirely.
-
-    Outcomes:
-      - VIOLATION: denied/revoked/expired/mismatched approval evidence.
-      - SUSPICIOUS: privileged action with no approval in a fully covered
-        source with a known identity.
-      - COVERAGE_GAP: privileged action with no approval where source
-        coverage is incomplete (not a confirmed violation).
-      - INCONCLUSIVE: privileged action with no approval and an unresolved
-        identity.
+    Returns ``(findings, flagged_event_ids)``. The flagged ids let a caller
+    avoid reporting the same event twice: the approval finding is the specific
+    one, so the generic escalation rule must not repeat it.
     """
     approvals = approvals or []
     norm_approvals = [_as_approval(a) for a in approvals]
@@ -333,6 +489,18 @@ def detect_approval_violation(
 
     now = now or datetime.now(tz=UTC)
     findings: list[Finding] = []
+    flagged_event_ids: set[UUID] = set()
+
+    def record(ev: SourceEvent, finding: Finding) -> None:
+        findings.append(finding)
+        # Only a DEFINITIVE authorization answer replaces the generic
+        # classification for this event. An uncertainty finding
+        # (COVERAGE_GAP / INCONCLUSIVE) answers a different question — "we
+        # could not determine authorization" — so the classification finding
+        # still stands beside it.
+        if finding.outcome in ("SUSPICIOUS", "VIOLATION"):
+            flagged_event_ids.add(ev.event_id)
+
     for ev in events:
         if not _is_privileged_event(ev):
             continue
@@ -363,7 +531,8 @@ def detect_approval_violation(
 
         # Determine finding type + outcome.
         if identity_unknown:
-            findings.append(
+            record(
+                ev,
                 _finding(
                     ev.tenant_id,
                     "UNRESOLVED_IDENTITY",
@@ -373,13 +542,14 @@ def detect_approval_violation(
                     f"approval evidence cannot be attributed",
                     "INCONCLUSIVE",
                     30,
-                )
+                ),
             )
             continue
 
         src = str(ev.source)
         if not source_is_covered(src):
-            findings.append(
+            record(
+                ev,
                 _finding(
                     ev.tenant_id,
                     "COVERAGE_GAP",
@@ -389,7 +559,7 @@ def detect_approval_violation(
                     f"for {ev.event_type} by {ev.actor_id or ev.principal_id}",
                     "COVERAGE_GAP",
                     30,
-                )
+                ),
             )
             continue
 
@@ -417,7 +587,8 @@ def detect_approval_violation(
             if neg is None:
                 neg = ("APPROVAL_MISMATCH", "VIOLATION")
             ftype, outcome = neg
-            findings.append(
+            record(
+                ev,
                 _finding(
                     ev.tenant_id,
                     ftype,
@@ -428,10 +599,11 @@ def detect_approval_violation(
                     f"has no valid approval ({ftype})",
                     outcome,
                     70 if outcome == "VIOLATION" else 50,
-                )
+                ),
             )
         elif same_action_nonmatching:
-            findings.append(
+            record(
+                ev,
                 _finding(
                     ev.tenant_id,
                     "APPROVAL_MISMATCH",
@@ -442,10 +614,11 @@ def detect_approval_violation(
                     f"has approval evidence but dimensions do not match",
                     "VIOLATION",
                     70,
-                )
+                ),
             )
         else:
-            findings.append(
+            record(
+                ev,
                 _finding(
                     ev.tenant_id,
                     "MISSING_APPROVAL",
@@ -456,8 +629,44 @@ def detect_approval_violation(
                     f"has no approval evidence",
                     "SUSPICIOUS",
                     60,
-                )
+                ),
             )
+    return findings, flagged_event_ids
+
+
+def detect_approval_violation(
+    events: list[SourceEvent],
+    approvals: list[object] | None = None,
+    *,
+    covered_sources: Any = None,
+    source_coverage: Any = None,
+    now: datetime | None = None,
+) -> list[Finding]:
+    """Approval-evidence detection (Task 12.8).
+
+    Public wrapper over :func:`_detect_approval_violation_with_flagged`: it
+    returns only the findings, with the same semantics as before.
+
+    For each privileged event, determine whether a valid, matching approval
+    exists. Produces findings only when no valid matching approval is found;
+    a valid matching approval suppresses the finding entirely.
+
+    Outcomes:
+      - VIOLATION: denied/revoked/expired/mismatched approval evidence.
+      - SUSPICIOUS: privileged action with no approval in a fully covered
+        source with a known identity.
+      - COVERAGE_GAP: privileged action with no approval where source
+        coverage is incomplete (not a confirmed violation).
+      - INCONCLUSIVE: privileged action with no approval and an unresolved
+        identity.
+    """
+    findings, _ = _detect_approval_violation_with_flagged(
+        events,
+        approvals,
+        covered_sources=covered_sources,
+        source_coverage=source_coverage,
+        now=now,
+    )
     return findings
 
 
@@ -478,23 +687,40 @@ def run_detection(
     source_coverage: Any = None,
     now: datetime | None = None,
 ) -> list[Finding]:
+    """Run the deterministic rule set.
+
+    Ordering is unchanged (generic escalation, failed access, approval
+    findings). The generic escalation rule now knows which events the
+    approval rule already answered definitively, so one event does not
+    produce two escalation-family findings for the same fact.
+    """
     out: list[Finding] = []
-    out.extend(detect_privilege_escalation(events))
-    out.extend(detect_failed_access(events))
+    approval_findings: list[Finding] = []
+    answered_event_ids: set[UUID] = set()
     if approvals is not None or covered_sources is not None or source_coverage is not None:
-        out.extend(
-            detect_approval_violation(
-                events,
-                approvals,
-                covered_sources=covered_sources,
-                source_coverage=source_coverage,
-                now=now,
-            )
+        approval_findings, answered_event_ids = _detect_approval_violation_with_flagged(
+            events,
+            approvals,
+            covered_sources=covered_sources,
+            source_coverage=source_coverage,
+            now=now,
         )
+    out.extend(
+        detect_privilege_escalation(
+            events,
+            approvals,
+            now=now,
+            reported_event_ids=answered_event_ids,
+        )
+    )
+    out.extend(detect_failed_access(events))
+    out.extend(approval_findings)
     return out
 
 
 __all__ = [
+    "PRIVILEGED_ACTIONS",
+    "PRIVILEGE_ESCALATION_ACTIONS",
     "RULE_VERSION",
     "detect_approval_evidence",
     "detect_approval_gap",
