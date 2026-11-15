@@ -10,7 +10,19 @@ prove. It is a companion to `docs/security-ci.md` and
 - Portfolio baseline: simulators only (Mockoon, Moto, the in-process
   infrastructure simulator). No real production data, credentials, or
   external SaaS mutations.
-- **Recorded qualification (observed 2026-11-14).** The vehicle is PR #15
+- **Recorded qualification (observed 2026-11-15).** The vehicle is PR #16
+  (`feat/detection-precision` into `main`), squash-merged on 2026-11-15 as
+  `2ebd7ef3ba426c6021bacc5054a74eb798edb510`. The `push` run `43672858417`
+  on `main` has `headSha`
+  `2ebd7ef3ba426c6021bacc5054a74eb798edb510`, event `push`, conclusion
+  `success`, and **15/15 jobs `success`, 0 failures**. The PR's own run
+  `43672469226` on `ffa188da6d4117331e61dc3b9469e2bdb3f7d906` is also
+  15/15 `success`. Local bulk run (strict; real PostgreSQL and NATS) at that
+  commit passed: **696 tests** — unit 468, contract 40, security 45,
+  integration 140, fault injection 18, scenarios 24, e2e 12; ruff clean;
+  `mypy --strict` across 173 files; Bandit clean; `pip-audit` reports no known
+  vulnerabilities.
+- **Superseded record (observed 2026-11-14).** The vehicle was PR #15
   (`feat/finding-lifecycle-clean` into `main`), squash-merged on 2026-11-13 as
   `fc49556fe2d18114c20c74920f683f2b9063c288`. The `push` run `43367043262`
   on `main` has `headSha`
@@ -35,8 +47,8 @@ prove. It is a companion to `docs/security-ci.md` and
   name (`35e112c`). The scan gate was not weakened and nothing was
   allowlisted.
 - Re-verify before citing:
-  `gh run view 43367043262 --json headSha,event,conclusion,jobs` and
-  `gh api repos/<owner>/<repo>/actions/runs/43367043262/artifacts`.
+  `gh run view 43672858417 --json headSha,event,conclusion,jobs` and
+  `gh api repos/<owner>/<repo>/actions/runs/43672858417/artifacts`.
 - A later run supersedes this record; a green `pull_request` run on the head
   branch is supporting evidence, not the qualified run.
 
@@ -123,7 +135,7 @@ The table below is the **2026-11-06 record** (run `42214887310`, PR #9),
 kept as the last fully inventoried evidence set. It is superseded by the
 2026-11-14 record above: that run reports 15/15 jobs `success` with 0
 failures, but its artifacts were not re-inventoried during this refresh, so
-the table is not restated for it. Re-inventory run `43367043262` with step 4
+the table is not restated for it. Re-inventory run `43672858417` with step 4
 below before citing the newer run as artifact-backed.
 
 | Gate | Job name | Result | Artifact/link | Notes |

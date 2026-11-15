@@ -285,9 +285,14 @@ locally by the coordinator, then shipped as a PR with exact-SHA CI evidence.
 - [x] **T9 — API entrypoint wiring**: the bundle and transition collaborators
   are now composed by `python -m itsm_agent.api` (they answered 503 in a
   real deployment). Commit `09e51c6`.
-- [ ] **T10 — Final verification and merge** (coordinator): full local gate
-  battery, secret scan, PR with evidence, exact-SHA CI 15/15, squash merge,
-  `main` push CI.
+- [x] **T10 — Final verification and merge** (coordinator): full local gate
+  battery in one bulk run (696 passed: unit 468, contract 40, security 45,
+  integration 140, fault 18, scenarios 24, e2e 12; ruff, mypy strict on 173
+  files, Bandit and pip-audit clean), PR #16 with evidence, PR CI 15/15 on
+  `ffa188d`, squash-merged as `2ebd7ef`, `main` push CI 15/15 on `2ebd7ef`.
+  One CI failure along the way was a fresh upstream CVE
+  (opentelemetry-api 1.45.1 → 1.45.2), fixed with a targeted lockfile bump
+  rather than a blanket upgrade.
 
 ## Data mutability boundaries (per review)
 - Immutable: source_events, canonical_events, raw evidence, audit_records, reviewer decisions, investigation proposals.
