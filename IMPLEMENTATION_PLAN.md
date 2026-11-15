@@ -251,7 +251,41 @@ locally by the coordinator, then shipped as a PR with exact-SHA CI evidence.
   branch-protection closure and the current exact-SHA qualification
   (`main` push run `43367043262` on `fc49556`, 15/15 jobs). Commit
   `0f86b6e`.
-- [ ] **T5 — Final verification and merge** (coordinator): full local gate
+- [x] **T3 — Pilot re-measurement**: the ground truth already contained both
+  false-positive scenarios, so the engine was wrong, not the data — no label
+  was changed. The harness now pins the invariant (an event must not produce
+  two escalation-family findings for the same fact). Measured after the fix:
+  false-positive rate **0.2857 → 0.0**, precision 0.8 → 1.0, recall over
+  rule-supported scenarios 1.0 (unchanged), matched-finding ratio
+  0.5714 → 0.8 (the residual is the coverage-gap and identity-ambiguity
+  scenarios, where the uncertainty finding legitimately accompanies the
+  classification). Commit `352f30c`.
+- [x] **T4 — Release qualification refresh** (delegated): records the
+  branch-protection closure and the current exact-SHA qualification
+  (`main` push run `43367043262` on `fc49556`, 15/15 jobs). Commit
+  `0f86b6e`.
+- [x] **T6 — Rule-version provenance**: `RULE_VERSION` is `detection-rules-v2`
+  after the semantics change, the finding API contract and the measurement
+  artifact say so, and the durable-pipeline assertion now expects the answer
+  that is actually correct (MISSING_APPROVAL, no duplicate). Commit
+  `ec21619`.
+- [x] **T7 — Evidence context for the investigation stage**: the request now
+  carries the canonical source event as its evidence snapshot and the
+  evidence source is request-scoped, so the model reasons about real
+  evidence and the orchestrator's evidence-reference validation is exercised.
+  Commit `a5bb548`.
+- [x] **T8 — Staging readiness with the LLM path**: a Groq-backed
+  `InvestigationModel` that only proposes (evidence framed as data,
+  temperature 0, schema re-validation, key scrubbed from every error), a
+  packaged `python -m itsm_agent.workers.audit_consumer` (role assertion,
+  refuses to start when the stage is enabled without a key, stage off by
+  default), a manual staging runner under a hard 3-call model budget that
+  writes a report stating the proposal is advisory, and SOP-06. Real model
+  calls happen only in that manual run; CI drives a stub. Commit `e75260c`.
+- [x] **T9 — API entrypoint wiring**: the bundle and transition collaborators
+  are now composed by `python -m itsm_agent.api` (they answered 503 in a
+  real deployment). Commit `09e51c6`.
+- [ ] **T10 — Final verification and merge** (coordinator): full local gate
   battery, secret scan, PR with evidence, exact-SHA CI 15/15, squash merge,
   `main` push CI.
 
