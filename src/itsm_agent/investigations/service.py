@@ -57,7 +57,7 @@ def _utcnow() -> datetime:
 
 
 #: Async callable that resolves evidence ids to bounded, redacted summaries.
-EvidenceFetcher = Callable[[Sequence[UUID]], Awaitable[dict[UUID, str]]]
+EvidenceFetcher = Callable[[InvestigationRequest, Sequence[UUID]], Awaitable[dict[UUID, str]]]
 
 
 class InvestigationLedger(Protocol):
@@ -154,7 +154,7 @@ class InvestigationService:
         try:
             proposal = await run_investigation(
                 request,
-                fetch_evidence=self._fetch_evidence,
+                fetch_evidence=self._evidence_fetcher_for(request),
                 model=self._model,
                 model_calls_used=0,
             )
@@ -204,15 +204,29 @@ class InvestigationService:
             created_at=created_at,
         )
 
-    async def _fetch_evidence(self, ids: Sequence[UUID]) -> dict[UUID, str]:
-        """Bounded, redacted evidence summaries for the model."""
-        if self._evidence_source is None:
-            return {}
-        raw = await self._evidence_source(ids)
-        return {
-            key: redact_secrets(value if isinstance(value, str) else str(value))[:MAX_SUMMARY_CHARS]
-            for key, value in raw.items()
-        }
+    def _evidence_fetcher_for(
+        self, request: InvestigationRequest
+    ) -> Callable[[Sequence[UUID]], Awaitable[dict[UUID, str]]]:
+        """Bind the evidence source to one request.
+
+        The source is request-scoped because the tenant and the finding are
+        only known per request; the orchestrator calls the fetcher with ids
+        alone.
+        """
+        source = self._evidence_source
+
+        async def fetch(ids: Sequence[UUID]) -> dict[UUID, str]:
+            if source is None:
+                return {}
+            raw = await source(request, ids)
+            return {
+                key: redact_secrets(value if isinstance(value, str) else str(value))[
+                    :MAX_SUMMARY_CHARS
+                ]
+                for key, value in raw.items()
+            }
+
+        return fetch
 
 
 def _bounded_reason(exc: Exception) -> str:

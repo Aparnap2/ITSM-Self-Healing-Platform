@@ -9,21 +9,23 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 from itsm_agent.adapters.messaging.nats_bus import JetStreamConsumer
 from itsm_agent.adapters.persistence.repositories import (
+    PsycopgEvidenceReferenceRepository,
     PsycopgFindingRepository,
     PsycopgProcessingRecordRepository,
     PsycopgSourceEventRepository,
 )
 from itsm_agent.adapters.persistence.tenant import tenant_transaction
-from itsm_agent.domain.events import SourceEvent
+from itsm_agent.domain.events import InvestigationRequest, SourceEvent
 from itsm_agent.domain.investigation_policy import should_investigate
 from itsm_agent.domain.models import Finding
+from itsm_agent.investigations.service import EvidenceFetcher
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +35,56 @@ PROCESSING_VERSION = "detection-v1"
 INVESTIGATION_REQUESTER = "detection-pipeline"
 
 
+def build_evidence_source(pool: Any) -> EvidenceFetcher:
+    """Request-scoped evidence resolver for the investigation stage.
+
+    The model must reason about the evidence that produced the finding, not
+    about a bare question. For every id in the request's snapshot this returns
+    a bounded summary: the finding's evidence reference when one exists, and
+    otherwise the canonical source event itself (id, type, actor, resource,
+    outcome and payload hash). Nothing else is exposed, and the caller
+    (the service) redacts and truncates every summary.
+    """
+    evidence_repo = PsycopgEvidenceReferenceRepository(pool)
+    source_repo = PsycopgSourceEventRepository(pool)
+
+    async def fetch(request: InvestigationRequest, ids: Sequence[UUID]) -> dict[UUID, str]:
+        summaries: dict[UUID, str] = {}
+        if not ids:
+            return summaries
+        references = await evidence_repo.list_for_tenant_finding(
+            request.tenant_id, request.finding_id
+        )
+        by_id = {ref.id: ref for ref in references}
+        for evidence_id in ids:
+            reference = by_id.get(evidence_id)
+            if reference is not None:
+                summaries[evidence_id] = (
+                    f"evidence_reference:{reference.trust_level}:"
+                    f"{reference.excerpt or reference.content_hash}"
+                )
+                continue
+            event = await source_repo.get_for_tenant(request.tenant_id, evidence_id)
+            if event is None:
+                continue
+            summaries[evidence_id] = (
+                f"source_event:{event.source}:{event.event_type}:"
+                f"actor={event.actor_id or event.principal_id}:"
+                f"resource={event.resource_id}:outcome={event.outcome}:"
+                f"hash={event.payload_hash}"
+            )
+        return summaries
+
+    return fetch
+
+
 async def _run_investigation_stage(
     *,
     tenant_id: UUID,
     findings: list[Finding],
     service: Any | None,
     enabled: bool,
+    source_event: SourceEvent | None = None,
 ) -> None:
     """Run the optional agentic investigation stage for selected findings.
 
@@ -47,10 +93,18 @@ async def _run_investigation_stage(
     deterministic detection result. Each request is written in its own
     tenant-scoped transaction (inside the ledger repository), after the
     detection transaction has committed.
+
+    The evidence snapshot is the canonical source event that produced the
+    finding, so the model has real context to reason about and the
+    orchestrator's evidence-reference validation is exercised (a proposal may
+    only cite ids that are in the snapshot).
     """
     if service is None:
         logger.warning("investigation stage enabled but no service configured; skipping")
         return
+    snapshot_ids: tuple[UUID, ...] = ()
+    if source_event is not None:
+        snapshot_ids = (source_event.event_id,)
     for finding in findings:
         if not should_investigate(finding, enabled=enabled):
             continue
@@ -58,7 +112,7 @@ async def _run_investigation_stage(
             await service.investigate_finding(
                 tenant_id=tenant_id,
                 finding=finding,
-                evidence_snapshot_ids=(),
+                evidence_snapshot_ids=snapshot_ids,
                 requested_by=INVESTIGATION_REQUESTER,
             )
         except Exception as exc:  # noqa: BLE001 - detection stays authoritative
@@ -175,6 +229,7 @@ async def process_source_event(
             findings=persisted_findings,
             service=investigation_service,
             enabled=investigation_enabled,
+            source_event=canonical,
         )
     return result
 
