@@ -163,7 +163,13 @@ async def test_full_nats_round_trip_persists_finding(pg_dsn: str, nats_url: str)
 
         findings = await repos.findings.list_for_tenant(tenant)
         assert len(findings) >= 1
-        assert any(f.finding_type == "PRIVILEGE_ESCALATION" for f in findings)
+        # The event is an AssumeRole with no approval evidence in a covered
+        # source, so the approval-aware rule answers definitively
+        # (MISSING_APPROVAL) and the generic classification finding is
+        # suppressed for the same fact. Exactly one escalation-family finding
+        # must exist for this event.
+        assert any(f.finding_type == "MISSING_APPROVAL" for f in findings)
+        assert not any(f.finding_type == "PRIVILEGE_ESCALATION" for f in findings)
         # Exactly one processing record, COMPLETED.
         async with pool.connection() as conn, conn.cursor() as cur:
             await cur.execute(

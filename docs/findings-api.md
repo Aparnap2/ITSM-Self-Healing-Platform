@@ -136,7 +136,7 @@ GET /v1/findings?tenant_id=6f1c0b1e-6a8f-4a1f-9c0f-2d6a0b6f5f11
   "title": "Privileged action without approval: AssumeRole",
   "description": "Privileged action AssumeRole by arn:aws:iam::123:user/alice ...",
   "detected_at": "2026-01-01T12:00:00+00:00",
-  "rule_version": "detection-rules-v1",
+  "rule_version": "detection-rules-v2",
   "risk_score": 60,
   "outcome": "SUSPICIOUS"
 }
@@ -151,7 +151,7 @@ GET /v1/findings?tenant_id=6f1c0b1e-6a8f-4a1f-9c0f-2d6a0b6f5f11
 | `status` | string | Default `OPEN`; values constrained by migration 004 CHECK |
 | `title`, `description` | string | Human-readable summary |
 | `detected_at` | string (ISO 8601) | Timezone-aware |
-| `rule_version` | string | Detection rule set version, currently `detection-rules-v1` |
+| `rule_version` | string | Detection rule set version, currently `detection-rules-v2` |
 | `risk_score` | integer | Score set by the emitting rule (current rules use 30, 50, 60, 70) |
 | `outcome` | string | `VIOLATION`, `SUSPICIOUS`, `COVERAGE_GAP`, `INCONCLUSIVE` |
 

@@ -8,7 +8,9 @@ from uuid import UUID, uuid4
 from itsm_agent.domain.events import SourceEvent, ensure_utc
 from itsm_agent.domain.models import Finding, Severity
 
-RULE_VERSION = "detection-rules-v1"
+#: v2 replaces the substring heuristic with explicit action allowlists and
+#: makes the generic escalation rule approval-aware (2026-11-14).
+RULE_VERSION = "detection-rules-v2"
 
 # ---------------------------------------------------------------------------
 # Action allowlists
