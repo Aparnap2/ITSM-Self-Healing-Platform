@@ -6,29 +6,29 @@
     "sha256": "48ad14f9d0a18871f8ab832f4e092f59566d1fffec8bc7483efe9339ed27e226"
   },
   "latency": {
-    "max_ms": 0.0596,
-    "mean_ms": 0.0448,
+    "max_ms": 0.0708,
+    "mean_ms": 0.05,
     "measurement": "monotonic clock (time.perf_counter_ns) around normalize + detect",
-    "min_ms": 0.0245,
-    "p50_ms": 0.0464,
-    "p95_ms": 0.0595,
+    "min_ms": 0.0293,
+    "p50_ms": 0.0525,
+    "p95_ms": 0.0708,
     "per_scenario_ms": {
-      "benign-ct-approved-assumerole": 0.0546,
-      "benign-ct-ec2-attach-volume": 0.0357,
-      "benign-ct-s3-getobject": 0.0289,
-      "benign-ct-s3-listbucket": 0.0245,
-      "benign-github-team-repo-add": 0.0256,
-      "benign-pg-insert": 0.0446,
-      "benign-pg-select": 0.0481,
-      "mal-ct-access-denied": 0.0367,
-      "mal-ct-assumerole-admin": 0.0339,
-      "mal-ct-coverage-gap": 0.0595,
-      "mal-ct-cross-tenant-approval": 0.0577,
-      "mal-ct-denied-approval": 0.059,
-      "mal-ct-identity-ambiguous": 0.0596,
-      "mal-ct-mismatched-approval": 0.0554,
-      "mal-ct-missing-approval": 0.0412,
-      "mal-pg-alter-role-superuser": 0.0519
+      "benign-ct-approved-assumerole": 0.0707,
+      "benign-ct-ec2-attach-volume": 0.0329,
+      "benign-ct-s3-getobject": 0.0349,
+      "benign-ct-s3-listbucket": 0.0299,
+      "benign-github-team-repo-add": 0.0293,
+      "benign-pg-insert": 0.0512,
+      "benign-pg-select": 0.057,
+      "mal-ct-access-denied": 0.0418,
+      "mal-ct-assumerole-admin": 0.0455,
+      "mal-ct-coverage-gap": 0.0538,
+      "mal-ct-cross-tenant-approval": 0.0592,
+      "mal-ct-denied-approval": 0.0708,
+      "mal-ct-identity-ambiguous": 0.0537,
+      "mal-ct-mismatched-approval": 0.0651,
+      "mal-ct-missing-approval": 0.0456,
+      "mal-pg-alter-role-superuser": 0.0592
     },
     "scenario_count": 16,
     "unit": "milliseconds",
@@ -39,9 +39,10 @@
     "Small labelled dataset: these rates are not statistically meaningful benchmarks.",
     "Measures the deterministic detection layer only; the agentic investigation layer is not exercised by these numbers.",
     "Not a certification and not a production-readiness claim.",
-    "No real approval, identity or ITSM system was consulted."
+    "No real approval, identity or ITSM system was consulted.",
+    "Known gap: the rule set has no PostgreSQL privilege rule, so a database privilege escalation is still not detected; the scenario is labelled known_gap so the miss is reported instead of being hidden, and overall recall stays below 1.0."
   ],
-  "measured_on": "2026-11-13",
+  "measured_on": "2026-11-14",
   "method": {
     "detected_definition": "a malicious scenario counts as detected when the engine produces at least one finding whose finding_type and outcome satisfy the scenario's expect_finding_type and expect_outcome",
     "environment": {
@@ -55,7 +56,7 @@
     "false_positive_rate_definition": "benign scenarios producing any finding / all labelled benign scenarios",
     "latency_measurement": "monotonic clock (time.perf_counter_ns) around normalize + detect, per scenario; one unmeasured warm-up pass over the same dataset precedes the measured pass",
     "layer_measured": "deterministic detection layer (itsm_agent.detection.engine)",
-    "matched_finding_ratio_definition": "share of the findings raised on malicious scenarios that match the scenario's expected finding type and outcome; the remainder are extra findings the engine raised alongside the expected one (for example the generic escalation heuristic in addition to the specific approval finding)",
+    "matched_finding_ratio_definition": "share of the findings raised on malicious scenarios that match the scenario's expected finding type and outcome; the remainder are extra findings the engine raised alongside the expected one (an uncertainty answer such as COVERAGE_GAP or UNRESOLVED_IDENTITY, which reports that authorization could not be determined and therefore stands beside the classification finding)",
     "recall_definition": "detected malicious scenarios / all labelled malicious scenarios",
     "recall_supported_rules_definition": "detected malicious scenarios / malicious scenarios that the current rule set claims to support (scenarios flagged known_gap are excluded)",
     "reproduce_command": "uv run pytest tests/e2e/test_pilot_metrics.py -q",
@@ -65,25 +66,23 @@
     "benign_scenario_count": 7,
     "detection": {
       "false_negative_scenarios": 1,
-      "false_positive_rate": 0.2857,
-      "false_positive_scenarios": 2,
-      "precision": 0.8,
+      "false_positive_rate": 0.0,
+      "false_positive_scenarios": 0,
+      "precision": 1.0,
       "recall": 0.8889,
       "recall_supported_rules": 1.0,
-      "true_negative_scenarios": 5,
+      "true_negative_scenarios": 7,
       "true_positive_scenarios": 8
     },
-    "false_positive_breakdown_by_finding_type": {
-      "PRIVILEGE_ESCALATION": 2
-    },
+    "false_positive_breakdown_by_finding_type": {},
     "findings": {
       "evidence_preservation_ratio": 1.0,
       "findings_matching_expectation": 8,
-      "findings_on_malicious_scenarios": 14,
-      "findings_with_evidence": 16,
+      "findings_on_malicious_scenarios": 10,
+      "findings_with_evidence": 10,
       "findings_without_evidence": 0,
-      "matched_finding_ratio": 0.5714,
-      "total_findings": 16
+      "matched_finding_ratio": 0.8,
+      "total_findings": 10
     },
     "known_gap_scenario_count": 1,
     "malicious_scenario_count": 9,
@@ -97,15 +96,11 @@
         "expect_finding_type": null,
         "expect_outcome": null,
         "false_negative": false,
-        "false_positive": true,
-        "finding_count": 1,
-        "finding_outcomes": [
-          "SUSPICIOUS"
-        ],
-        "finding_types": [
-          "PRIVILEGE_ESCALATION"
-        ],
-        "findings_with_evidence": 1,
+        "false_positive": false,
+        "finding_count": 0,
+        "finding_outcomes": [],
+        "finding_types": [],
+        "findings_with_evidence": 0,
         "findings_without_evidence": 0,
         "forbidden_outcome_violations": [],
         "id": "benign-ct-approved-assumerole",
@@ -113,7 +108,7 @@
         "label": "benign",
         "matched_expectation": null,
         "matching_finding_count": 0,
-        "produced_finding": true,
+        "produced_finding": false,
         "source": "cloudtrail"
       },
       {
@@ -124,15 +119,11 @@
         "expect_finding_type": null,
         "expect_outcome": null,
         "false_negative": false,
-        "false_positive": true,
-        "finding_count": 1,
-        "finding_outcomes": [
-          "SUSPICIOUS"
-        ],
-        "finding_types": [
-          "PRIVILEGE_ESCALATION"
-        ],
-        "findings_with_evidence": 1,
+        "false_positive": false,
+        "finding_count": 0,
+        "finding_outcomes": [],
+        "finding_types": [],
+        "findings_with_evidence": 0,
         "findings_without_evidence": 0,
         "forbidden_outcome_violations": [],
         "id": "benign-ct-ec2-attach-volume",
@@ -140,7 +131,7 @@
         "label": "benign",
         "matched_expectation": null,
         "matching_finding_count": 0,
-        "produced_finding": true,
+        "produced_finding": false,
         "source": "cloudtrail"
       },
       {
@@ -350,16 +341,14 @@
         "expect_outcome": "SUSPICIOUS",
         "false_negative": false,
         "false_positive": false,
-        "finding_count": 2,
+        "finding_count": 1,
         "finding_outcomes": [
-          "SUSPICIOUS",
           "SUSPICIOUS"
         ],
         "finding_types": [
-          "MISSING_APPROVAL",
-          "PRIVILEGE_ESCALATION"
+          "MISSING_APPROVAL"
         ],
-        "findings_with_evidence": 2,
+        "findings_with_evidence": 1,
         "findings_without_evidence": 0,
         "forbidden_outcome_violations": [],
         "id": "mal-ct-cross-tenant-approval",
@@ -379,16 +368,14 @@
         "expect_outcome": "VIOLATION",
         "false_negative": false,
         "false_positive": false,
-        "finding_count": 2,
+        "finding_count": 1,
         "finding_outcomes": [
-          "SUSPICIOUS",
           "VIOLATION"
         ],
         "finding_types": [
-          "DENIED_APPROVAL",
-          "PRIVILEGE_ESCALATION"
+          "DENIED_APPROVAL"
         ],
-        "findings_with_evidence": 2,
+        "findings_with_evidence": 1,
         "findings_without_evidence": 0,
         "forbidden_outcome_violations": [],
         "id": "mal-ct-denied-approval",
@@ -437,16 +424,14 @@
         "expect_outcome": "VIOLATION",
         "false_negative": false,
         "false_positive": false,
-        "finding_count": 2,
+        "finding_count": 1,
         "finding_outcomes": [
-          "SUSPICIOUS",
           "VIOLATION"
         ],
         "finding_types": [
-          "APPROVAL_MISMATCH",
-          "PRIVILEGE_ESCALATION"
+          "APPROVAL_MISMATCH"
         ],
-        "findings_with_evidence": 2,
+        "findings_with_evidence": 1,
         "findings_without_evidence": 0,
         "forbidden_outcome_violations": [],
         "id": "mal-ct-mismatched-approval",
@@ -466,16 +451,14 @@
         "expect_outcome": "SUSPICIOUS",
         "false_negative": false,
         "false_positive": false,
-        "finding_count": 2,
+        "finding_count": 1,
         "finding_outcomes": [
-          "SUSPICIOUS",
           "SUSPICIOUS"
         ],
         "finding_types": [
-          "MISSING_APPROVAL",
-          "PRIVILEGE_ESCALATION"
+          "MISSING_APPROVAL"
         ],
-        "findings_with_evidence": 2,
+        "findings_with_evidence": 1,
         "findings_without_evidence": 0,
         "forbidden_outcome_violations": [],
         "id": "mal-ct-missing-approval",
@@ -511,5 +494,5 @@
       }
     ]
   },
-  "rule_version": "detection-rules-v1"
+  "rule_version": "detection-rules-v2"
 }

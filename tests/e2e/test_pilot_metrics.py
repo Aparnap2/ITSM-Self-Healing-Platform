@@ -6,13 +6,19 @@ end-to-end latency for the **deterministic detection layer**.
 
 Offline and deterministic: no network, no database, no LLM, no container.
 Every number in the artifact except the wall-clock latency block is
-byte-stable across runs.
+byte-stable across runs; the ``metrics`` block is asserted to be unchanged
+against the committed report.
 
 The harness writes ``evals/reports/pilot-metrics.json``. Re-running it
 refreshes the latency block, so the committed report legitimately shows a
 diff after a local run; commit the refreshed report together with whatever
-change caused it (the test fails until the report is regenerated and
-committed, so a stale report can never be mistaken for a current one).
+change caused it. The committed report holds the values of the last measured
+run, and the test fails until the report has been regenerated, so a stale
+report can never be mistaken for a current one.
+
+It also asserts the one-escalation-finding-per-event invariant: a single
+event never yields both the generic ``PRIVILEGE_ESCALATION`` classification
+and an approval answer about the same fact.
 
 These are measurements of a simulated pilot. They are not a benchmark, not a
 certification, and not a claim of production readiness.
@@ -24,6 +30,7 @@ import hashlib
 import json
 import math
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -50,9 +57,27 @@ REPORT_PATH = REPO_ROOT / "evals" / "reports" / "pilot-metrics.json"
 #: Date the committed measurement artifact was produced. Deliberately a
 #: constant (not ``date.today()``) so the report stays byte-comparable
 #: between runs; bump it when the measurements are re-taken.
-MEASURED_ON = "2026-11-13"
+MEASURED_ON = "2026-11-14"
 
 REPRODUCE_COMMAND = "uv run pytest tests/e2e/test_pilot_metrics.py -q"
+
+#: Finding types that answer the authorization question about a privileged
+#: action. Together with ``PRIVILEGE_ESCALATION`` (which classifies the
+#: action) they form the escalation family.
+APPROVAL_FAMILY_FINDING_TYPES: frozenset[str] = frozenset(
+    {
+        "MISSING_APPROVAL",
+        "APPROVAL_MISMATCH",
+        "DENIED_APPROVAL",
+        "REVOKED_APPROVAL",
+        "EXPIRED_APPROVAL",
+    }
+)
+
+#: Finding types that answer a *different* question: "authorization could not
+#: be determined". They legitimately accompany the generic classification
+#: finding and are therefore not duplicates of it.
+UNCERTAINTY_FINDING_TYPES: frozenset[str] = frozenset({"COVERAGE_GAP", "UNRESOLVED_IDENTITY"})
 
 #: Envelope the pilot dataset is expected to stay inside (documented size).
 MIN_SCENARIOS = 10
@@ -194,10 +219,35 @@ def _matches_expectation(finding: Finding, spec: ScenarioSpec) -> bool:
     return not (spec.expect_outcome is not None and finding.outcome != spec.expect_outcome)
 
 
+def _escalation_family_duplicates(finding_types: Iterable[str]) -> tuple[str, ...]:
+    """Escalation-family finding types duplicated for one event.
+
+    ``PRIVILEGE_ESCALATION`` classifies a privileged action; the approval
+    family answers the authorization question about the *same* action. Both
+    for one event means the same fact was reported twice.
+
+    An uncertainty answer (``COVERAGE_GAP`` / ``UNRESOLVED_IDENTITY``) is not
+    a duplicate: it states that authorization could not be determined, so the
+    classification finding still stands beside it.
+    """
+    types = set(finding_types)
+    if "PRIVILEGE_ESCALATION" not in types:
+        return ()
+    companions = types - {"PRIVILEGE_ESCALATION"} - UNCERTAINTY_FINDING_TYPES
+    return tuple(sorted(companions & APPROVAL_FAMILY_FINDING_TYPES))
+
+
 def _measure(spec: ScenarioSpec) -> ScenarioResult:
     """Normalize + detect one scenario and capture its measured outcome."""
     start = time.perf_counter_ns()
     events = _build_events(spec)
+    # Every pilot scenario normalizes to exactly one source event, so the
+    # scenario's finding set is that event's finding set. The one-finding-per-
+    # event invariant is checked against exactly that set.
+    assert len(events) == 1, (
+        f"scenario {spec.id} normalized to {len(events)} events; the "
+        "one-escalation-finding-per-event invariant must be checked per event"
+    )
     findings = run_detection(
         events,
         list(spec.approvals) if spec.approvals is not None else None,
@@ -415,8 +465,9 @@ def _build_artifact(metrics: dict[str, Any], latency: dict[str, Any]) -> dict[st
             "matched_finding_ratio_definition": (
                 "share of the findings raised on malicious scenarios that match the scenario's "
                 "expected finding type and outcome; the remainder are extra findings the engine "
-                "raised alongside the expected one (for example the generic escalation heuristic "
-                "in addition to the specific approval finding)"
+                "raised alongside the expected one (an uncertainty answer such as COVERAGE_GAP "
+                "or UNRESOLVED_IDENTITY, which reports that authorization could not be "
+                "determined and therefore stands beside the classification finding)"
             ),
             "latency_measurement": (
                 "monotonic clock (time.perf_counter_ns) around normalize + detect, per scenario; "
@@ -439,6 +490,9 @@ def _build_artifact(metrics: dict[str, Any], latency: dict[str, Any]) -> dict[st
             "is not exercised by these numbers.",
             "Not a certification and not a production-readiness claim.",
             "No real approval, identity or ITSM system was consulted.",
+            "Known gap: the rule set has no PostgreSQL privilege rule, so a database privilege "
+            "escalation is still not detected; the scenario is labelled known_gap so the miss "
+            "is reported instead of being hidden, and overall recall stays below 1.0.",
         ],
     }
 
@@ -517,6 +571,16 @@ def test_pilot_metrics_are_internally_consistent() -> None:
         # Fail-closed invariant: a scenario that forbids an outcome must never
         # produce it.
         assert row["forbidden_outcome_violations"] == []
+        # One event yields at most one escalation-family finding: the generic
+        # classification and the approval answer must not both be reported for
+        # the same fact. An uncertainty answer (COVERAGE_GAP /
+        # UNRESOLVED_IDENTITY) may accompany the classification finding.
+        duplicates = _escalation_family_duplicates(row["finding_types"])
+        assert not duplicates, (
+            f"{row['id']} produced PRIVILEGE_ESCALATION together with "
+            f"{', '.join(duplicates)} for the same event; one event yields at most "
+            "one escalation-family finding"
+        )
         if row["label"] == "malicious":
             if row["known_gap"]:
                 assert row["matched_expectation"] is False, (
