@@ -17,7 +17,7 @@
 
 ## Measurements
 
-**Measured on 2026-11-13 against rule version `detection-rules-v1`. All data
+**Measured on 2026-11-14 against rule version `detection-rules-v2`. All data
 in this section is simulated — no real tenant, no production telemetry.**
 
 Reproduce:
@@ -49,6 +49,13 @@ evidence artifact `evals/reports/pilot-metrics.json`.
 - **Evidence preservation**: a finding preserves evidence when the evidence
   bundle built for it carries the content hash of the raw source record that
   produced it.
+- **One finding per event**: the harness asserts that a single event never
+  yields both the generic `PRIVILEGE_ESCALATION` classification and an
+  approval answer (`MISSING_APPROVAL` / `APPROVAL_MISMATCH` /
+  `DENIED_APPROVAL` / `REVOKED_APPROVAL` / `EXPIRED_APPROVAL`) about the same
+  fact. An uncertainty answer (`COVERAGE_GAP` / `UNRESOLVED_IDENTITY`) may
+  accompany the classification finding: it reports that authorization could
+  not be determined, so it is not a duplicate.
 - **Latency**: monotonic clock (`time.perf_counter_ns`) around
   normalize + detect, per scenario; p50/p95 by linear interpolation. One
   unmeasured warm-up pass over the same dataset precedes the measured pass,
@@ -61,17 +68,22 @@ evidence artifact `evals/reports/pilot-metrics.json`.
 | Scenarios | 16 (7 benign / 9 malicious; 1 of the malicious is a declared `known_gap`) |
 | Recall over all malicious scenarios | **0.8889** (8 / 9) |
 | Recall over rule-supported malicious scenarios | **1.0000** (8 / 8) |
-| False-positive rate over benign scenarios | **0.2857** (2 / 7) |
-| Precision (scenario level) | **0.8000** (8 / 10) |
-| Matched-finding ratio | **0.5714** (8 / 14 findings raised on malicious scenarios) |
-| Evidence preservation | **1.0000** (16 / 16 findings) |
+| False-positive rate over benign scenarios | **0.0000** (0 / 7) |
+| Precision (scenario level) | **1.0000** (8 / 8) |
+| Matched-finding ratio | **0.8000** (8 / 10 findings raised on malicious scenarios) |
+| Evidence preservation | **1.0000** (10 / 10 findings) |
 | Findings without evidence | 0 |
-| Latency p50 / p95 (per scenario) | ≈ **0.05 ms** / ≈ **0.07 ms** (max ≈ 0.08 ms) |
+| Latency p50 / p95 (per scenario) | ≈ **0.06 ms** / ≈ **0.08 ms** (max ≈ 0.08 ms) |
 
 Latency figures are wall-clock measurements on one machine and are refreshed
 by every harness run; `evals/reports/pilot-metrics.json` holds the exact
-values of the committed run. Observed spread across runs: p50 0.04–0.05 ms,
+values of the last measured run. Observed spread across runs: p50 0.05–0.06 ms,
 p95 0.06–0.08 ms.
+
+Every other block of the artifact is byte-stable. The harness compares the
+`metrics` block it just computed against the committed report and fails if
+they differ, so a stale report can never be mistaken for a current one; only
+the `latency` block legitimately differs between runs.
 
 Per-scenario results (from the committed artifact):
 
@@ -82,36 +94,54 @@ Per-scenario results (from the committed artifact):
 | `benign-pg-select` | benign | 0 | – | true negative |
 | `benign-pg-insert` | benign | 0 | – | true negative |
 | `benign-github-team-repo-add` | benign | 0 | – | true negative |
-| `benign-ct-ec2-attach-volume` | benign | 1 `PRIVILEGE_ESCALATION` | SUSPICIOUS | **false positive** |
-| `benign-ct-approved-assumerole` | benign | 1 `PRIVILEGE_ESCALATION` | SUSPICIOUS | **false positive** |
+| `benign-ct-ec2-attach-volume` | benign | 0 | – | true negative |
+| `benign-ct-approved-assumerole` | benign | 0 | – | true negative |
 | `mal-ct-assumerole-admin` | malicious | 1 `PRIVILEGE_ESCALATION` | SUSPICIOUS | detected |
-| `mal-ct-missing-approval` | malicious | 2 `MISSING_APPROVAL`, `PRIVILEGE_ESCALATION` | SUSPICIOUS | detected |
-| `mal-ct-denied-approval` | malicious | 2 `DENIED_APPROVAL`, `PRIVILEGE_ESCALATION` | VIOLATION | detected |
-| `mal-ct-mismatched-approval` | malicious | 2 `APPROVAL_MISMATCH`, `PRIVILEGE_ESCALATION` | VIOLATION | detected |
-| `mal-ct-cross-tenant-approval` | malicious | 2 `MISSING_APPROVAL`, `PRIVILEGE_ESCALATION` | SUSPICIOUS | detected |
-| `mal-ct-identity-ambiguous` | malicious | 2 `UNRESOLVED_IDENTITY`, `PRIVILEGE_ESCALATION` | INCONCLUSIVE | detected |
-| `mal-ct-coverage-gap` | malicious | 2 `COVERAGE_GAP`, `PRIVILEGE_ESCALATION` | COVERAGE_GAP | detected |
+| `mal-ct-missing-approval` | malicious | 1 `MISSING_APPROVAL` | SUSPICIOUS | detected |
+| `mal-ct-denied-approval` | malicious | 1 `DENIED_APPROVAL` | VIOLATION | detected |
+| `mal-ct-mismatched-approval` | malicious | 1 `APPROVAL_MISMATCH` | VIOLATION | detected |
+| `mal-ct-cross-tenant-approval` | malicious | 1 `MISSING_APPROVAL` | SUSPICIOUS | detected |
+| `mal-ct-identity-ambiguous` | malicious | 2 `PRIVILEGE_ESCALATION`, `UNRESOLVED_IDENTITY` | INCONCLUSIVE, SUSPICIOUS | detected |
+| `mal-ct-coverage-gap` | malicious | 2 `COVERAGE_GAP`, `PRIVILEGE_ESCALATION` | COVERAGE_GAP, SUSPICIOUS | detected |
 | `mal-ct-access-denied` | malicious | 1 `FAILED_ACCESS` | SUSPICIOUS | detected |
 | `mal-pg-alter-role-superuser` | malicious | 0 | – | **miss (declared `known_gap`)** |
 
 ### What the pilot found
 
-1. **Two false positives, one root cause.** The escalation rule is a
-   substring heuristic (`"attach" in event_type`) that never consults
-   approval evidence. It therefore reports a routine `ec2:AttachVolume`
-   operations call, and it reports a `sts:AssumeRole` that is covered by a
-   valid, exact-match, unexpired approval. Both are counted above; neither
-   is waived.
+1. **The two false positives are fixed, and they had one root cause.** The
+   escalation rule was a substring heuristic (`"attach" in event_type`) that
+   never consulted approval evidence, so it reported a routine
+   `ec2:AttachVolume` operations call and a `sts:AssumeRole` that is covered
+   by a valid, exact-action-bound, unexpired approval. The rule set now
+   decides privilege escalation from an **explicit allowlist of API actions**
+   (`PRIVILEGE_ESCALATION_ACTIONS`), matched on the bare action name and
+   never on a substring of it, and the generic escalation rule now
+   **consults approval evidence**: a valid, matching, unexpired approval for
+   the same principal, action and resource suppresses it. The two benign
+   scenarios are hand-authored ground truth and were not touched; the engine
+   is what changed. Both are now true negatives, so the false-positive rate
+   is **0.0000** (0 of 7) instead of 0.2857 (2 of 7), and the
+   false-positive breakdown by finding type is empty.
 2. **One declared coverage gap.** The rule set has no PostgreSQL privilege
-   rule, so a seeded `ALTER ROLE app WITH SUPERUSER` is not detected. It is
-   labelled `known_gap` in the dataset and is the single miss behind the
-   0.8889 recall.
-3. **Every specific finding arrives with a generic duplicate.** Six of the
-   eight detected malicious scenarios raise the specific approval finding
-   *and* the generic `PRIVILEGE_ESCALATION` finding, which is why the
-   matched-finding ratio is 0.5714 (8 of 14 findings) even though scenario
-   recall is 1.0000 on rule-supported scenarios. This is duplicate triage
-   load, not a missed detection.
+   rule, so a seeded `ALTER ROLE app WITH SUPERUSER` is still not detected.
+   It is labelled `known_gap` in the dataset and is the single miss behind
+   the 0.8889 recall; recall over the scenarios the rule set claims to
+   support is 1.0000.
+3. **Duplicate triage load is down to the two uncertainty answers.** Six of
+   the eight detected malicious scenarios used to raise the specific approval
+   finding *and* the generic `PRIVILEGE_ESCALATION` finding for the same
+   fact. One event now yields at most one escalation-family finding: when
+   the approval rule answers definitively (`SUSPICIOUS` / `VIOLATION`) the
+   generic classification for that event is dropped. The two scenarios that
+   still raise two findings are the uncertainty answers — `COVERAGE_GAP` and
+   `UNRESOLVED_IDENTITY`, which state that authorization could not be
+   determined, so the classification finding still stands beside them. That
+   is why the matched-finding ratio is **0.8000** (8 of the 10 findings
+   raised on malicious scenarios) and not 1.0: the ratio counts the findings
+   raised on malicious scenarios, and the two extra findings are the
+   uncertainty answers rather than duplicate reports of the same fact. The
+   harness now asserts this invariant, so a duplicate regression fails the
+   run.
 4. **Fail-closed behaviour held.** The identity-ambiguity scenario produced
    `INCONCLUSIVE` and the incomplete-coverage scenario produced
    `COVERAGE_GAP`; neither produced a `VIOLATION`. The cross-tenant approval
@@ -125,15 +155,19 @@ Per-scenario results (from the committed artifact):
 - **Simulated sources only.** Every event is a fixture in the dataset; no
   real tenant, approval store, identity provider or ITSM system was
   consulted.
-- **Small dataset.** 16 scenarios is a point estimate with no confidence
-  interval. These are not statistically meaningful benchmarks and must not
-  be compared against another system's rates.
+- **Small dataset.** 16 hand-labelled scenarios is a point estimate with no
+  confidence interval. These are not statistically meaningful benchmarks and
+  must not be compared against another system's rates.
 - **Not a certification.** The artifact is evidence, not a qualification, an
   audit result or a production-readiness claim.
 - **Deterministic layer only.** The numbers cover
   `itsm_agent.detection.engine` only; the agentic investigation layer, the
   LangGraph workflow, adapters, persistence and messaging are not exercised
   by them.
+- **One detection gap is still open.** The rule set has no PostgreSQL
+  privilege rule, so `mal-pg-alter-role-superuser` remains a declared
+  `known_gap` and overall recall stays below 1.0. The gap is reported, not
+  hidden: it is labelled in the dataset and counted as the single miss.
 - **In-process latency.** The timings are normalize + detect on one machine
   and say nothing about end-to-end ingestion, storage or queue latency.
 - **Labelled by hand.** Labels are a human judgement on simulated fixtures;
@@ -144,3 +178,4 @@ Per-scenario results (from the committed artifact):
 - Simulated only; no real tenant data.
 - LLM investigation optional; core detection deterministic.
 - The pilot measures the deterministic detection layer only; the agentic investigation layer is not exercised by these numbers.
+- No PostgreSQL privilege rule yet: the database privilege-escalation scenario stays a declared `known_gap`, so recall over all malicious scenarios is below 1.0.

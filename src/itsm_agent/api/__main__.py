@@ -99,6 +99,10 @@ def build_app(
         sink=PsycopgIngestionSink(pool) if sink is None else sink,
         findings_repo=repositories.findings,
         review_decisions_repo=repositories.review_decisions,
+        # The bundle and transition endpoints fail closed with 503 when their
+        # collaborator is missing, so a deployment must wire them explicitly.
+        evidence_references_repo=repositories.evidence_references,
+        finding_transitions=repositories.finding_transitions,
         authenticator=build_authenticator(settings=settings, pool=pool, client=client),
         database_pool=pool,
     )

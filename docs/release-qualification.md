@@ -10,20 +10,33 @@ prove. It is a companion to `docs/security-ci.md` and
 - Portfolio baseline: simulators only (Mockoon, Moto, the in-process
   infrastructure simulator). No real production data, credentials, or
   external SaaS mutations.
-- The vehicle for this qualification was the merge of PR #9
-  (`feat/access-audit-foundation` into `main`), squash-merged on 2026-11-06 as
-  `57c9d8cd049dd243d13c7610c5fe75270a687af2`.
-- **Recorded qualification (observed 2026-11-06).** The `push` run
-  `42214887310` on `main` has `headSha`
-  `57c9d8cd049dd243d13c7610c5fe75270a687af2`, event `push`, conclusion
-  `success`, and all 15 jobs `success`. Its summary reports **444 unique
-  tests, 0 failures + errors, 0 skipped**, and all seven mandatory JUnit
-  artifacts are present and unexpired. This satisfies items 1-5 below. Item 6
-  is **not** satisfied: `main` has no branch protection, so repository
-  governance remains an unverified gap.
+- **Recorded qualification (observed 2026-11-14).** The vehicle is PR #15
+  (`feat/finding-lifecycle-clean` into `main`), squash-merged on 2026-11-13 as
+  `fc49556fe2d18114c20c74920f683f2b9063c288`. The `push` run `43367043262`
+  on `main` has `headSha`
+  `fc49556fe2d18114c20c74920f683f2b9063c288`, event `push`, conclusion
+  `success`, and **15/15 jobs `success`, 0 failures**. Local `make verify-ci`
+  (strict; real PostgreSQL and NATS) at that commit passed: unit 373,
+  contract 40, security 45, integration 136, fault injection 18, scenarios
+  24, e2e 12; ruff clean; `mypy --strict` across 166 files; Bandit clean.
+- **Superseded record (observed 2026-11-06).** The vehicle was PR #9
+  (`feat/access-audit-foundation`), squash-merged on 2026-11-06 as
+  `57c9d8cd049dd243d13c7610c5fe75270a687af2`; `push` run `42214887310`,
+  all 15 jobs `success`, 444 unique tests, 0 failures + errors, 0 skipped,
+  and all seven mandatory JUnit artifacts present and unexpired. Items 1-5
+  were satisfied. Item 6 was **not**: `main` had no branch protection then,
+  so repository governance was recorded as an unverified gap. Branch
+  protection is enabled now (item 6); the 2026-11-14 record above supersedes
+  this one.
+- PR #14 was closed as superseded. Its commit range contained secret-shaped
+  test fixtures that the gitleaks gate flagged. The branch was rebuilt so no
+  commit contains a secret-shaped literal: the redaction fixture now
+  assembles its key at runtime and the reviewer credential carries a neutral
+  name (`35e112c`). The scan gate was not weakened and nothing was
+  allowlisted.
 - Re-verify before citing:
-  `gh run view 42214887310 --json headSha,event,conclusion,jobs` and
-  `gh api repos/<owner>/<repo>/actions/runs/42214887310/artifacts`.
+  `gh run view 43367043262 --json headSha,event,conclusion,jobs` and
+  `gh api repos/<owner>/<repo>/actions/runs/43367043262/artifacts`.
 - A later run supersedes this record; a green `pull_request` run on the head
   branch is supporting evidence, not the qualified run.
 
@@ -52,12 +65,17 @@ A release is qualified only when **all** of the following are true:
    still contain every required job and the same mandatory report list; no
    `continue-on-error`, no `if: false`, and no new optional job that bypasses
    the summary.
-6. **Branch protection, if configured.** If `main` has protection, it must
-   require the CI checks, require an up-to-date branch, and forbid force
-   pushes/deletions, and the merge must satisfy it. This repository currently
-   has no branch protection configured (verified 2026-11-06). Record that as
-   an unverified repository-governance gap, not as a pass, and do not
-   describe repository governance as qualified.
+6. **Branch protection.** Protection on `main` was enabled on 2026-11-13
+   (owner-approved). The 15 CI job names in the Required gates table are
+   required status checks with `strict: true` (the branch must be up to date
+   before merging); pull requests are required; `enforce_admins: true`; force
+   pushes and branch deletion are blocked. Required approving reviews is
+   **0**: the repository is solo-maintained and GitHub does not let a PR
+   author approve their own PR, so requiring one approval would block all
+   work. Raise the required approving review count to **1** when an
+   independent reviewer with write access exists. Protection is enabled, but
+   it is not a substitute for independent human review; this qualification
+   does not claim that independent review occurred.
 
 The release decision is recorded by filling the evidence table in this
 document and attaching it to the PR or release ticket.
@@ -92,11 +110,21 @@ recorded in the Notes column.
 Sources: `.github/workflows/ci.yml:35-729`, `tools/ci_summary.py:23-31,74-101`,
 `docs/security-ci.md:7-28`.
 
+The 15 job names in the "Workflow job name" column are also the required
+status checks on the protected `main` branch (item 6).
+
 ## Evidence table
 
 Fill this in from the qualified run. Use `success` / `failure` / `skipped` /
 `cancelled` exactly as GitHub reports it. Do not paraphrase a result into
 "green".
+
+The table below is the **2026-11-06 record** (run `42214887310`, PR #9),
+kept as the last fully inventoried evidence set. It is superseded by the
+2026-11-14 record above: that run reports 15/15 jobs `success` with 0
+failures, but its artifacts were not re-inventoried during this refresh, so
+the table is not restated for it. Re-inventory run `43367043262` with step 4
+below before citing the newer run as artifact-backed.
 
 | Gate | Job name | Result | Artifact/link | Notes |
 | --- | --- | --- | --- | --- |
@@ -149,9 +177,10 @@ call it "mostly green".
 - Any required artifact is expired or absent for that run.
 - The workflow at the merge SHA contains `continue-on-error`, an `if: false`
   gate, a removed required job, or an expanded `--optional-jobs` list.
-- Branch protection is configured and the merge violates it. Absence of
-  protection is recorded as a governance gap (see item 6), not as a code-gate
-  pass.
+- Branch protection is configured and the merge violates it. Protection is
+  enabled on `main` (item 6); a satisfied required-check gate is a merge
+  gate, not independent human review, so this qualification does not claim
+  that independent review occurred.
 - A secret appears in the diff, logs, artifacts, or audit payloads.
 
 ## How to verify
@@ -162,7 +191,7 @@ paste a real token into a ticket.
 ### 1. Resolve the merge commit
 
 ```sh
-gh pr view 9 --json number,state,mergeCommit,headRefOid,mergeStateStatus,url
+gh pr view 15 --json number,state,mergeCommit,headRefOid,mergeStateStatus,url
 ```
 
 For a merged PR, `mergeCommit.oid` is the SHA the qualification run must
@@ -190,7 +219,7 @@ gh run view <run-id> \
 Cross-check the PR rollup. Exit code `8` means checks are still pending.
 
 ```sh
-gh pr checks 9 --json name,state,bucket,link
+gh pr checks 15 --json name,state,bucket,link
 ```
 
 ### 4. Inventory artifacts and retention
@@ -247,6 +276,8 @@ if the run is green.
 gh api "repos/<owner>/<repo>/branches/main/protection" \
   --jq '{required_checks: .required_status_checks.contexts,
          strict: .required_status_checks.strict,
+         pull_requests: .required_pull_request_reviews,
+         approving_reviews: .required_approving_review_count,
          enforce_admins: .enforce_admins.enabled,
          force_pushes: .allow_force_pushes.enabled,
          deletions: .allow_deletions.enabled}'
@@ -254,6 +285,11 @@ gh api "repos/<owner>/<repo>/branches/main/protection" \
 
 A `403` here means the caller lacks admin access; record that as an
 unverified item, not as a pass.
+
+The expected policy is the one in item 6: the 15 job names from the
+Required gates table, `strict: true`, pull requests required,
+`enforce_admins: true`, force pushes and deletions blocked, and
+`approving_reviews: 0` while the repository is solo-maintained.
 
 ## Where the summary comes from
 
@@ -293,7 +329,21 @@ simulator-only, portfolio baseline. A qualified run does not prove:
 - that NATS is highly available: the repository tests a single node
   (`docs/nats-stream-config.md:30-33`);
 - that a real Jira Service Management or ServiceNow adapter works: neither is
-  implemented; Mockoon is the acceptance connector (`README.md`).
+  implemented; Mockoon is the acceptance connector (`README.md`);
+- that the required status checks are correctly scoped or meaningful: the
+  gate proves the checks ran and reported success, not that they cover the
+  change. No independent human review has occurred, and the required
+  approving review count on `main` is 0;
+- that the detection engine's false-positive behaviour is characterised
+  beyond the measured pilot artifact: `docs/pilot.md` measures the
+  deterministic detection layer only (recall 0.8889 over all malicious
+  scenarios, 1.0000 over rule-supported ones, false-positive rate 0.2857 over
+  benign scenarios), and the agentic layer is not exercised by those numbers
+  (`docs/pilot.md:133-136`);
+- that the agentic investigation stage works: it is wired
+  (`src/itsm_agent/application/audit_consumer.py:79,193`) but off by default
+  (`investigation_enabled: bool = False`), and the offline suite drives a
+  fake model, not the LLM path.
 
 No statement in this document should be read as "production ready". The
 qualification is evidence about one CI run on one commit under simulators.
@@ -315,6 +365,13 @@ qualification is evidence about one CI run on one commit under simulators.
   for step 3.
 - Branch protection verification requires repository admin access that an
   agent or contributor may not have.
+- `main` requires **0** approving reviews (solo-maintained repository;
+  GitHub does not let a PR author approve their own PR). The required-check
+  gate is mechanical, not independent human review; raise it to **1** when an
+  independent reviewer with write access exists.
+- The protection policy was enabled on 2026-11-13, the same day as the
+  qualified merge. The merge SHA, the run ID and the policy state are
+  verifiable; the exact enablement time relative to the merge is not.
 - DAST is optional in `tools/ci_summary.py` but treated as required here. If it is
   skipped, the run is not qualified unless the skip is explicitly approved
   and recorded.

@@ -1010,7 +1010,7 @@ def test_finding_rule_version_and_severity_risk_contract_is_stable() -> None:
     assert gap is not None
 
     findings = run_detection([privileged, failed]) + [gap]
-    assert all(f.rule_version == RULE_VERSION == "detection-rules-v1" for f in findings)
+    assert all(f.rule_version == RULE_VERSION == "detection-rules-v2" for f in findings)
     contract = {(f.finding_type, str(f.severity), f.outcome, f.risk_score) for f in findings}
     assert contract == {
         ("PRIVILEGE_ESCALATION", "P2", "SUSPICIOUS", 70),

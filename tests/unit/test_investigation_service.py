@@ -307,7 +307,10 @@ async def test_evidence_is_redacted_and_bounded() -> None:
     ledger = FakeLedger()
     model = FakeModel()
 
-    async def source(ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+    async def source(request: InvestigationRequest, ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+        # The source is request-scoped: it can only resolve evidence for the
+        # tenant and finding the request names.
+        assert request.tenant_id == tenant
         # Assembled at runtime so a secret-scanner does not match a literal
         # in this source file; the shape is what redaction must catch.
         aws_key = "AKIA" + "1234567890ABCDEF"

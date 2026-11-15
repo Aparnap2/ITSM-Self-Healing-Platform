@@ -216,6 +216,79 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 - **Acceptance gate:** all CI jobs green with exact passed/failed/skipped counts reported; no zero-collected suites. **Accepted:** CI run 41271007745 on commit 98e83ef is fully green. The branch/PR remains draft and unmerged, so merge is still outstanding. Tasks marked 🟡 above remain "implemented; independent acceptance review pending" until the PR is reviewed and merged.
 - **Test phase:** Integration + CI gates (no new features; qualification only)
 
+## Remaining work — 2026-11-14 (todo list for delegated execution)
+
+Task source: this file. One task per slice; each slice is delegated, verified
+locally by the coordinator, then shipped as a PR with exact-SHA CI evidence.
+
+- [x] **T1 — Branch protection on `main`** (owner-approved 2026-11-13, applied
+  2026-11-14): 15 CI checks required, strict up-to-date merge, enforced for
+  admins, pull requests required, **0 required approving reviews** (solo-
+  maintained repo; raise to 1 when an independent reviewer exists),
+  force-push and deletion blocked, conversation resolution required. Applied
+  via the GitHub API and verified by reading the policy back.
+- [x] **T2 — Detection precision fix**: the substring heuristic
+  (`"attach" in event_type`) is replaced by explicit action allowlists
+  (`PRIVILEGE_ESCALATION_ACTIONS`, `PRIVILEGED_ACTIONS`); the generic
+  escalation rule consults approval evidence (evaluated at event time, so it
+  agrees with the approval rule); one event yields at most one
+  escalation-family finding for the same fact — a definitive authorization
+  answer replaces the generic classification, an uncertainty answer
+  (`COVERAGE_GAP`/`INCONCLUSIVE`) does not. Root cause of the pilot's
+  0.2857 false-positive rate. 34 new offline tests; no existing assertion
+  had to change. Commit `7b38ac0`.
+- [ ] **T3 — Pilot re-measurement** (in progress, delegated): the ground
+  truth already contained both false-positive scenarios
+  (`benign-ct-ec2-attach-volume`, `benign-ct-approved-assumerole`), so the
+  engine was wrong, not the data — no label was changed. Regenerate
+  `evals/reports/pilot-metrics.json` and update `docs/pilot.md` from the
+  regenerated artifact (numbers are never hand-written). Measured after the
+  fix: false-positive rate **0.2857 → 0.0**, precision 0.8 → 1.0, recall over
+  rule-supported scenarios stays 1.0, matched-finding ratio 0.5714 → 0.8 (the
+  residual is the coverage-gap and identity-ambiguity scenarios, where the
+  uncertainty finding legitimately accompanies the classification).
+- [x] **T4 — Release qualification refresh** (delegated): records the
+  branch-protection closure and the current exact-SHA qualification
+  (`main` push run `43367043262` on `fc49556`, 15/15 jobs). Commit
+  `0f86b6e`.
+- [x] **T3 — Pilot re-measurement**: the ground truth already contained both
+  false-positive scenarios, so the engine was wrong, not the data — no label
+  was changed. The harness now pins the invariant (an event must not produce
+  two escalation-family findings for the same fact). Measured after the fix:
+  false-positive rate **0.2857 → 0.0**, precision 0.8 → 1.0, recall over
+  rule-supported scenarios 1.0 (unchanged), matched-finding ratio
+  0.5714 → 0.8 (the residual is the coverage-gap and identity-ambiguity
+  scenarios, where the uncertainty finding legitimately accompanies the
+  classification). Commit `352f30c`.
+- [x] **T4 — Release qualification refresh** (delegated): records the
+  branch-protection closure and the current exact-SHA qualification
+  (`main` push run `43367043262` on `fc49556`, 15/15 jobs). Commit
+  `0f86b6e`.
+- [x] **T6 — Rule-version provenance**: `RULE_VERSION` is `detection-rules-v2`
+  after the semantics change, the finding API contract and the measurement
+  artifact say so, and the durable-pipeline assertion now expects the answer
+  that is actually correct (MISSING_APPROVAL, no duplicate). Commit
+  `ec21619`.
+- [x] **T7 — Evidence context for the investigation stage**: the request now
+  carries the canonical source event as its evidence snapshot and the
+  evidence source is request-scoped, so the model reasons about real
+  evidence and the orchestrator's evidence-reference validation is exercised.
+  Commit `a5bb548`.
+- [x] **T8 — Staging readiness with the LLM path**: a Groq-backed
+  `InvestigationModel` that only proposes (evidence framed as data,
+  temperature 0, schema re-validation, key scrubbed from every error), a
+  packaged `python -m itsm_agent.workers.audit_consumer` (role assertion,
+  refuses to start when the stage is enabled without a key, stage off by
+  default), a manual staging runner under a hard 3-call model budget that
+  writes a report stating the proposal is advisory, and SOP-06. Real model
+  calls happen only in that manual run; CI drives a stub. Commit `e75260c`.
+- [x] **T9 — API entrypoint wiring**: the bundle and transition collaborators
+  are now composed by `python -m itsm_agent.api` (they answered 503 in a
+  real deployment). Commit `09e51c6`.
+- [ ] **T10 — Final verification and merge** (coordinator): full local gate
+  battery, secret scan, PR with evidence, exact-SHA CI 15/15, squash merge,
+  `main` push CI.
+
 ## Data mutability boundaries (per review)
 - Immutable: source_events, canonical_events, raw evidence, audit_records, reviewer decisions, investigation proposals.
 - Rebuildable/versioned: access facts / normalized projections, findings.

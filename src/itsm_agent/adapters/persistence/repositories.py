@@ -2124,6 +2124,11 @@ class RepositoryBundle:
         self.tenants = PsycopgTenantRepository(pool)
         self.retention = PsycopgRetentionRepository(pool, tenant_id)
 
+    @property
+    def pool(self) -> AsyncConnectionPool[AsyncConnection]:
+        """The shared connection pool (read-only accessor)."""
+        return self._pool
+
     def for_tenant(self, tenant_id: UUID) -> RepositoryBundle:
         return RepositoryBundle(self._pool, tenant_id)
 
