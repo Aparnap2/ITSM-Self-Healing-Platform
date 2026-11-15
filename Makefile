@@ -14,7 +14,7 @@ SHELL := /bin/sh
         test-security test-fault-injection test-integration test-scenarios \
         test-e2e verify verify-ci test sast audit-deps hooks-install \
         verify-pre-push act-ci compose-up compose-down \
-        compose-reset demo-reset demo-run
+        compose-reset demo-reset demo-run e2e-staging
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -119,3 +119,20 @@ demo-reset: ## Reset stack to a clean state and bring it back up
 demo-run: ## Bring stack up, then run the scenario harness
 	$(MAKE) compose-up
 	uv run pytest -m scenarios
+
+# --- Manual staging rehearsal (NOT part of verify-ci) -------------------------
+#
+# WARNING: this target makes REAL, BILLED Groq model calls. It is a manual
+# operator rehearsal, never a CI gate. See docs/runbooks/SOP-06-staging-e2e-run.md.
+
+e2e-staging: ## Manual staging rehearsal (REAL billed model calls; NOT in verify-ci)
+	@echo "e2e-staging makes REAL, BILLED model calls and is NOT part of verify-ci."
+	@echo "Required environment:"
+	@echo "  ITSM_POSTGRES_DSN | DATABASE_URL   staging database DSN"
+	@echo "  ITSM_NATS_URL     | NATS_URL       staging NATS URL"
+	@echo "  ITSM_WEBHOOK_SECRET                ingestion HMAC secret"
+	@echo "  ITSM_AUTH_HMAC_SECRET              reviewer token HMAC secret"
+	@echo "  ITSM_GROQ_API_KEY                  Groq API key (calls are billed)"
+	@echo "Optional: ITSM_API_BASE_URL (default http://127.0.0.1:8000),"
+	@echo "          ITSM_INVESTIGATION_LLM_BUDGET_CALLS (default 3, hard cap)."
+	uv run python tools/e2e_staging_run.py

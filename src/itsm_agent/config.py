@@ -63,6 +63,17 @@ class Settings(BaseModel):
     groq_max_tokens: int = Field(default=2000, ge=256, le=8192)
     groq_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
 
+    # Selective agentic investigation stage (off by default; deterministic and
+    # offline when disabled). The LLM budget is the hard cap on REAL model
+    # calls for one staging run -- it is enforced by the operator tooling, not
+    # by the model. The per-request call bounds mirror the domain policy
+    # constants (``itsm_agent.domain.investigation_policy``), which are the
+    # values the request is actually built with.
+    investigation_enabled: bool = False
+    investigation_max_model_calls: int = Field(default=2, ge=1, le=5)
+    investigation_max_tool_calls: int = Field(default=5, ge=1, le=20)
+    investigation_llm_budget_calls: int = Field(default=3, ge=1, le=10)
+
     # Observability
     otel_service_name: str = "itsm-agent"
     otel_exporter_endpoint: str | None = None
@@ -74,6 +85,16 @@ class Settings(BaseModel):
     @property
     def llm_configured(self) -> bool:
         return self.groq_api_key is not None
+
+    @property
+    def investigation_configured(self) -> bool:
+        """True when the agentic stage is enabled *and* a model is reachable.
+
+        An enabled stage without a model is a misconfiguration, not a
+        degraded mode: callers must fail closed rather than silently run
+        without the model.
+        """
+        return self.investigation_enabled and self.groq_api_key is not None
 
 
 def _int(name: str, default: int) -> int:
@@ -158,6 +179,10 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         "groq_api_key": get("ITSM_GROQ_API_KEY"),
         "groq_max_tokens": _int("ITSM_GROQ_MAX_TOKENS", 2000),
         "groq_timeout_seconds": _float("ITSM_GROQ_TIMEOUT_SECONDS", 30.0),
+        "investigation_enabled": _bool("ITSM_INVESTIGATION_ENABLED", False),
+        "investigation_max_model_calls": _int("ITSM_INVESTIGATION_MAX_MODEL_CALLS", 2),
+        "investigation_max_tool_calls": _int("ITSM_INVESTIGATION_MAX_TOOL_CALLS", 5),
+        "investigation_llm_budget_calls": _int("ITSM_INVESTIGATION_LLM_BUDGET_CALLS", 3),
         "otel_service_name": get("ITSM_OTEL_SERVICE_NAME") or "itsm-agent",
         "otel_exporter_endpoint": get("ITSM_OTEL_EXPORTER_ENDPOINT"),
         "metrics_enabled": _bool("ITSM_METRICS_ENABLED", True),
