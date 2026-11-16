@@ -119,6 +119,15 @@ constrained login role for the RLS assertions.
   rotation, revocation list, or clock-skew allowance. A token is valid until
   `exp`.
 - The HMAC bearer carries roles in the token and has no server-side freshness
+- The reviewer authorization directory has exactly one write path: the
+  administration-plane provisioning CLI (`tools/provision_reviewer.py`, backed
+  by `src/itsm_agent/adapters/persistence/reviewer_admin.py`). It refuses to
+  run against a role that cannot write the table, so the runtime role cannot
+  grant itself roles or tenants; it requires a reason; it versions every
+  change; and it writes one audit event per affected tenant in the same
+  transaction as the change, so a grant can never land without its audit
+  record. There is deliberately no runtime API for managing principals, roles
+  or tenants.
   or revocation check. The OIDC relying party (`src/itsm_agent/api/oidc.py`)
   resolves current tenant/role state from `reviewer_authorizations` on every
   request. There is still no admin API for managing principals, tenants, or
