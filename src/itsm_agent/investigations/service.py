@@ -16,6 +16,7 @@ and completely offline: one ``SKIPPED`` ledger row, no network, no LLM.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Protocol
@@ -32,6 +33,11 @@ from itsm_agent.investigations.orchestrator import (
     InvestigationBudgetExceeded,
     InvestigationModel,
     run_investigation,
+)
+from itsm_agent.observability.metrics import (
+    observe_investigation,
+    observe_investigation_latency,
+    observe_model_call,
 )
 from itsm_agent.privacy.redaction import redact_secrets
 
@@ -142,8 +148,11 @@ class InvestigationService:
                 status="SKIPPED",
                 created_at=now,
             )
+            observe_investigation("skipped")
             return "SKIPPED"
 
+        observe_investigation("started")
+        started = time.perf_counter()
         # Durable intent BEFORE the external call.
         await self._repo.record_request(
             request,
@@ -169,8 +178,11 @@ class InvestigationService:
                 status="FAILED",
                 created_at=self._clock(),
             )
+            observe_investigation("failed")
+            observe_investigation_latency("failed", time.perf_counter() - started)
             return "FAILED"
 
+        observe_model_call()
         await self._repo.record_proposal(
             proposal,
             tenant_id=tenant_id,
@@ -185,6 +197,8 @@ class InvestigationService:
             status="COMPLETED",
             created_at=self._clock(),
         )
+        observe_investigation("completed")
+        observe_investigation_latency("completed", time.perf_counter() - started)
         return "COMPLETED"
 
     async def _append_terminal(

@@ -32,6 +32,7 @@ import contextlib
 import logging
 import os
 import signal
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -49,20 +50,57 @@ from itsm_agent.adapters.persistence.privileges import (
     DatabaseSafetyError,
     verify_runtime_database,
 )
-from itsm_agent.adapters.persistence.repositories import RepositoryBundle
+from itsm_agent.adapters.persistence.repositories import (
+    PsycopgFindingRepository,
+    RepositoryBundle,
+)
 from itsm_agent.application.audit_consumer import (
     build_evidence_source,
     consume_source_event,
 )
 from itsm_agent.config import ConfigError
+from itsm_agent.domain.models import Finding
 from itsm_agent.investigations.groq_model import GroqInvestigationModel
 from itsm_agent.investigations.service import InvestigationService
+from itsm_agent.observability.metrics import (
+    observe_audit_event,
+    observe_batch_processing,
+    observe_consumer_message,
+    observe_detection_finding,
+)
+from itsm_agent.observability.tracing import resolve_exporter_endpoint, setup_tracing
 
 logger = logging.getLogger("itsm.audit_consumer")
 
 #: Sources whose approval coverage the platform considers complete. A source
 #: outside this set produces a COVERAGE_GAP finding instead of a verdict.
 DEFAULT_COVERED_SOURCES: tuple[str, ...] = ("cloudtrail", "github", "postgresql", "pgaudit")
+
+#: Maps the consumer's outcome vocabulary onto the bounded metric vocabulary.
+#: The raw outcome strings are already closed; the mapping keeps the exported
+#: label space identical across the consumers.
+_OUTCOME_LABELS: Mapping[str, str] = {
+    "processed": "processed",
+    "duplicate": "duplicate",
+    "retry": "redelivered",
+    "poison": "poison",
+    "dead_lettered": "dead_lettered",
+}
+
+
+class InstrumentedFindingRepository(PsycopgFindingRepository):
+    """Findings repository that counts what deterministic detection produced.
+
+    The counter is incremented in the same call that persists the finding, so
+    it counts findings produced by the detection rules. Only the severity (a
+    closed enum) is used as a label: no tenant, subject or finding id ever
+    reaches the metric.
+    """
+
+    async def upsert(self, finding: Finding, *, conn: AsyncConnection | None = None) -> Finding:
+        persisted = await super().upsert(finding, conn=conn)
+        observe_detection_finding(str(persisted.severity))
+        return persisted
 
 
 def _bool_env(name: str, default: bool, *, source: Mapping[str, str]) -> bool:
@@ -225,6 +263,12 @@ def build_investigation_service(
 
 async def serve(config: AuditConsumerConfig) -> None:
     """Consume source events until SIGTERM/SIGINT, then drain and close."""
+    # Configure tracing BEFORE the first span is created: the tracer provider
+    # is a process-wide singleton, so the first caller decides the exporter.
+    setup_tracing(
+        service_name="itsm-audit-consumer",
+        exporter_endpoint=resolve_exporter_endpoint(),
+    )
     pool = create_pool(PersistenceConfig(dsn=config.dsn))
     await pool.open()
     await pool.wait()
@@ -235,6 +279,10 @@ async def serve(config: AuditConsumerConfig) -> None:
         await verify_runtime_database(pool)
 
         repositories = RepositoryBundle(pool)
+        # The detection pipeline persists findings through the instrumented
+        # repository, so ``itsm_detection_findings_total`` counts what the
+        # deterministic rules actually produced.
+        findings_repo = InstrumentedFindingRepository(pool, repositories.tenant_id)
         investigation_service, model = build_investigation_service(
             repositories=repositories, config=config
         )
@@ -261,10 +309,11 @@ async def serve(config: AuditConsumerConfig) -> None:
         )
         try:
             while not stop.is_set():
+                started = time.perf_counter()
                 outcome = await consume_source_event(
                     consumer=consumer,
                     pool=pool,
-                    findings_repo=repositories.findings,
+                    findings_repo=findings_repo,
                     processing_repo=repositories.processing_records,
                     covered_sources=set(config.covered_sources),
                     clock_now=lambda: datetime.now(tz=UTC),
@@ -273,6 +322,11 @@ async def serve(config: AuditConsumerConfig) -> None:
                     timeout_seconds=config.fetch_timeout_seconds,
                 )
                 if outcome != "none":
+                    label = _OUTCOME_LABELS.get(outcome, outcome)
+                    elapsed = time.perf_counter() - started
+                    observe_audit_event(label)
+                    observe_consumer_message(label)
+                    observe_batch_processing(label, elapsed)
                     logger.info("message outcome=%s", outcome)
                 if stop.is_set():
                     break

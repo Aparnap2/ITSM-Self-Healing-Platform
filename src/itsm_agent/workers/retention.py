@@ -27,6 +27,7 @@ from itsm_agent.adapters.persistence.pool import PersistenceConfig, create_pool
 from itsm_agent.adapters.persistence.privileges import verify_runtime_database
 from itsm_agent.adapters.persistence.repositories import RepositoryBundle
 from itsm_agent.config import ConfigError
+from itsm_agent.observability.tracing import resolve_exporter_endpoint, setup_tracing
 from itsm_agent.privacy.scheduler import RetentionScheduler
 
 logger = logging.getLogger("itsm.retention")
@@ -121,6 +122,12 @@ def build_scheduler(
 
 async def serve(config: RetentionConfig) -> None:
     """Run passes until SIGTERM/SIGINT, then drain and close the pool."""
+    # Configure tracing before the first span is created; the provider is a
+    # process-wide singleton.
+    setup_tracing(
+        service_name="itsm-retention",
+        exporter_endpoint=resolve_exporter_endpoint(),
+    )
     pool = create_pool(PersistenceConfig(dsn=config.dsn))
     await pool.open()
     await pool.wait()
