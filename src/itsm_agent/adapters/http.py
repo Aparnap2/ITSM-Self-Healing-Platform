@@ -68,6 +68,7 @@ class AllowlistedHttpClient:
         timeout_seconds: float,
         max_retries: int,
         extra_headers: dict[str, str] | None = None,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base_origin = _origin(base_url)
         self._base_url = base_url.rstrip("/")
@@ -75,7 +76,10 @@ class AllowlistedHttpClient:
         self._timeout = timeout_seconds
         self._max_retries = max_retries
         self._headers = {"accept": "application/json", **(extra_headers or {})}
-        self._client = httpx.AsyncClient(
+        # An injected client is used verbatim (it may carry a custom CA or a
+        # test transport); otherwise one is built with the same origin,
+        # timeout and headers.
+        self._client = client or httpx.AsyncClient(
             base_url=self._base_url,
             timeout=httpx.Timeout(timeout_seconds),
             headers=self._headers,

@@ -1,38 +1,9 @@
 {
-  "artifact_version": "1.0",
+  "artifact_version": "2.0",
   "dataset": {
     "path": "evals/datasets/pilot_scenarios.json",
     "scenario_count": 16,
     "sha256": "48ad14f9d0a18871f8ab832f4e092f59566d1fffec8bc7483efe9339ed27e226"
-  },
-  "latency": {
-    "max_ms": 0.0708,
-    "mean_ms": 0.05,
-    "measurement": "monotonic clock (time.perf_counter_ns) around normalize + detect",
-    "min_ms": 0.0293,
-    "p50_ms": 0.0525,
-    "p95_ms": 0.0708,
-    "per_scenario_ms": {
-      "benign-ct-approved-assumerole": 0.0707,
-      "benign-ct-ec2-attach-volume": 0.0329,
-      "benign-ct-s3-getobject": 0.0349,
-      "benign-ct-s3-listbucket": 0.0299,
-      "benign-github-team-repo-add": 0.0293,
-      "benign-pg-insert": 0.0512,
-      "benign-pg-select": 0.057,
-      "mal-ct-access-denied": 0.0418,
-      "mal-ct-assumerole-admin": 0.0455,
-      "mal-ct-coverage-gap": 0.0538,
-      "mal-ct-cross-tenant-approval": 0.0592,
-      "mal-ct-denied-approval": 0.0708,
-      "mal-ct-identity-ambiguous": 0.0537,
-      "mal-ct-mismatched-approval": 0.0651,
-      "mal-ct-missing-approval": 0.0456,
-      "mal-pg-alter-role-superuser": 0.0592
-    },
-    "scenario_count": 16,
-    "unit": "milliseconds",
-    "warm_up_pass": "one unmeasured pass over the same dataset precedes the measured pass so that one-off first-call costs are not attributed to scenario latency"
   },
   "limitations": [
     "Simulated sources only: no real tenant, no production telemetry.",
@@ -54,9 +25,9 @@
     "evidence_preservation_definition": "a finding preserves evidence when the evidence bundle built for it carries the content hash of the raw source record that produced it",
     "false_positive_definition": "a benign scenario counts as a false positive when the engine produces any finding at all",
     "false_positive_rate_definition": "benign scenarios producing any finding / all labelled benign scenarios",
-    "latency_measurement": "monotonic clock (time.perf_counter_ns) around normalize + detect, per scenario; one unmeasured warm-up pass over the same dataset precedes the measured pass",
     "layer_measured": "deterministic detection layer (itsm_agent.detection.engine)",
     "matched_finding_ratio_definition": "share of the findings raised on malicious scenarios that match the scenario's expected finding type and outcome; the remainder are extra findings the engine raised alongside the expected one (an uncertainty answer such as COVERAGE_GAP or UNRESOLVED_IDENTITY, which reports that authorization could not be determined and therefore stands beside the classification finding)",
+    "performance_artifact": "evals/reports/pilot-performance.json",
     "recall_definition": "detected malicious scenarios / all labelled malicious scenarios",
     "recall_supported_rules_definition": "detected malicious scenarios / malicious scenarios that the current rule set claims to support (scenarios flagged known_gap are excluded)",
     "reproduce_command": "uv run pytest tests/e2e/test_pilot_metrics.py -q",

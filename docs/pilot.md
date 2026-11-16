@@ -29,8 +29,20 @@ uv run pytest tests/e2e/test_pilot_metrics.py -q
 The harness (`tests/e2e/test_pilot_metrics.py`) loads the labelled dataset in
 `evals/datasets/pilot_scenarios.json`, normalizes every scenario with the
 production collectors, runs the deterministic detection engine
-(`itsm_agent.detection.engine.run_detection`), and writes the committed
-evidence artifact `evals/reports/pilot-metrics.json`.
+(`itsm_agent.detection.engine.run_detection`), and writes **two** artifacts:
+
+- `evals/reports/pilot-metrics.json` — the committed **measurement**: scenario
+  results, precision, recall, false-positive rate, evidence preservation, the
+  method and the limitations. It is byte-stable across runs, and the harness
+  fails if the committed copy differs from a fresh measurement, so a stale
+  measurement can never be mistaken for a current one.
+- `evals/reports/pilot-performance.json` — the **performance** companion:
+  latency distribution, environment and the run timestamp. It is machine-
+  dependent and refreshed on every run by design; nothing is asserted
+  against it and it is not a benchmark.
+
+The split exists because a measurement and a timing are not the same kind of
+evidence: one is reproducible, the other is a property of the machine.
 
 ### Method
 
@@ -76,12 +88,12 @@ evidence artifact `evals/reports/pilot-metrics.json`.
 | Latency p50 / p95 (per scenario) | ≈ **0.06 ms** / ≈ **0.08 ms** (max ≈ 0.08 ms) |
 
 Latency figures are wall-clock measurements on one machine and are refreshed
-by every harness run; `evals/reports/pilot-metrics.json` holds the exact
+by every harness run; `evals/reports/pilot-performance.json` holds the exact
 values of the last measured run. Observed spread across runs: p50 0.05–0.06 ms,
 p95 0.06–0.08 ms.
 
 Every other block of the artifact is byte-stable. The harness compares the
-`metrics` block it just computed against the committed report and fails if
+stable artifact it just computed against the committed report and fails if
 they differ, so a stale report can never be mistaken for a current one; only
 the `latency` block legitimately differs between runs.
 
