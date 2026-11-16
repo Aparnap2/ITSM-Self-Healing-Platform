@@ -216,6 +216,17 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 - **Acceptance gate:** all CI jobs green with exact passed/failed/skipped counts reported; no zero-collected suites. **Accepted:** CI run 41271007745 on commit 98e83ef is fully green. The branch/PR remains draft and unmerged, so merge is still outstanding. Tasks marked 🟡 above remain "implemented; independent acceptance review pending" until the PR is reviewed and merged.
 - **Test phase:** Integration + CI gates (no new features; qualification only)
 
+## Milestone: Staging & Full E2E Demo Qualification (plan under review)
+
+The implementation plan for this milestone lives in
+`docs/staging-e2e-qualification-plan.md` (DRAFT — not approved work, nothing
+executed). It was derived from a read-only audit of the repository and is
+ordered by dependency: reviewer identity provisioning → local OIDC identity
+simulator → evidence-reference producer → observability wiring → rehearsal
+runner upgrade → failure-scenario gaps → artifact split → qualification
+record → demo storyboard. Five decisions are flagged in §6 of that document
+and are needed before execution starts.
+
 ## Remaining work — 2026-11-14 (todo list for delegated execution)
 
 Task source: this file. One task per slice; each slice is delegated, verified
