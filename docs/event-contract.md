@@ -136,6 +136,31 @@ duplicate original evidence, reviewer decisions, or external side effects, and
 must not trigger unbounded LLM investigations. One source event may produce
 zero, one, or many normalized domain facts; the relationship is preserved.
 
+## Evidence references
+
+A finding is anchored to the evidence that justifies it.
+
+- When deterministic detection persists a finding, it also persists an
+  `evidence_references` row **in the same tenant transaction**, so a finding
+  never lands without its evidence.
+- The reference carries the canonical source event's id and its
+  `payload_hash` as `content_hash`, so the reference stays verifiable against
+  the immutable source record.
+- The stored `excerpt` is a bounded (≤500 characters), redacted summary of the
+  event — never the raw payload, and never an unredacted secret pattern.
+  `redact_secrets` is applied before the value is stored, and again when a
+  bundle is served.
+- `trust_level` records how the evidence was obtained
+  (`SIMULATOR_OBSERVATION` for the collectors used today). It is an
+  observation, never an independent verification.
+- References are tenant-scoped and immutable: the table carries forced RLS and
+  a composite `(tenant_id, finding_id)` foreign key, so a cross-tenant
+  reference is impossible at the database level, and the reader only ever
+  returns references for the requested tenant and finding.
+- A model may cite only ids inside its request's evidence snapshot; the
+  orchestrator rejects any other reference
+  (`src/itsm_agent/investigations/orchestrator.py`).
+
 ## Known limitations
 
 - Schema is initial; will evolve with sources.
