@@ -1,0 +1,440 @@
+# Release path for the ITSM self-healing platform.
+#
+# Triggered by a version tag (vMAJOR.MINOR.PATCH) or manually for an existing
+# tag. It is a SEPARATE, EXPLICIT path — it never reuses a CI run's verdict,
+# it re-runs the canonical verification commands (the Makefile targets CI
+# uses) against the tagged commit.
+#
+# What it does, in order:
+#   1. verify  — checks out the TAGGED COMMIT, proves the checkout is the
+#                commit the tag points at, runs the same canonical gates CI
+#                runs (format, lint, typecheck, SAST, dependency audit, Trivy
+#                fs scan, all seven pytest suites), and records the exact SHA
+#                in the job summary.
+#   2. build   — builds the application image, runs the SAME container scan
+#                and SBOM generation CI runs, records the image digest, and
+#                uploads the reports and the digest as artifacts.
+#   3. publish — OPT-IN. Runs only when the owner has configured a registry
+#                (RELEASE_REGISTRY variable) and a credential
+#                (RELEASE_REGISTRY_TOKEN secret). It pushes the EXACT image
+#                that was scanned, by digest. Without those credentials
+#                nothing is pushed and the release is evidence-only.
+#
+# A portfolio deployment pulls the built digest, never a floating tag: the
+# digest is recorded in the job summary and in the `image-digest` artifact.
+#
+# All third-party actions are pinned to commit SHAs. Every job declares
+# least-privilege `permissions:` and a `timeout-minutes`.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag to release, e.g. v0.1.0.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  # A release run is never cancelled by a concurrent one: the evidence must
+  # be complete for the tagged commit.
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: itsm-agent
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  ARTIFACT_RETENTION_DAYS: 30
+
+jobs:
+  # --------------------------------------------------------------------------
+  # 1. Canonical verification of the tagged commit
+  # --------------------------------------------------------------------------
+  verify:
+    name: Verify tagged commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      PYTHONHASHSEED: "0"
+      # Unreachable services are a hard FAIL, never a green-with-skips job.
+      ITSM_TEST_STRICT: "1"
+      ITSM_TEST_PG_DSN: postgresql://itsm:itsm_test_password@localhost:5432/itsm_test
+      ITSM_TEST_NATS_URL: nats://localhost:4222
+      ITSM_MOCKOON_ITSM_BASE_URL: http://localhost:3001
+      ITSM_MOCKOON_IDENTITY_BASE_URL: http://localhost:3001
+      ITSM_MOCKOON_INFRASTRUCTURE_BASE_URL: http://localhost:3001
+    services:
+      postgres:
+        image: postgres:16.10-alpine
+        env:
+          POSTGRES_USER: itsm
+          POSTGRES_PASSWORD: itsm_test_password
+          POSTGRES_DB: itsm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U itsm -d itsm_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify the checkout is the tagged commit
+        run: |
+          set -eu
+          echo "Release tag: ${RELEASE_TAG}"
+          if ! printf '%s' "${RELEASE_TAG}" \
+            | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "::error::Tag '${RELEASE_TAG}' is not a vMAJOR.MINOR.PATCH version tag."
+            exit 1
+          fi
+          # Check out the TAGGED COMMIT explicitly and prove it is the commit
+          # the tag points at. The tag name is validated above before it is
+          # used, and it is passed through the environment, never spliced into
+          # the script as an untrusted template value.
+          git fetch --tags --force
+          git checkout --detach "refs/tags/${RELEASE_TAG}"
+          head_sha="$(git rev-parse HEAD)"
+          tag_sha="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          if [ "${head_sha}" != "${tag_sha}" ]; then
+            echo "::error::Checked out ${head_sha} but ${RELEASE_TAG} points at ${tag_sha}."
+            exit 1
+          fi
+          mkdir -p reports
+          printf 'sha=%s\ntag=%s\nrun_id=%s\n' \
+            "${head_sha}" "${RELEASE_TAG}" "${GITHUB_RUN_ID}" \
+            > reports/release-commit.txt
+          {
+            echo "## Release verification"
+            echo ""
+            echo "- **Tag:** \`${RELEASE_TAG}\`"
+            echo "- **Commit SHA:** \`${head_sha}\`"
+            echo "- **Run:** \`${GITHUB_RUN_ID}\` (attempt \`${GITHUB_RUN_ATTEMPT}\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Verified tagged commit ${head_sha}."
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          python-version: "3.12"
+          enable-cache: false
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev --reinstall-package itsm-agent --no-cache
+
+      - name: Start NATS simulator
+        run: |
+          docker run -d --name itsm-nats-release \
+            -p 4222:4222 \
+            -p 8222:8222 \
+            -v "$PWD/ci/nats.conf:/etc/nats/nats-server.conf:ro" \
+            nats:2.12.10-alpine \
+            -c /etc/nats/nats-server.conf
+      - name: Start Mockoon simulator
+        run: |
+          docker run -d --name itsm-mockoon-release \
+            -p 3001:3001 \
+            -v "$PWD/simulators/mockoon/mockoon.json:/home/mockoon/data/mockoon.json:ro" \
+            mockoon/cli:9.5.0 \
+            --data /home/mockoon/data/mockoon.json \
+            --port 3001 \
+            --disable-admin-api
+      - name: Wait for services (bounded, 30s)
+        run: |
+          set -e
+          for i in $(seq 1 30); do
+            if pg_isready -h localhost -U itsm -d itsm_test >/dev/null 2>&1 \
+              && wget -q -O - http://127.0.0.1:8222/healthz >/dev/null 2>&1 \
+              && curl -sf http://127.0.0.1:3001/health >/dev/null 2>&1; then
+              echo "All services ready after ${i}s."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Services not ready within 30s."
+          docker ps -a
+          exit 1
+      - name: Apply migrations (guarded)
+        run: |
+          set -e
+          shopt -s nullglob
+          files=(migrations/*.sql)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No migration files found — skipping (empty-DB baseline)."
+          else
+            for f in "${files[@]}"; do
+              echo "Applying $f"
+              PGPASSWORD=itsm_test_password psql -h localhost -U itsm \
+                -d itsm_test -v ON_ERROR_STOP=1 -f "$f"
+            done
+          fi
+
+      # --- the canonical CI gates, unchanged thresholds ---------------------
+      - name: Formatting, lint and static typing
+        run: |
+          make format-check
+          make lint
+          make typecheck
+      - name: SAST scan (bandit, must exit 0)
+        run: make sast
+      - name: Dependency vulnerability audit (pip-audit)
+        run: make audit-deps
+      - name: IaC / Dockerfile / secret scan (Trivy, must exit 0)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: "vuln,misconfig,secret"
+          skip-dirs: ".venv,.git"
+          # Intentional AWS key-shaped fixture used to prove redaction works.
+          skip-files: "tests/unit/test_redaction.py"
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: "CRITICAL,HIGH"
+      - name: Generate source SBOM (CycloneDX over source tree)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: cyclonedx
+          output: reports/sbom.cyclonedx.json
+
+      # --- the seven canonical pytest suites, same selectors as CI ---------
+      - name: Run unit tests
+        run: |
+          mkdir -p reports
+          make ci-stamp REPORT=unit-junit REPORT_JOB=release-verify \
+            REPORT_SHA="$(git rev-parse HEAD)"
+          make test-unit PYTEST_OPTS='--junitxml=reports/unit-junit.xml'
+      - name: Run contract tests
+        run: |
+          make ci-stamp REPORT=contract-junit REPORT_JOB=release-verify \
+            REPORT_SHA="$(git rev-parse HEAD)"
+          make test-contract PYTEST_OPTS='--junitxml=reports/contract-junit.xml'
+      - name: Run security invariant tests
+        run: |
+          make ci-stamp REPORT=security-junit REPORT_JOB=release-verify \
+            REPORT_SHA="$(git rev-parse HEAD)"
+          make test-security PYTEST_OPTS='--junitxml=reports/security-junit.xml'
+      - name: Run integration tests
+        run: |
+          make ci-stamp REPORT=integration-junit REPORT_JOB=release-verify \
+            REPORT_SHA="$(git rev-parse HEAD)"
+          make test-integration PYTEST_OPTS='--junitxml=reports/integration-junit.xml'
+      - name: Run fault injection tests
+        run: |
+          make ci-stamp REPORT=fault-injection-junit REPORT_JOB=release-verify \
+            REPORT_SHA="$(git rev-parse HEAD)"
+          make test-fault-injection \
+            PYTEST_OPTS='--junitxml=reports/fault-injection-junit.xml'
+      - name: Run scenario harness
+        run: |
+          make ci-stamp REPORT=scenarios-junit REPORT_JOB=release-verify \
+            REPORT_SHA="$(git rev-parse HEAD)"
+          make test-scenarios PYTEST_OPTS='--junitxml=reports/scenarios-junit.xml'
+      - name: Run e2e tests
+        run: |
+          make ci-stamp REPORT=e2e-junit REPORT_JOB=release-verify \
+            REPORT_SHA="$(git rev-parse HEAD)"
+          make test-e2e PYTEST_OPTS='--junitxml=reports/e2e-junit.xml'
+
+      - name: Check report integrity (no vacuous or stale evidence)
+        run: |
+          python3 tools/ci_summary.py \
+            --reports reports \
+            --sha "$(git rev-parse HEAD)" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --retention-days "$ARTIFACT_RETENTION_DAYS" \
+            --max-skipped 0 \
+            --no-require-needs
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-verification-reports
+          path: reports/
+          if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+      - name: Cleanup simulator containers
+        if: always()
+        run: docker rm -f itsm-mockoon-release itsm-nats-release || true
+
+  # --------------------------------------------------------------------------
+  # 2. Build the image, scan it, generate the SBOM, record the digest
+  # --------------------------------------------------------------------------
+  build:
+    name: Build, scan and record the image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [verify]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify the checkout is the tagged commit
+        run: |
+          set -eu
+          git fetch --tags --force
+          git checkout --detach "refs/tags/${RELEASE_TAG}"
+          head_sha="$(git rev-parse HEAD)"
+          tag_sha="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          if [ "${head_sha}" != "${tag_sha}" ]; then
+            echo "::error::Checked out ${head_sha} but ${RELEASE_TAG} points at ${tag_sha}."
+            exit 1
+          fi
+          echo "Building ${IMAGE_NAME}:${RELEASE_TAG} from ${head_sha}."
+
+      - name: Build the application image
+        run: |
+          set -eu
+          if [ ! -f Dockerfile ]; then
+            echo "::error::Dockerfile is missing — the release cannot build an image."
+            exit 1
+          fi
+          docker build -t "${IMAGE_NAME}:${RELEASE_TAG}" .
+      - name: Container image scan (trivy, vuln + secret + misconfig)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.RELEASE_TAG }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: "os,library"
+          scanners: "vuln,secret,misconfig"
+          severity: "CRITICAL,HIGH"
+      - name: Generate the image SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.RELEASE_TAG }}
+          format: cyclonedx
+          output: reports/sbom-image.cyclonedx.json
+      - name: Record the exact SHA and the image digest
+        run: |
+          set -eu
+          mkdir -p reports
+          head_sha="$(git rev-parse HEAD)"
+          digest="$(docker image inspect "${IMAGE_NAME}:${RELEASE_TAG}" --format '{{.Id}}')"
+          printf 'sha=%s\ntag=%s\nimage=%s\nimage_digest=%s\n' \
+            "${head_sha}" "${RELEASE_TAG}" "${IMAGE_NAME}" "${digest}" \
+            > reports/image-digest.txt
+          cat reports/image-digest.txt
+          {
+            echo ""
+            echo "## Built image"
+            echo ""
+            echo "- **Commit SHA:** \`${head_sha}\`"
+            echo "- **Image:** \`${IMAGE_NAME}:${RELEASE_TAG}\`"
+            echo "- **Image digest (config digest):** \`${digest}\`"
+            echo ""
+            echo "Pull by digest, never by a floating tag."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Export the image for the optional publish step
+        run: |
+          set -eu
+          mkdir -p reports
+          docker save "${IMAGE_NAME}:${RELEASE_TAG}" | gzip -1 > reports/image.tar.gz
+          echo "Exported $(du -h reports/image.tar.gz | cut -f1) image archive."
+      - name: Upload the reports, the digest and the scanned image
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-image
+          path: reports/
+          if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+  # --------------------------------------------------------------------------
+  # 3. Publish — OPT-IN, and only the exact image that was scanned
+  # --------------------------------------------------------------------------
+  publish:
+    name: Publish image (OPT-IN: registry credentials required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [build]
+    # The elevated `packages: write` permission is only granted when the
+    # owner has set the registry variable. The credential itself is checked
+    # in the first step, which fails loudly when it is missing.
+    if: ${{ vars.RELEASE_REGISTRY != '' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Assert the registry credential is present
+        env:
+          REGISTRY: ${{ vars.RELEASE_REGISTRY }}
+          REGISTRY_TOKEN: ${{ secrets.RELEASE_REGISTRY_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${REGISTRY_TOKEN}" ]; then
+            echo "::error::RELEASE_REGISTRY is set but RELEASE_REGISTRY_TOKEN is missing."
+            echo "Refusing to publish: registry publishing is opt-in and needs a credential."
+            exit 1
+          fi
+          echo "Registry publishing is enabled for ${REGISTRY}."
+      - name: Download the scanned image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-image
+          path: reports/
+      - name: Load the scanned image
+        run: |
+          set -eu
+          gunzip -c reports/image.tar.gz | docker load
+          docker image inspect "${IMAGE_NAME}:${RELEASE_TAG}" --format '{{.Id}}'
+      - name: Log in to the registry
+        env:
+          REGISTRY: ${{ vars.RELEASE_REGISTRY }}
+          REGISTRY_USER: ${{ vars.RELEASE_REGISTRY_USER }}
+          REGISTRY_TOKEN: ${{ secrets.RELEASE_REGISTRY_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${REGISTRY_USER}" ]; then
+            REGISTRY_USER="${GITHUB_REPOSITORY_OWNER}"
+          fi
+          printf '%s' "${REGISTRY_TOKEN}" \
+            | docker login "${REGISTRY}" -u "${REGISTRY_USER}" --password-stdin
+      - name: Push the scanned image and record the registry digest
+        env:
+          REGISTRY: ${{ vars.RELEASE_REGISTRY }}
+        run: |
+          set -eu
+          target="${REGISTRY}/${IMAGE_NAME}:${RELEASE_TAG}"
+          docker tag "${IMAGE_NAME}:${RELEASE_TAG}" "${target}"
+          docker push "${target}"
+          digest="$(docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "${target}" \
+            | grep -F "${REGISTRY}/" | head -n 1)"
+          printf '%s\n' "${digest}" > reports/registry-digest.txt
+          {
+            echo ""
+            echo "## Published image"
+            echo ""
+            echo "- **Registry:** \`${REGISTRY}\`"
+            echo "- **Reference:** \`${target}\`"
+            echo "- **Registry digest:** \`${digest}\`"
+            echo ""
+            echo "Deploy by digest: \`${target%:*}\@${digest##*@}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the registry digest
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-registry-digest
+          path: reports/registry-digest.txt
+          if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
