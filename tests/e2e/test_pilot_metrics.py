@@ -5,16 +5,19 @@ artifact: detection recall, false-positive rate, evidence preservation and
 end-to-end latency for the **deterministic detection layer**.
 
 Offline and deterministic: no network, no database, no LLM, no container.
-Every number in the artifact except the wall-clock latency block is
-byte-stable across runs; the ``metrics`` block is asserted to be unchanged
-against the committed report.
 
-The harness writes ``evals/reports/pilot-metrics.json``. Re-running it
-refreshes the latency block, so the committed report legitimately shows a
-diff after a local run; commit the refreshed report together with whatever
-change caused it. The committed report holds the values of the last measured
-run, and the test fails until the report has been regenerated, so a stale
-report can never be mistaken for a current one.
+The harness writes **two** artifacts, because a measurement and a timing are
+not the same kind of evidence:
+
+* ``evals/reports/pilot-metrics.json`` — the **stable** measurement: scenario
+  results, precision, recall, false-positive rate, evidence preservation, the
+  method and the limitations. It is byte-stable across runs, and the test
+  asserts the committed copy is unchanged, so a stale measurement can never
+  be mistaken for a current one.
+* ``evals/reports/pilot-performance.json`` — the **variable** performance
+  block: latency distribution, environment and the run timestamp. It is
+  refreshed on every run by design; nothing asserts against it, and it is
+  explicitly not a benchmark.
 
 It also asserts the one-escalation-finding-per-event invariant: a single
 event never yields both the generic ``PRIVILEGE_ESCALATION`` classification
@@ -29,9 +32,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import platform
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -53,6 +58,9 @@ pytestmark = pytest.mark.e2e
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATASET_PATH = REPO_ROOT / "evals" / "datasets" / "pilot_scenarios.json"
 REPORT_PATH = REPO_ROOT / "evals" / "reports" / "pilot-metrics.json"
+#: The machine-dependent companion: timings, environment and run timestamp.
+#: It is refreshed on every run and is never asserted against.
+PERFORMANCE_PATH = REPO_ROOT / "evals" / "reports" / "pilot-performance.json"
 
 #: Date the committed measurement artifact was produced. Deliberately a
 #: constant (not ``date.today()``) so the report stays byte-comparable
@@ -427,10 +435,14 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _build_artifact(metrics: dict[str, Any], latency: dict[str, Any]) -> dict[str, Any]:
-    """Assemble the committed evidence artifact (no run-varying timestamps)."""
+def _build_metrics_artifact(metrics: dict[str, Any]) -> dict[str, Any]:
+    """The stable evidence artifact: measurements, method and limitations.
+
+    Nothing in here varies between runs — no timestamp, no timing — so the
+    file is byte-comparable and can be asserted against the committed copy.
+    """
     return {
-        "artifact_version": "1.0",
+        "artifact_version": "2.0",
         "measured_on": MEASURED_ON,
         "dataset": {
             "path": "evals/datasets/pilot_scenarios.json",
@@ -469,10 +481,6 @@ def _build_artifact(metrics: dict[str, Any], latency: dict[str, Any]) -> dict[st
                 "or UNRESOLVED_IDENTITY, which reports that authorization could not be "
                 "determined and therefore stands beside the classification finding)"
             ),
-            "latency_measurement": (
-                "monotonic clock (time.perf_counter_ns) around normalize + detect, per scenario; "
-                "one unmeasured warm-up pass over the same dataset precedes the measured pass"
-            ),
             "reproduce_command": REPRODUCE_COMMAND,
             "environment": {
                 "network": "not used",
@@ -480,9 +488,9 @@ def _build_artifact(metrics: dict[str, Any], latency: dict[str, Any]) -> dict[st
                 "llm": "not used",
                 "data": "simulated only",
             },
+            "performance_artifact": "evals/reports/pilot-performance.json",
         },
         "metrics": metrics,
-        "latency": latency,
         "limitations": [
             "Simulated sources only: no real tenant, no production telemetry.",
             "Small labelled dataset: these rates are not statistically meaningful benchmarks.",
@@ -494,6 +502,45 @@ def _build_artifact(metrics: dict[str, Any], latency: dict[str, Any]) -> dict[st
             "escalation is still not detected; the scenario is labelled known_gap so the miss "
             "is reported instead of being hidden, and overall recall stays below 1.0.",
         ],
+    }
+
+
+def _build_performance_artifact(latency: dict[str, Any], metrics: dict[str, Any]) -> dict[str, Any]:
+    """The variable artifact: timings, environment and the run timestamp.
+
+    Machine-dependent by nature. It is refreshed on every run, is never
+    asserted against, and must not be read as a benchmark.
+    """
+    return {
+        "artifact_version": "2.0",
+        "measured_on": MEASURED_ON,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "dataset": {
+            "path": "evals/datasets/pilot_scenarios.json",
+            "sha256": _sha256(DATASET_PATH),
+        },
+        "rule_version": RULE_VERSION,
+        "measurement": {
+            "what": (
+                "monotonic clock (time.perf_counter_ns) around normalize + detect, per "
+                "scenario; one unmeasured warm-up pass over the same dataset precedes the "
+                "measured pass"
+            ),
+            "stability": (
+                "machine-dependent: this artifact changes on every run and is not a benchmark"
+            ),
+            "reproduce_command": REPRODUCE_COMMAND,
+        },
+        "environment": {
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+            "network": "not used",
+            "database": "not used",
+            "llm": "not used",
+            "data": "simulated only",
+        },
+        "scenario_count": metrics["scenario_count"],
+        "latency": latency,
     }
 
 
@@ -605,13 +652,19 @@ def test_pilot_metrics_are_internally_consistent() -> None:
     assert latency["min_ms"] <= latency["p50_ms"] <= latency["p95_ms"] <= latency["max_ms"]
     assert len(latency["per_scenario_ms"]) == metrics["scenario_count"]
 
-    artifact = _build_artifact(metrics, latency)
+    stable = _build_metrics_artifact(metrics)
     previous = _read_artifact()
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REPORT_PATH.write_text(json.dumps(artifact, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    REPORT_PATH.write_text(json.dumps(stable, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+    # The performance artifact is machine-dependent and refreshed every run.
+    PERFORMANCE_PATH.write_text(
+        json.dumps(_build_performance_artifact(latency, metrics), sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
     if previous is not None:
-        assert previous.get("metrics") == metrics, (
+        assert previous == stable, (
             "pilot detection metrics changed since the committed report "
             f"({REPORT_PATH}). The report was regenerated; review the diff, update "
             "docs/pilot.md with the new numbers and commit both."

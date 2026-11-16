@@ -22,6 +22,16 @@ localstack/
 # Generated CI / security reports (JUnit, SBOM, ZAP, DAST logs)
 reports/
 
+# Committed evidence artifacts are re-included explicitly: the pilot
+# measurement (stable) and its machine-dependent performance companion, and
+# the staging rehearsal report directory. Everything else under a reports/
+# directory stays ignored.
+!evals/reports/
+evals/reports/*
+!evals/reports/pilot-metrics.json
+!evals/reports/pilot-performance.json
+!evals/reports/staging/
+
 # IDE / OS
 .idea/
 .vscode/

@@ -31,6 +31,7 @@ import json
 from typing import Any, Final
 from uuid import UUID
 
+import httpx
 from pydantic import ValidationError
 
 from itsm_agent.adapters.http import (
@@ -100,6 +101,7 @@ class GroqInvestigationModel:
         max_tokens: int,
         timeout_seconds: float,
         max_retries: int,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         if not api_key:
             raise ValueError("GroqInvestigationModel requires a non-empty api_key")
@@ -114,6 +116,7 @@ class GroqInvestigationModel:
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
             extra_headers={"authorization": f"Bearer {api_key}"},
+            client=client,
         )
         #: The last raw model payload, for operator debugging only.
         self.last_raw_payload: dict[str, Any] | None = None
