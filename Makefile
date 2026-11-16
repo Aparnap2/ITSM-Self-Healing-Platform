@@ -114,11 +114,11 @@ ci-stamp:
 
 test-unit: ## Unit tests
 	$(MAKE) --no-print-directory guard-collect PYTEST_MARKER=unit PYTEST_SUITE=unit-junit
-	uv run pytest -m unit $(PYTEST_OPTS)
+	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} uv run pytest -m unit $(PYTEST_OPTS)
 
 test-contract: ## Adapter contract tests against simulators (offline)
 	$(MAKE) --no-print-directory guard-collect PYTEST_MARKER=contract PYTEST_SUITE=contract-junit
-	uv run pytest -m contract $(PYTEST_OPTS)
+	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} uv run pytest -m contract $(PYTEST_OPTS)
 
 test-security: ## Security invariant tests (requires PG; fail closed on missing services in CI)
 	$(MAKE) --no-print-directory guard-collect PYTEST_MARKER=security PYTEST_SUITE=security-junit
@@ -140,16 +140,20 @@ test-e2e: ## Complete end-to-end scenarios (requires PG+NATS+simulators)
 	$(MAKE) --no-print-directory guard-collect PYTEST_MARKER=e2e PYTEST_SUITE=e2e-junit
 	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} uv run pytest -m e2e $(PYTEST_OPTS)
 
-verify-fast: ## Fast offline verification (no services, no network)
-	$(MAKE) format-check lint typecheck test-unit test-contract sast
+# Canonical verification sequence. ``verify`` and ``verify-ci`` run EXACTLY
+# these targets, in this order: local verification must never report green
+# while silently omitting a suite that CI requires (the fault-injection suite
+# was such an omission). ``verify-ci`` only adds ITSM_TEST_STRICT=1.
+VERIFY_SEQUENCE = format-check lint typecheck test-unit test-contract test-security test-fault-injection test-integration test-scenarios test-e2e sast
 
-verify: ## Local full verification (offline + PG/NATS required)
-	$(MAKE) format-check lint typecheck test-unit test-contract test-security test-integration test-fault-injection test-scenarios test-e2e sast
+verify: ## Local full verification (offline + PG/NATS required) - same suites as CI
+	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} $(MAKE) $(VERIFY_SEQUENCE)
 
-verify-ci: ## Strict CI-equivalent verification
-	ITSM_TEST_STRICT=1 $(MAKE) format-check lint typecheck sast
-	ITSM_TEST_STRICT=1 $(MAKE) test-unit test-contract test-security test-integration test-fault-injection test-scenarios
-	ITSM_TEST_STRICT=1 $(MAKE) test-e2e
+verify-ci: ## Strict CI-equivalent verification (identical suite set, strict mode)
+	ITSM_TEST_STRICT=1 $(MAKE) $(VERIFY_SEQUENCE)
+
+verify-fast: ## Faster development loop: static gates + unit + contract only (NOT a release gate)
+	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} $(MAKE) format-check lint typecheck test-unit test-contract
 
 sast: ## SAST scan of src/ with bandit (must exit 0)
 	uv run bandit -q -c pyproject.toml -r src
