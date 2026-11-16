@@ -13,7 +13,7 @@ SHELL := /bin/sh
 .PHONY: help format format-check lint typecheck test-unit test-contract \
         test-security test-fault-injection test-integration test-scenarios \
         test-e2e verify verify-ci test sast audit-deps hooks-install \
-        verify-pre-push act-ci compose-up compose-down \
+        verify-fast verify-pre-push act-ci compose-up compose-down \
         compose-reset demo-reset demo-run e2e-staging
 
 help: ## Show available targets
@@ -39,10 +39,10 @@ typecheck: ## Strict typecheck with mypy (CI gate 2)
 PYTEST_OPTS ?=
 
 test-unit: ## Unit tests
-	uv run pytest -m unit $(PYTEST_OPTS)
+	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} uv run pytest -m unit $(PYTEST_OPTS)
 
 test-contract: ## Adapter contract tests against simulators (offline)
-	uv run pytest -m contract $(PYTEST_OPTS)
+	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} uv run pytest -m contract $(PYTEST_OPTS)
 
 test-security: ## Security invariant tests (requires PG; fail closed on missing services in CI)
 	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} uv run pytest -m security $(PYTEST_OPTS)
@@ -59,13 +59,20 @@ test-scenarios: ## 24-scenario evaluation harness
 test-e2e: ## Complete end-to-end scenarios (requires PG+NATS+simulators)
 	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} uv run pytest -m e2e $(PYTEST_OPTS)
 
-verify: ## Local full verification (offline + PG/NATS required)
-	$(MAKE) format-check lint typecheck test-unit test-contract test-security test-integration test-scenarios test-e2e sast
+# Canonical verification sequence. ``verify`` and ``verify-ci`` run EXACTLY
+# these targets, in this order: local verification must never report green
+# while silently omitting a suite that CI requires (the fault-injection suite
+# was such an omission). ``verify-ci`` only adds ITSM_TEST_STRICT=1.
+VERIFY_SEQUENCE = format-check lint typecheck test-unit test-contract test-security test-fault-injection test-integration test-scenarios test-e2e sast
 
-verify-ci: ## Strict CI-equivalent verification
-	ITSM_TEST_STRICT=1 $(MAKE) format-check lint typecheck sast
-	ITSM_TEST_STRICT=1 $(MAKE) test-unit test-contract test-security test-integration test-fault-injection test-scenarios
-	ITSM_TEST_STRICT=1 $(MAKE) test-e2e
+verify: ## Local full verification (offline + PG/NATS required) - same suites as CI
+	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} $(MAKE) $(VERIFY_SEQUENCE)
+
+verify-ci: ## Strict CI-equivalent verification (identical suite set, strict mode)
+	ITSM_TEST_STRICT=1 $(MAKE) $(VERIFY_SEQUENCE)
+
+verify-fast: ## Faster development loop: static gates + unit + contract only (NOT a release gate)
+	ITSM_TEST_STRICT=$${ITSM_TEST_STRICT:-1} $(MAKE) format-check lint typecheck test-unit test-contract
 
 sast: ## SAST scan of src/ with bandit (must exit 0)
 	uv run bandit -q -c pyproject.toml -r src
