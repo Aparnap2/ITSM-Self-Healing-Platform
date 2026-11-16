@@ -71,8 +71,36 @@ from itsm_agent.investigations.service import InvestigationService
 #: Repository root (the tool lives in ``tools/``).
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-#: Default report location. The report is a run artifact, not a source file.
-DEFAULT_REPORT_PATH = REPO_ROOT / "evals" / "reports" / "staging-run.json"
+#: Default report location: the committed staging evidence directory. The
+#: report is a run artifact, and it is the retained evidence of a rehearsal,
+#: so it lives where it can be committed (``.gitignore`` un-ignores exactly
+#: this path).
+DEFAULT_REPORT_DIR = REPO_ROOT / "evals" / "reports" / "staging"
+DEFAULT_REPORT_PATH = DEFAULT_REPORT_DIR / "staging-run.json"
+
+
+def default_report_path(run_id: str) -> Path:
+    """The per-run report path inside the committed staging directory."""
+    return DEFAULT_REPORT_DIR / f"staging-run-{run_id}.json"
+
+
+def sanitize_report(report: dict[str, Any], secrets: Sequence[str]) -> dict[str, Any]:
+    """Remove any secret that reached the report before it is written.
+
+    The report must carry evidence, never credentials. This is defence in
+    depth: the report is assembled from known-safe values, and anything that
+    looks like a configured secret is redacted here as well.
+    """
+    text = json.dumps(report, indent=2, default=str)
+    for secret in secrets:
+        if secret and len(secret) >= 8:
+            text = text.replace(secret, "[REDACTED]")
+    try:
+        sanitized = json.loads(text)
+    except ValueError:  # pragma: no cover - json.dumps/loads round-trip
+        return report
+    return sanitized if isinstance(sanitized, dict) else report
+
 
 #: Default number of seconds to wait for a finding to appear.
 DEFAULT_POLL_SECONDS = 60.0
@@ -102,9 +130,37 @@ REQUIRED_ENVIRONMENTS: dict[str, tuple[str, ...]] = {
     "database DSN": ("ITSM_POSTGRES_DSN", "DATABASE_URL"),
     "NATS URL": ("ITSM_NATS_URL", "NATS_URL"),
     "webhook signing secret": ("ITSM_WEBHOOK_SECRET",),
-    "reviewer HMAC secret": ("ITSM_AUTH_HMAC_SECRET",),
     "Groq API key": ("ITSM_GROQ_API_KEY",),
 }
+
+#: Credential modes, in the order they are preferred.
+#:
+#: * ``oidc`` — a token is fetched from the configured identity provider. This
+#:   is the mode a staging deployment uses: the API refuses HMAC in staging,
+#:   so the rehearsal must speak the same protocol the deployment does.
+#: * ``token`` — an explicitly supplied bearer token (the operator already
+#:   holds one).
+#: * ``hmac`` — the local-only HMAC bearer. Kept for a non-OIDC local run and
+#:   clearly labelled as such; it is never a staging mode.
+CREDENTIAL_MODE_OIDC = "oidc"
+CREDENTIAL_MODE_TOKEN = "token"
+CREDENTIAL_MODE_HMAC = "hmac"
+
+
+def credential_mode(env: Mapping[str, str]) -> str | None:
+    """Which reviewer credential mode the environment supports.
+
+    Pure function: no network, no database, no disk.
+    """
+    if (env.get("ITSM_REVIEWER_TOKEN") or "").strip():
+        return CREDENTIAL_MODE_TOKEN
+    if (env.get("ITSM_IDENTITY_BASE_URL") or "").strip() and (
+        env.get("ITSM_IDENTITY_CA_FILE") or ""
+    ).strip():
+        return CREDENTIAL_MODE_OIDC
+    if (env.get("ITSM_AUTH_HMAC_SECRET") or "").strip():
+        return CREDENTIAL_MODE_HMAC
+    return None
 
 
 def missing_requirements(env: Mapping[str, str]) -> list[str]:
@@ -116,6 +172,29 @@ def missing_requirements(env: Mapping[str, str]) -> list[str]:
     for label, names in REQUIRED_ENVIRONMENTS.items():
         if not any((env.get(name) or "").strip() for name in names):
             missing.append(f"{label} (one of: {', '.join(names)})")
+    mode = credential_mode(env)
+    if mode is None:
+        missing.append(
+            "reviewer credential (one of: ITSM_REVIEWER_TOKEN, "
+            "ITSM_IDENTITY_BASE_URL + ITSM_IDENTITY_CA_FILE, "
+            "ITSM_AUTH_HMAC_SECRET for a local non-OIDC run)"
+        )
+    elif mode == CREDENTIAL_MODE_OIDC:
+        subjects = [
+            (env.get("ITSM_REVIEWER_SUBJECT_A") or "").strip(),
+            (env.get("ITSM_REVIEWER_SUBJECT_B") or "").strip(),
+        ]
+        if not all(subjects):
+            missing.append(
+                "two reviewer subjects (ITSM_REVIEWER_SUBJECT_A and "
+                "ITSM_REVIEWER_SUBJECT_B) — independent verification needs two "
+                "distinct identities"
+            )
+        if subjects[0] and subjects[0] == subjects[1]:
+            missing.append(
+                "the two reviewer subjects must differ: the same identity cannot "
+                "close out and independently verify its own close-out"
+            )
     reviewer_secret = (env.get("ITSM_AUTH_HMAC_SECRET") or "").strip()
     if reviewer_secret and len(reviewer_secret) < MIN_SECRET_LENGTH:
         missing.append(
@@ -269,7 +348,34 @@ class StagingOptions:
 
     @property
     def reviewer_secret(self) -> str:
-        return _resolve(self.env, REQUIRED_ENVIRONMENTS["reviewer HMAC secret"])
+        return _resolve(self.env, ("ITSM_AUTH_HMAC_SECRET",))
+
+    @property
+    def credential_mode(self) -> str:
+        mode = credential_mode(self.env)
+        if mode is None:
+            raise StagingRunError("no reviewer credential mode is configured")
+        return mode
+
+    @property
+    def reviewer_token(self) -> str:
+        return _resolve(self.env, ("ITSM_REVIEWER_TOKEN",))
+
+    @property
+    def identity_base_url(self) -> str:
+        return _resolve(self.env, ("ITSM_IDENTITY_BASE_URL",))
+
+    @property
+    def identity_ca_file(self) -> str:
+        return _resolve(self.env, ("ITSM_IDENTITY_CA_FILE",))
+
+    @property
+    def reviewer_subject_a(self) -> str:
+        return _resolve(self.env, ("ITSM_REVIEWER_SUBJECT_A",))
+
+    @property
+    def reviewer_subject_b(self) -> str:
+        return _resolve(self.env, ("ITSM_REVIEWER_SUBJECT_B",))
 
     @property
     def groq_api_key(self) -> str:
@@ -284,6 +390,121 @@ class StagingOptions:
     @property
     def groq_model(self) -> str:
         return (self.env.get("ITSM_GROQ_MODEL") or "").strip() or "openai/gpt-oss-120b"
+
+
+def _git_sha() -> str:
+    """The commit SHA of the repository under test (empty when unknown)."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - environment
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+async def _acquire_credentials(options: StagingOptions) -> tuple[str, str, str]:
+    """Return (token_a, token_b, mode) for the two reviewers.
+
+    In the OIDC mode both tokens come from the configured identity provider,
+    for two distinct subjects. In the token mode one supplied token is used
+    for both (the independence rule then refuses the verification, which is
+    the correct outcome). In the labelled local HMAC mode the runner mints
+    two tokens with distinct principals.
+    """
+    mode = options.credential_mode
+    if mode == CREDENTIAL_MODE_TOKEN:
+        token = options.reviewer_token
+        return token, token, mode
+    if mode == CREDENTIAL_MODE_OIDC:
+        from itsm_agent.simulators.identity.client import fetch_token
+
+        token_a = await fetch_token(
+            base_url=options.identity_base_url,
+            subject=options.reviewer_subject_a,
+            ca_path=options.identity_ca_file,
+        )
+        token_b = await fetch_token(
+            base_url=options.identity_base_url,
+            subject=options.reviewer_subject_b,
+            ca_path=options.identity_ca_file,
+        )
+        return token_a, token_b, mode
+    token_a = mint_token(
+        options.reviewer_secret,
+        principal_id="staging-e2e-reviewer-a",
+        tenant_ids=[options.tenant_id],
+        roles=[Role.REVIEWER],
+    )
+    token_b = mint_token(
+        options.reviewer_secret,
+        principal_id="staging-e2e-reviewer-b",
+        tenant_ids=[options.tenant_id],
+        roles=[Role.REVIEWER],
+    )
+    return token_a, token_b, mode
+
+
+async def _apply_transition(
+    client: httpx.AsyncClient,
+    *,
+    options: StagingOptions,
+    finding_id: Any,
+    token: str,
+    to_status: str,
+    reason: str,
+) -> tuple[int, dict[str, Any]]:
+    """Apply one lifecycle transition over HTTP; return (status, body)."""
+    response = await client.post(
+        f"{options.api_base_url.rstrip('/')}/v1/findings/{finding_id}/transition",
+        params={"tenant_id": str(options.tenant_id)},
+        headers={"authorization": f"Bearer {token}"},
+        json={"to_status": to_status, "reason": reason},
+    )
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    return response.status_code, body if isinstance(body, dict) else {}
+
+
+def _evidence_grounding(
+    *,
+    proposal: InvestigationProposal | None,
+    snapshot_ids: Sequence[Any],
+    persisted: Sequence[Any],
+) -> dict[str, Any]:
+    """Check that the proposal's evidence claims are real and in-snapshot.
+
+    An evidence row may be referenced by its own id or by the source event it
+    anchors to, so both are accepted; anything else is a fabricated claim.
+    """
+    if proposal is None:
+        return {
+            "checked": False,
+            "reason": "no proposal was produced",
+            "in_snapshot": False,
+            "resolves_to_persisted_evidence": False,
+        }
+    cited = list(proposal.supporting_evidence) + list(proposal.contradicting_evidence)
+    snapshot = {str(item) for item in snapshot_ids}
+    persisted_ids = {str(getattr(row, "id", "")) for row in persisted}
+    persisted_sources = {str(getattr(row, "source_event_id", "")) for row in persisted}
+    in_snapshot = all(str(item) in snapshot for item in cited)
+    resolves = all(str(item) in persisted_ids or str(item) in persisted_sources for item in cited)
+    return {
+        "checked": True,
+        "cited_evidence_ids": [str(item) for item in cited],
+        "in_snapshot": in_snapshot,
+        "resolves_to_persisted_evidence": resolves,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -494,21 +715,23 @@ async def run_staging(options: StagingOptions) -> tuple[dict[str, Any], int]:
             f"{budgeted.calls_used} model call(s) used",
         )
 
-        # --- 6. evidence bundle over HTTP -----------------------------------
-        token = mint_token(
-            options.reviewer_secret,
-            principal_id="staging-e2e-runner",
-            tenant_ids=[options.tenant_id],
-            roles=[Role.REVIEWER],
-        )
+        # --- 6. reviewer credentials ----------------------------------------
+        # The rehearsal authenticates the way the deployment does: through the
+        # configured identity provider. The HMAC bearer is a labelled local
+        # fallback only, because a staging API refuses it.
+        token_a, token_b, credential_mode_used = await _acquire_credentials(options)
+        log.add("credentials", credential_mode_used, "two reviewer credentials acquired")
+
+        # --- 7. evidence bundle over HTTP (mandatory) ------------------------
         bundle: dict[str, Any] = {}
         bundle_error = ""
+        transitions: list[dict[str, Any]] = []
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
             try:
                 response = await client.get(
                     f"{options.api_base_url.rstrip('/')}/v1/findings/{finding.id}/bundle",
                     params={"tenant_id": str(options.tenant_id)},
-                    headers={"authorization": f"Bearer {token}"},
+                    headers={"authorization": f"Bearer {token_a}"},
                 )
                 if response.status_code == 200:
                     bundle = response.json()
@@ -523,6 +746,54 @@ async def run_staging(options: StagingOptions) -> tuple[dict[str, Any], int]:
                     f"the API at {options.api_base_url} is unreachable: {type(exc).__name__}"
                 )
                 log.add("evidence_bundle", "failed", bundle_error)
+
+            # --- 8. reviewer lifecycle ---------------------------------------
+            # Reviewer A closes the finding out; reviewer B verifies it
+            # independently. The policy refuses a self-verification, and the
+            # rehearsal must not work around that refusal.
+            for reviewer, token, to_status, reason in (
+                ("reviewer-a", token_a, "ACKNOWLEDGED", "triaged during the rehearsal"),
+                ("reviewer-a", token_a, "RESOLVED", "remediated during the rehearsal"),
+                ("reviewer-b", token_b, "VERIFIED", "independently verified in the rehearsal"),
+            ):
+                status, body = await _apply_transition(
+                    client,
+                    options=options,
+                    finding_id=finding.id,
+                    token=token,
+                    to_status=to_status,
+                    reason=reason,
+                )
+                transitions.append(
+                    {
+                        "reviewer": reviewer,
+                        "to_status": to_status,
+                        "http_status": status,
+                        "code": str(body.get("code", "")),
+                        "accepted": status == 200,
+                    }
+                )
+                log.add(
+                    "transition",
+                    f"{to_status}:{status}",
+                    f"reviewer {reviewer} ({str(body.get('code', '')) or 'accepted'})",
+                )
+
+        # --- 9. evidence grounding ------------------------------------------
+        persisted_evidence = await repositories.evidence_references.list_for_tenant_finding(
+            options.tenant_id, finding.id
+        )
+        grounding = _evidence_grounding(
+            proposal=proposal,
+            snapshot_ids=(source_event.event_id,),
+            persisted=persisted_evidence,
+        )
+        log.add(
+            "evidence_grounding",
+            "checked" if grounding["checked"] else "skipped",
+            f"in_snapshot={grounding['in_snapshot']} "
+            f"resolves={grounding['resolves_to_persisted_evidence']}",
+        )
 
         stored = await repositories.findings.get(options.tenant_id, finding.id)
         status_after_investigation = stored.status if stored is not None else "UNKNOWN"
@@ -546,14 +817,32 @@ async def run_staging(options: StagingOptions) -> tuple[dict[str, Any], int]:
             bundle_error=bundle_error,
             model_failure=budgeted.failure,
             debug_path=budgeted.debug_path,
+            credential_mode=credential_mode_used,
+            transitions=transitions,
+            grounding=grounding,
+            git_sha=_git_sha(),
+            persisted_evidence=len(persisted_evidence),
         )
         exit_code = 0
         if budgeted.failure is not None:
             # A model failure ends the run: no retry loop, no silent continue.
             exit_code = 1
-        # A missing evidence bundle is recorded, not fatal: the bundle is an
-        # observation, and the API may not have the evidence-reference store
-        # wired (it then answers 503). The core rehearsal result stands.
+        if bundle_error:
+            # The bundle is part of the rehearsal, not an observation: a
+            # reviewer cannot examine evidence the API does not serve.
+            exit_code = 1
+        if proposal is not None and (
+            not grounding.get("checked", False)
+            or not grounding.get("in_snapshot")
+            or not grounding.get("resolves_to_persisted_evidence")
+        ):
+            # A proposal that cites evidence outside the snapshot, or evidence
+            # that does not exist, is not evidence-grounded.
+            exit_code = 1
+        if any(not item["accepted"] for item in transitions):
+            # A refused transition (for example a self-verification) fails the
+            # rehearsal; it is never worked around.
+            exit_code = 1
         return report, exit_code
     finally:
         if consumer is not None:
@@ -583,6 +872,11 @@ def _build_report(
     llm_budget_calls: int,
     bundle: dict[str, Any],
     bundle_error: str,
+    credential_mode: str = "",
+    transitions: list[dict[str, Any]] | None = None,
+    grounding: dict[str, Any] | None = None,
+    git_sha: str = "",
+    persisted_evidence: int = 0,
     model_failure: Exception | None,
     debug_path: Path | None,
 ) -> dict[str, Any]:
@@ -649,6 +943,11 @@ def _build_report(
         },
         "evidence_bundle": bundle,
         "evidence_bundle_error": bundle_error,
+        "credential_mode": credential_mode,
+        "reviewer_transitions": transitions or [],
+        "evidence_grounding": grounding or {},
+        "persisted_evidence_count": persisted_evidence,
+        "git_sha": git_sha,
         "notes": notes,
         "statements": {
             "proposal_is_advisory": (
@@ -809,6 +1108,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     report["report_path"] = str(options.report_path)
+    report = sanitize_report(
+        report,
+        [
+            options.groq_api_key,
+            options.reviewer_secret if options.credential_mode == CREDENTIAL_MODE_HMAC else "",
+            options.reviewer_token,
+        ],
+    )
     options.report_path.parent.mkdir(parents=True, exist_ok=True)
     options.report_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     _print_summary(report)
