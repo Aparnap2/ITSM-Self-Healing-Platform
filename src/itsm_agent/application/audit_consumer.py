@@ -12,7 +12,7 @@ import logging
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from itsm_agent.adapters.messaging.nats_bus import JetStreamConsumer
 from itsm_agent.adapters.persistence.repositories import (
@@ -24,12 +24,18 @@ from itsm_agent.adapters.persistence.repositories import (
 from itsm_agent.adapters.persistence.tenant import tenant_transaction
 from itsm_agent.domain.events import InvestigationRequest, SourceEvent
 from itsm_agent.domain.investigation_policy import should_investigate
-from itsm_agent.domain.models import Finding
+from itsm_agent.domain.models import EvidenceReference, Finding
 from itsm_agent.investigations.service import EvidenceFetcher
+from itsm_agent.privacy.redaction import redact_secrets
 
 logger = logging.getLogger(__name__)
 
 PROCESSING_VERSION = "detection-v1"
+
+#: Trust level recorded on evidence produced by the detection pipeline. The
+#: sources are simulators and collectors, so the evidence is an observation,
+#: never an independent verification.
+DEFAULT_EVIDENCE_TRUST_LEVEL = "SIMULATOR_OBSERVATION"
 
 #: Actor recorded on investigation requests raised by the detection pipeline.
 INVESTIGATION_REQUESTER = "detection-pipeline"
@@ -76,6 +82,38 @@ def build_evidence_source(pool: Any) -> EvidenceFetcher:
         return summaries
 
     return fetch
+
+
+#: Maximum length of the stored evidence excerpt. The excerpt is a summary of
+#: the source event, not the event itself: raw payloads stay in the immutable
+#: source store and are referenced by hash.
+MAX_EVIDENCE_EXCERPT_CHARS = 500
+
+
+def _evidence_reference(event: SourceEvent, finding: Finding) -> EvidenceReference:
+    """Build the evidence reference that anchors a finding to its source event.
+
+    The content hash is the canonical event's payload hash, so the reference
+    is verifiable against the immutable source record. The excerpt is a
+    bounded, redacted summary: it describes what happened without carrying
+    secret material into a reviewer-visible surface.
+    """
+    summary = (
+        f"source={event.source}; type={event.event_type}; "
+        f"actor={event.actor_id or event.principal_id}; "
+        f"resource={event.resource_id}; outcome={event.outcome}; "
+        f"hash={event.payload_hash}"
+    )
+    return EvidenceReference(
+        id=uuid4(),
+        finding_id=finding.id,
+        source_event_id=event.event_id,
+        access_fact_id=None,
+        content_hash=event.payload_hash,
+        excerpt=redact_secrets(summary)[:MAX_EVIDENCE_EXCERPT_CHARS],
+        trust_level=DEFAULT_EVIDENCE_TRUST_LEVEL,
+        collected_at=event.event_time,
+    )
 
 
 async def _run_investigation_stage(
@@ -149,6 +187,7 @@ async def process_source_event(
     # canonical event is re-read under the SENDER's tenant; the message cannot
     # override canonical tenant identity.
     src_repo = PsycopgSourceEventRepository(pool)
+    evidence_repo = PsycopgEvidenceReferenceRepository(pool)
     failure: Exception | None = None
     result: tuple[bool, list[UUID]] = (False, [])
     persisted_findings: list[Finding] = []
@@ -201,6 +240,14 @@ async def process_source_event(
                     # The persisted finding is authoritative: ``upsert`` may
                     # return a different id when the finding already exists.
                     persisted_findings.append(persisted)
+                    # The evidence that justifies the finding is persisted in
+                    # the SAME transaction: a finding never lands without the
+                    # reference that anchors it to the source event.
+                    await evidence_repo.insert(
+                        _evidence_reference(canonical, persisted),
+                        tenant_id=tenant_id,
+                        conn=conn,
+                    )
                 await processing_repo.complete(
                     record_id,
                     finding_ids,
