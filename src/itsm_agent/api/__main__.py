@@ -34,6 +34,7 @@ from itsm_agent.api.oidc import (
 )
 from itsm_agent.api.routes.ingestion import IngestionSink
 from itsm_agent.config import ConfigError, Settings, load_settings
+from itsm_agent.observability.tracing import setup_tracing
 
 logger = logging.getLogger("itsm.api")
 
@@ -110,6 +111,12 @@ def build_app(
 
 async def serve(settings: Settings) -> None:
     """Open the pool, serve until shutdown, then close the pool."""
+    # Configure tracing BEFORE the app is built: the tracer provider is a
+    # process-wide singleton, so the first caller decides the exporter.
+    setup_tracing(
+        service_name=settings.otel_service_name,
+        exporter_endpoint=settings.otel_exporter_endpoint,
+    )
     pool = create_pool(PersistenceConfig(dsn=database_dsn()))
     await pool.open()
     await pool.wait()

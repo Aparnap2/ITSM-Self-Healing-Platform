@@ -26,6 +26,12 @@ from itsm_agent.adapters.messaging.nats_bus import (
     EVENT_SUBJECT_PREFIX,
     JetStreamPublisher,
 )
+from itsm_agent.observability.metrics import (
+    observe_adapter_retry,
+    observe_outbox_backlog,
+    observe_outbox_published,
+    observe_retry,
+)
 
 if TYPE_CHECKING:
     from itsm_agent.adapters.persistence.repositories import (
@@ -34,6 +40,9 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+
+#: Label value for the outbox publisher in the adapter-scoped metrics.
+OUTBOX_ADAPTER = "outbox"
 
 
 class OutboxRelay:
@@ -82,6 +91,9 @@ class OutboxRelay:
                 await self._publisher.publish(subject, payload)
             except Exception as exc:  # broker down / publish error: bounded retry
                 logger.warning("outbox publish failed id=%s: %s", event.id, exc)
+                observe_outbox_published("failed")
+                observe_retry("publish")
+                observe_adapter_retry(OUTBOX_ADAPTER, "publish_failed")
                 await self._outbox.mark_failed(
                     event.id,
                     str(exc),
@@ -90,6 +102,7 @@ class OutboxRelay:
                     tenant_id=tenant_id,
                 )
             else:
+                observe_outbox_published("published")
                 await self._outbox.mark_published(event.id, tenant_id=tenant_id)
                 published += 1
         return published
@@ -104,11 +117,15 @@ class OutboxRelay:
         await self._publisher.ensure_stream()
         while True:
             published = 0
+            backlog = 0
             tenant_ids = await self._tenants.list_tenant_ids() if self._tenants is not None else []
             if tenant_ids:
                 for tenant_id in tenant_ids:
                     published += await self.relay_once(tenant_id)
+                    backlog += await self._outbox.count_pending(tenant_id=tenant_id)
             else:
                 published = await self.relay_once()
+                backlog = await self._outbox.count_pending()
+            observe_outbox_backlog(backlog)
             if published == 0:
                 await asyncio.sleep(poll_interval_seconds)

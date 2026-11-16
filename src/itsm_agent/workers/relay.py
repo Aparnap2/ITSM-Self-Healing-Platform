@@ -24,6 +24,7 @@ from itsm_agent.adapters.messaging.outbox_relay import OutboxRelay
 from itsm_agent.adapters.persistence.pool import PersistenceConfig, create_pool
 from itsm_agent.adapters.persistence.repositories import RepositoryBundle
 from itsm_agent.config import ConfigError
+from itsm_agent.observability.tracing import resolve_exporter_endpoint, setup_tracing
 
 logger = logging.getLogger("itsm.relay")
 
@@ -103,6 +104,12 @@ def build_relay(
 
 async def serve(config: RelayConfig) -> None:
     """Run the relay until SIGTERM/SIGINT, then drain and close resources."""
+    # Configure tracing before the first span is created; the provider is a
+    # process-wide singleton.
+    setup_tracing(
+        service_name="itsm-relay",
+        exporter_endpoint=resolve_exporter_endpoint(),
+    )
     pool = create_pool(PersistenceConfig(dsn=config.dsn))
     await pool.open()
     await pool.wait()

@@ -12,6 +12,7 @@ import contextlib
 import logging
 import os
 import signal
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -32,11 +33,25 @@ from itsm_agent.application.commands import (
 )
 from itsm_agent.application.worker import consume_one
 from itsm_agent.domain.policies import default_policy_snapshot
+from itsm_agent.observability.metrics import (
+    observe_consumer_message,
+    observe_workflow_duration,
+)
+from itsm_agent.observability.tracing import resolve_exporter_endpoint, setup_tracing
 from itsm_agent.simulators.infrastructure.reconciler import InfrastructureReconciler
 from itsm_agent.simulators.infrastructure.simulator import InfrastructureSimulator
 from itsm_agent.simulators.infrastructure.verifier import IndependentVerifier
 
 logger = logging.getLogger("itsm.worker")
+
+#: Maps the consumer's outcome vocabulary onto the bounded metric vocabulary.
+_OUTCOME_LABELS: dict[str, str] = {
+    "processed": "processed",
+    "duplicate": "duplicate",
+    "retry": "redelivered",
+    "poison": "poison",
+    "dead_lettered": "dead_lettered",
+}
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -76,6 +91,13 @@ class Worker:
         self._deps: WorkflowDeps | None = None
 
     async def start(self) -> None:
+        # Configure tracing BEFORE the first span is created: the tracer
+        # provider is a process-wide singleton, so the first caller decides
+        # the exporter.
+        setup_tracing(
+            service_name="itsm-worker",
+            exporter_endpoint=resolve_exporter_endpoint(),
+        )
         # --- database -------------------------------------------------------
         self._pool = create_pool(PersistenceConfig(dsn=self.pg_dsn, min_size=1, max_size=10))
         await self._pool.open()
@@ -234,6 +256,14 @@ class Worker:
         await self._consumer.ensure_consumer()
         logger.info("worker started: concurrency=%d", self.concurrency)
 
+    def _observe_outcome(self, outcome: str, elapsed: float) -> None:
+        """Record the bounded outcome of one consume-and-process cycle."""
+        if outcome == "none":
+            return
+        label = _OUTCOME_LABELS.get(outcome, outcome)
+        observe_consumer_message(label)
+        observe_workflow_duration(label, elapsed)
+
     async def _handle(self, message: Any) -> None:
         assert self._consumer is not None
         assert self._repos is not None
@@ -241,6 +271,7 @@ class Worker:
         async with self._inflight_lock:
             self._inflight += 1
         try:
+            started = time.perf_counter()
             outcome = await consume_one(
                 consumer=self._consumer,
                 deps=self._deps,
@@ -251,6 +282,7 @@ class Worker:
                 max_deliver=3,
                 timeout_seconds=2.0,
             )
+            self._observe_outcome(outcome, time.perf_counter() - started)
             logger.info("message outcome=%s", outcome)
         except Exception as exc:  # noqa: BLE001
             logger.exception("unhandled error processing message: %s", exc)
@@ -285,6 +317,7 @@ class Worker:
                     _consumer = cast(JetStreamConsumer, self._consumer)
                     _deps = cast(WorkflowDeps, self._deps)
                     _repos = cast(RepositoryBundle, self._repos)
+                    started = time.perf_counter()
                     outcome = await consume_one(
                         consumer=_consumer,
                         deps=_deps,
@@ -295,6 +328,7 @@ class Worker:
                         max_deliver=3,
                         timeout_seconds=1.0,
                     )
+                    self._observe_outcome(outcome, time.perf_counter() - started)
                     if outcome not in ("none",):
                         logger.info("message outcome=%s", outcome)
                 except Exception as exc:  # noqa: BLE001

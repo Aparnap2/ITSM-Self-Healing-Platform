@@ -170,6 +170,10 @@ services:
       ITSM_MOCKOON_ITSM_BASE_URL: http://mockoon:3001
       ITSM_MOCKOON_IDENTITY_BASE_URL: http://mockoon:3001
       ITSM_MOCKOON_INFRASTRUCTURE_BASE_URL: http://mockoon:3001
+      # Canonical OTLP endpoint variable read by itsm_agent.config. The
+      # OpenTelemetry standard name is kept as a fallback (see
+      # docs/observability.md).
+      ITSM_OTEL_EXPORTER_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       ITSM_LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -208,6 +212,7 @@ services:
       ITSM_API_BASE_URL: http://mockoon:3001
       IDENTITY_API_BASE_URL: http://mockoon:3001
       INFRA_API_BASE_URL: http://mockoon:3001
+      ITSM_OTEL_EXPORTER_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       ITSM_LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -246,6 +251,7 @@ services:
     environment:
       DATABASE_URL: postgresql://itsm_app:${ITSM_RUNTIME_DB_PASSWORD:?ITSM_RUNTIME_DB_PASSWORD must be set in .env (see .env.example)}@postgres:5432/${POSTGRES_DB:-itsm}
       NATS_URL: nats://nats:4222
+      ITSM_OTEL_EXPORTER_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       ITSM_LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -286,6 +292,7 @@ services:
       ITSM_RETENTION_LEASE_SECONDS: ${ITSM_RETENTION_LEASE_SECONDS:-60}
       ITSM_RETENTION_MAX_ATTEMPTS: ${ITSM_RETENTION_MAX_ATTEMPTS:-5}
       ITSM_RETENTION_BACKOFF_SECONDS: ${ITSM_RETENTION_BACKOFF_SECONDS:-30}
+      ITSM_OTEL_EXPORTER_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       ITSM_LOG_LEVEL: ${LOG_LEVEL:-INFO}

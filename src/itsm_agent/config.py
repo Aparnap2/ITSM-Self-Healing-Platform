@@ -76,6 +76,10 @@ class Settings(BaseModel):
 
     # Observability
     otel_service_name: str = "itsm-agent"
+    #: OTLP endpoint for the trace exporter. Resolved from
+    #: ``ITSM_OTEL_EXPORTER_ENDPOINT`` (canonical) with the OpenTelemetry
+    #: standard ``OTEL_EXPORTER_OTLP_ENDPOINT`` accepted as a fallback, so a
+    #: deployment that only sets the standard variable still exports traces.
     otel_exporter_endpoint: str | None = None
     metrics_enabled: bool = True
 
@@ -184,7 +188,9 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         "investigation_max_tool_calls": _int("ITSM_INVESTIGATION_MAX_TOOL_CALLS", 5),
         "investigation_llm_budget_calls": _int("ITSM_INVESTIGATION_LLM_BUDGET_CALLS", 3),
         "otel_service_name": get("ITSM_OTEL_SERVICE_NAME") or "itsm-agent",
-        "otel_exporter_endpoint": get("ITSM_OTEL_EXPORTER_ENDPOINT"),
+        "otel_exporter_endpoint": (
+            get("ITSM_OTEL_EXPORTER_ENDPOINT") or get("OTEL_EXPORTER_OTLP_ENDPOINT") or None
+        ),
         "metrics_enabled": _bool("ITSM_METRICS_ENABLED", True),
         "simulator_seed": _int("ITSM_SIMULATOR_SEED", 42),
     }
