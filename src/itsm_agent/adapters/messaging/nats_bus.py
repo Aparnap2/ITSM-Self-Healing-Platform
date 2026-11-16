@@ -20,6 +20,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import cast
 from uuid import uuid4
@@ -32,6 +33,17 @@ from nats.js.api import AckPolicy, ConsumerConfig, DeliverPolicy, RetentionPolic
 from nats.js.errors import Error as JsError
 from nats.js.errors import NotFoundError
 
+from itsm_agent.observability.metrics import (
+    observe_adapter_retry,
+    observe_batch_size,
+    observe_consumer_lag,
+    observe_consumer_message,
+    observe_dead_letter,
+    observe_event_age,
+    observe_queue_depth,
+    observe_retry,
+    observe_tool_error,
+)
 from itsm_agent.ports.event_bus import ConsumedMessage, PublishResult
 
 logger = logging.getLogger(__name__)
@@ -42,6 +54,14 @@ EVENT_SUBJECT_PREFIX = "itsm.events."
 DLQ_SUBJECT = "itsm.dlq.events"
 ESCALATION_SUBJECT = "itsm.dlq.escalation"
 DEFAULT_MAX_DELIVER = 5
+
+#: Label value for the messaging adapter in the adapter-scoped metrics.
+MESSAGING_ADAPTER = "messaging"
+
+#: Bounded reasons a message reaches the dead-letter stream.
+DLQ_REASON_REDELIVERY_EXHAUSTED = "redelivery_exhausted"
+DLQ_REASON_POISON = "poison"
+DLQ_REASON_HANDLER_ERROR = "handler_error"
 
 
 @dataclass(frozen=True)
@@ -111,7 +131,13 @@ class JetStreamPublisher:
         await self.connect()
         js = self._js
         assert js is not None
-        ack = await js.publish(subject, payload, headers=headers)
+        try:
+            ack = await js.publish(subject, payload, headers=headers)
+        except Exception:
+            # The broker rejected or the connection failed: the caller decides
+            # whether to retry, the adapter only records the failure.
+            observe_tool_error(MESSAGING_ADAPTER, "publish_failed")
+            raise
         return PublishResult(stream=ack.stream, sequence=ack.seq)
 
 
@@ -171,18 +197,52 @@ class JetStreamConsumer:
         try:
             msgs = await self._sub.fetch(batch, timeout=timeout_seconds)
         except TimeoutError:
+            observe_batch_size(0)
             return []
+        observe_batch_size(len(msgs))
+        self._observe_delivery(msgs)
         return [_to_consumed(m) for m in msgs]
+
+    def _observe_delivery(self, msgs: list[Msg]) -> None:
+        """Record the age, the lag and the remaining depth of a delivery.
+
+        The broker timestamp is the age of the message when it reached this
+        consumer; the pending count is the depth the durable consumer still
+        has to drain. Neither is a tenant, subject or record identifier.
+        """
+        if not msgs:
+            return
+        now = datetime.now(UTC)
+        lag = 0.0
+        for msg in msgs:
+            age = max(0.0, (now - msg.metadata.timestamp).total_seconds())
+            observe_event_age(age)
+            lag = max(lag, age)
+        observe_consumer_lag(lag)
+        observe_queue_depth("nats", msgs[0].metadata.num_pending)
 
     async def ack(self, message: ConsumedMessage) -> None:
         await _raw(message).ack()
 
     async def nak(self, message: ConsumedMessage, *, delay_seconds: float = 0.0) -> None:
         await _raw(message).nak(delay=delay_seconds)
+        observe_retry("consume")
+        observe_adapter_retry(MESSAGING_ADAPTER, "redelivered")
 
-    async def dead_letter(self, message: ConsumedMessage, *, error: str) -> None:
+    async def dead_letter(
+        self,
+        message: ConsumedMessage,
+        *,
+        error: str,
+        reason: str = DLQ_REASON_REDELIVERY_EXHAUSTED,
+    ) -> None:
         """Publish the failed message + escalation event to the DLQ stream,
-        then terminate redelivery for this message."""
+        then terminate redelivery for this message.
+
+        ``reason`` is a bounded label (never the error text) so the exported
+        series stay small; ``error`` is only written to the dead-letter
+        payload.
+        """
         await self.connect()
         js = self._js
         assert js is not None
@@ -207,6 +267,7 @@ class JetStreamConsumer:
             ).encode(),
         )
         await _raw(message).term()
+        observe_dead_letter(reason)
 
 
 def _raw(message: ConsumedMessage) -> Msg:
@@ -279,10 +340,13 @@ async def dispatch_once(
                 message.delivery_attempt,
                 exc,
             )
-            await consumer.dead_letter(message, error=str(exc))
+            await consumer.dead_letter(message, error=str(exc), reason=DLQ_REASON_HANDLER_ERROR)
+            observe_consumer_message("dead_lettered")
             return DispatchOutcome.DEAD_LETTERED
         await consumer.nak(message, delay_seconds=retry_delay_seconds)
+        observe_consumer_message("redelivered")
         return DispatchOutcome.RETRY_SCHEDULED
     else:
         await consumer.ack(message)
+        observe_consumer_message("processed")
         return DispatchOutcome.PROCESSED

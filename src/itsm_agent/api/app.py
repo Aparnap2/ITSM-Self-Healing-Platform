@@ -9,6 +9,7 @@ Import rules: api may import domain, application, config, observability.
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -40,7 +41,27 @@ from itsm_agent.api.routes.ingestion import (
     router as ingestion_router,
 )
 from itsm_agent.config import Settings
-from itsm_agent.observability.metrics import get_metrics_registry
+from itsm_agent.observability.http_boundary import (
+    INGESTION_ROUTE,
+    TRANSITION_ROUTE,
+    ingestion_outcome,
+    route_label,
+    status_class,
+    transition_outcome,
+)
+from itsm_agent.observability.metrics import (
+    get_metrics_registry,
+    observe_api_request,
+    observe_ingestion_event,
+    observe_reviewer_transition,
+)
+from itsm_agent.observability.tracing import (
+    CORRELATION_ID_HEADER,
+    TRACER_NAME,
+    attach_correlation_id,
+    correlation_id_or_new,
+    get_tracer,
+)
 
 
 def create_app(
@@ -78,6 +99,41 @@ def create_app(
         openapi_url=None,
         lifespan=lifespan,
     )
+
+    # One tracer for the process; the provider is configured once at startup.
+    tracer = get_tracer(TRACER_NAME)
+
+    @app.middleware("http")
+    async def _observability(request: Request, call_next: RequestResponseEndpoint) -> Response:
+        """Record one bounded metric series per request and open a span.
+
+        The route label comes from a closed template list, so the exported
+        series cannot grow with the number of ids in the path. No tenant id,
+        subject or finding id is ever used as a label.
+        """
+        route = route_label(request.method, request.url.path)
+        started = time.perf_counter()
+        with tracer.start_as_current_span(f"{request.method} {route}") as span:
+            span.set_attribute("http.route", route)
+            span.set_attribute("http.request.method", request.method)
+            attach_correlation_id(
+                span, correlation_id_or_new(request.headers.get(CORRELATION_ID_HEADER))
+            )
+            try:
+                response = await call_next(request)
+            except Exception as exc:
+                observe_api_request(route, request.method, "5xx", time.perf_counter() - started)
+                span.set_attribute("http.response.status_code", 500)
+                span.record_exception(exc)
+                raise
+            elapsed = time.perf_counter() - started
+            observe_api_request(route, request.method, status_class(response.status_code), elapsed)
+            span.set_attribute("http.response.status_code", response.status_code)
+            if route == INGESTION_ROUTE:
+                observe_ingestion_event(ingestion_outcome(response.status_code))
+            elif route == TRANSITION_ROUTE:
+                observe_reviewer_transition(transition_outcome(response.status_code))
+            return response
 
     @app.middleware("http")
     async def _security_headers(request: Request, call_next: RequestResponseEndpoint) -> Response:

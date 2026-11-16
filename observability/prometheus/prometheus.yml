@@ -1,8 +1,13 @@
 # Prometheus scrape configuration for the local ITSM stack.
 # Mounted read-only into prom/prometheus:v3.15.1 by compose.yaml.
 #
-# App-owned targets (api, worker) may be down until the application slice
-# lands; Prometheus tolerates down scrape targets and the compose healthcheck
+# Scrape targets:
+#   - prometheus        : self
+#   - otel-collector    : receiver/exporter health (8888)
+#   - otel-exported-app : metrics the collector exports from OTLP (8889)
+#   - api               : the API's own /metrics endpoint (8000)
+#
+# A target that is down is tolerated by Prometheus; the compose healthcheck
 # only gates Prometheus itself.
 
 global:
@@ -25,11 +30,17 @@ scrape_configs:
     static_configs:
       - targets: ["otel-collector:8889"]
 
-  # Application-owned /metrics endpoints. Uncomment when the app slice lands;
-  # kept commented so Prometheus does not scrape a nonexistent service.
-  # - job_name: api
-  #   static_configs:
-  #     - targets: ["api:8000"]
-  # - job_name: worker
-  #   static_configs:
-  #     - targets: ["worker:8000"]
+  # The API serves the module-owned Prometheus registry on /metrics.
+  # The path is fixed by the route in itsm_agent.api.app; the port matches
+  # ITSM_API_PORT in compose.yaml.
+  - job_name: api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]
+
+  # The worker processes (audit consumer, remediation worker, outbox relay,
+  # retention scheduler) have NO HTTP listener: they are not web servers and
+  # no exporter is mounted into them. Their counters reach Prometheus through
+  # the OTLP path above once the traces/metrics exporter is configured, so
+  # there is deliberately no "worker" scrape job here. See
+  # docs/observability.md ("Scrape targets and what is not scraped").

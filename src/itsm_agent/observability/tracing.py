@@ -3,12 +3,23 @@
 Correlation IDs travel in the ``itsm.correlation_id`` span attribute and
 in the ``x-correlation-id`` header for outbound adapter calls. The
 provider is idempotent: repeated setup calls are no-ops.
+
+Exporter endpoint resolution
+----------------------------
+The canonical variable is ``ITSM_OTEL_EXPORTER_ENDPOINT`` (it matches the
+rest of the ``ITSM_*`` configuration namespace). The OpenTelemetry standard
+name ``OTEL_EXPORTER_OTLP_ENDPOINT`` is accepted as a fallback so a
+deployment that only sets the standard variable still exports traces. The
+same precedence is implemented in ``itsm_agent.config``; the two are kept in
+step by a unit test.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import uuid
+from collections.abc import Mapping
 
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
@@ -23,6 +34,15 @@ logger = logging.getLogger(__name__)
 
 CORRELATION_ID_ATTRIBUTE = "itsm.correlation_id"
 CORRELATION_ID_HEADER = "x-correlation-id"
+
+#: Canonical exporter endpoint variable.
+EXPORTER_ENDPOINT_ENV = "ITSM_OTEL_EXPORTER_ENDPOINT"
+
+#: OpenTelemetry standard exporter endpoint variable, accepted as a fallback.
+OTLP_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_ENDPOINT"
+
+#: Default tracer name used by the platform's entrypoints.
+TRACER_NAME = "itsm-agent"
 
 _provider: TracerProvider | None = None
 
@@ -67,8 +87,37 @@ def setup_tracing(
 def get_tracer(name: str) -> trace.Tracer:
     """Return a tracer; sets up a local-only provider if none configured."""
     if _provider is None:
-        setup_tracing(service_name="itsm-agent")
+        setup_tracing(service_name=TRACER_NAME)
     return trace.get_tracer(name)
+
+
+def resolve_exporter_endpoint(env: Mapping[str, str] | None = None) -> str | None:
+    """Resolve the OTLP endpoint from the environment.
+
+    ``ITSM_OTEL_EXPORTER_ENDPOINT`` wins; ``OTEL_EXPORTER_OTLP_ENDPOINT`` is
+    the accepted fallback. Returns ``None`` when neither is set, which keeps
+    the exporter local-only (spans are produced, nothing is shipped).
+    """
+    source = env if env is not None else os.environ
+    value = source.get(EXPORTER_ENDPOINT_ENV) or source.get(OTLP_ENDPOINT_ENV)
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def correlation_id_or_new(value: str | None) -> str:
+    """Return ``value`` when it is a UUID, otherwise a fresh correlation ID.
+
+    A correlation ID arriving from a client is untrusted input, so it is
+    only echoed into a span attribute when it parses as a UUID.
+    """
+    if value:
+        try:
+            return str(uuid.UUID(value.strip()))
+        except (ValueError, AttributeError):
+            logger.debug("ignoring a malformed correlation id header")
+    return new_correlation_id()
 
 
 def new_correlation_id() -> str:
@@ -89,9 +138,14 @@ def correlation_headers(correlation_id: str) -> dict[str, str]:
 __all__ = [
     "CORRELATION_ID_ATTRIBUTE",
     "CORRELATION_ID_HEADER",
+    "EXPORTER_ENDPOINT_ENV",
+    "OTLP_ENDPOINT_ENV",
+    "TRACER_NAME",
     "attach_correlation_id",
     "correlation_headers",
+    "correlation_id_or_new",
     "get_tracer",
     "new_correlation_id",
+    "resolve_exporter_endpoint",
     "setup_tracing",
 ]
