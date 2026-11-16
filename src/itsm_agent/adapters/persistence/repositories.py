@@ -1236,6 +1236,45 @@ class PsycopgFindingTransitionRepository(_BaseRepository):
 
 
 class PsycopgEvidenceReferenceRepository(_BaseRepository):
+    async def insert(
+        self,
+        reference: EvidenceReference,
+        *,
+        tenant_id: UUID,
+        conn: AsyncConnection | None = None,
+    ) -> EvidenceReference:
+        """Persist one evidence reference for a finding.
+
+        The tenant is an explicit argument because the domain model does not
+        carry one; the caller must be inside the tenant transaction (pass
+        ``conn``) so the row is written under the tenant's RLS context. The
+        table's composite foreign key ``(tenant_id, finding_id)`` makes a
+        cross-tenant reference impossible at the database level, and
+        ``ON CONFLICT`` keeps the write idempotent.
+        """
+        async with self._session_for(tenant_id, conn) as c, c.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO evidence_references (
+                    id, tenant_id, finding_id, source_event_id, access_fact_id,
+                    content_hash, excerpt, trust_level, collected_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (tenant_id, id) DO NOTHING
+                """,
+                (
+                    reference.id,
+                    tenant_id,
+                    reference.finding_id,
+                    reference.source_event_id,
+                    reference.access_fact_id,
+                    reference.content_hash,
+                    reference.excerpt,
+                    reference.trust_level,
+                    reference.collected_at,
+                ),
+            )
+        return reference
+
     async def list_for_tenant_finding(
         self, tenant_id: UUID, finding_id: UUID, *, conn: AsyncConnection | None = None
     ) -> list[EvidenceReference]:
