@@ -114,7 +114,11 @@ async def serve(settings: Settings) -> None:
     await pool.open()
     await pool.wait()
     try:
-        async with httpx.AsyncClient(follow_redirects=False, timeout=httpx.Timeout(5.0)) as client:
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=httpx.Timeout(5.0),
+            verify=settings.oidc_jwks_ca_file or True,
+        ) as client:
             app = build_app(settings=settings, pool=pool, client=client)
             config = uvicorn.Config(
                 app,
