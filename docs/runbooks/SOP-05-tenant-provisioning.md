@@ -104,6 +104,34 @@ WHERE issuer = '<issuer>' AND subject = '<subject>';
 If the row exists, the write below replaces `tenant_ids` and `roles`. Include
 all tenants and roles the reviewer must retain, not only the new tenant.
 
+### 3a. Preferred: the provisioning CLI
+
+The manual SQL below still works, but the controlled path is the
+administration-plane CLI, which refuses to run without administrative
+privileges, requires a reason, versions every change, and writes one audit
+event per affected tenant in the same transaction as the change:
+
+```sh
+ITSM_ADMIN_DSN='postgresql://<admin>@localhost:5432/itsm' \
+uv run python tools/provision_reviewer.py \
+    --issuer 'https://issuer.staging.test' \
+    --subject reviewer-a --subject reviewer-b \
+    --roles reviewer \
+    --tenants '<tenant-uuid>' \
+    --reason 'staging rehearsal: two independent reviewers'
+```
+
+- `--subject` may be repeated to provision several identities in one run;
+  each one is a distinct principal, which is what independent verification
+  requires.
+- The CLI refuses a role that cannot write the table, so the runtime role is
+  rejected by construction rather than by convention.
+- Re-running it with identical values is a no-op: no version bump, no audit
+  event. Only real changes are recorded.
+- `--revoke` deactivates an identity and keeps the row for the audit trail.
+- Exit codes: `0` success, `2` refused (bad request, missing DSN, or the
+  connected role may not write), `1` unexpected error.
+
 ### 4. Attach or update the reviewer authorization
 
 ```sql
