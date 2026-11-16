@@ -43,6 +43,10 @@ class Settings(BaseModel):
     oidc_issuer: str | None = None
     oidc_audience: str | None = None
     oidc_jwks_url: str | None = None
+    #: PEM bundle of certificate authorities trusted for the JWKS endpoint.
+    #: A pinned CA is how a private-CA issuer is trusted without ever
+    #: disabling TLS verification.
+    oidc_jwks_ca_file: str | None = None
     oidc_algorithms: tuple[str, ...] = ("RS256", "ES256")
     oidc_jwks_cache_seconds: float = Field(default=300.0, gt=0)
     oidc_leeway_seconds: float = Field(default=30.0, ge=0, le=120)
@@ -165,6 +169,7 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         "oidc_issuer": get("ITSM_OIDC_ISSUER"),
         "oidc_audience": get("ITSM_OIDC_AUDIENCE"),
         "oidc_jwks_url": get("ITSM_OIDC_JWKS_URL"),
+        "oidc_jwks_ca_file": get("ITSM_OIDC_JWKS_CA_FILE"),
         "oidc_algorithms": tuple(
             part.strip().upper()
             for part in (get("ITSM_OIDC_ALGORITHMS") or "RS256,ES256").split(",")

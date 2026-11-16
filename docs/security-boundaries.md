@@ -137,6 +137,17 @@ constrained login role for the RLS assertions.
   `incidents`, `workflow_state`, `action_intents`, `approvals`, and
   `audit_events`; they are in `TENANT_RLS_TABLES` in
   `src/itsm_agent/adapters/persistence/privileges.py`.
+- The staging environment authenticates with a **local identity simulator**
+  (`itsm_agent.simulators.identity`), which stands in for an external IdP. It
+  is a signing authority and nothing more: it mints RS256 tokens for a fixed
+  set of subjects, publishes its public keys on a local JWKS endpoint over
+  TLS (the client pins the simulator's CA — verification is never disabled),
+  and it holds **no application authorization**. Roles and tenants are always
+  resolved server-side from `reviewer_authorizations`, so a token can never
+  grant itself access to anything; the contract tests assert that a token
+  carrying a self-granted `admin` role is still resolved to the roles the
+  directory holds. The simulator binds to loopback only, labels every response
+  as simulator output, and refuses to run outside local/test/staging.
 - The ingestion webhook still authenticates with the existing HMAC webhook
   signature; it is not yet tied to the reviewer principal model.
 - No rate limiting or audit trail of authentication failures beyond structured
