@@ -68,11 +68,14 @@ A release is qualified only when **all** of the following are true:
    summary reports 0 failures + errors, no missing mandatory report, and a
    non-zero unique test count.
 4. **Artifacts retained.** The seven mandatory JUnit artifacts exist for that
-   run and are not expired at review time. `sbom` and `dast-report` are
-   supporting evidence: they are uploaded with `if-no-files-found: ignore`
-   and `warn` respectively (`.github/workflows/ci.yml:131-137,353-359`), so
-   their absence does not fail CI. If either is missing, record it as an
-   evidence gap rather than calling the run fully evidenced.
+   run and are not expired at review time. They are uploaded with an
+   explicit `retention-days` (30, from `ARTIFACT_RETENTION_DAYS` in
+   `.github/workflows/ci.yml`), and the CI summary prints the expiry it
+   derives from that value. `sbom` and `dast-report` are supporting
+   evidence: they are uploaded with `if-no-files-found: warn`
+   (`.github/workflows/ci.yml`), so their absence does not fail CI. If either
+   is missing, record it as an evidence gap rather than calling the run fully
+   evidenced.
 5. **No weakened gates.** The workflow and summary tooling at the merge SHA
    still contain every required job and the same mandatory report list; no
    `continue-on-error`, no `if: false`, and no new optional job that bypasses
@@ -95,11 +98,16 @@ document and attaching it to the PR or release ticket.
 ## Required gates
 
 The required set is the `ci-summary` `needs` list in
-`.github/workflows/ci.yml:696-710`, plus `ci-summary` itself. `dast` is
-allowed to be `skipped` by `tools/ci_summary.py` (`--optional-jobs` defaults
-to `dast`, `tools/ci_summary.py:119-123`), but this qualification treats a
-skipped DAST as **not qualified** unless the skip is explicitly approved and
-recorded in the Notes column.
+`.github/workflows/ci.yml`, plus `ci-summary` itself. It is named explicitly
+in `tools/ci_summary.py` (`REQUIRED_JOBS`) and checked against the run's
+`needs` payload, so a job that is missing from the workflow fails the summary
+instead of silently narrowing the gate.
+
+**All 15 jobs are required, `dast` included.** `tools/ci_summary.py`'s
+`--optional-jobs` defaults to an empty list, so a `dast` job that is
+`skipped` (or that fails) fails the CI summary. The only way to relax a gate
+is for the owner to name the job explicitly, and the summary prints the
+owner-marked optional list so the relaxation is visible in the evidence.
 
 | Gate | Job id | Workflow job name | Blocking signal | Artifact |
 | --- | --- | --- | --- | --- |
@@ -119,8 +127,9 @@ recorded in the Notes column.
 | Scenario harness | `scenarios` | Scenario Harness | any failure | `scenarios-junit` |
 | Summary | `ci-summary` | CI Verification Summary | missing report, any failure, non-success required job | run summary page |
 
-Sources: `.github/workflows/ci.yml:35-729`, `tools/ci_summary.py:23-31,74-101`,
-`docs/security-ci.md:7-28`.
+Sources: `.github/workflows/ci.yml`, `tools/ci_summary.py`
+(`REQUIRED_JOBS`, `EXPECTED_REPORTS`), `docs/security-ci.md`,
+`docs/ci/README.md`.
 
 The 15 job names in the "Workflow job name" column are also the required
 status checks on the protected `main` branch (item 6).
@@ -165,12 +174,16 @@ call it "mostly green".
 - Any required job has a conclusion other than `success`.
 - `ci-summary` is red, or its summary contains
   "Missing mandatory group(s) — this run is not qualified." or
-  "Required job(s) did not succeed — this run is not qualified."
-  (`tools/ci_summary.py:172-175`).
+  "Required job(s) did not succeed — this run is not qualified." or
+  "This run is not qualified."
+  (`tools/ci_summary.py`).
 - Any of the seven mandatory JUnit reports is missing:
   `unit-junit.xml`, `contract-junit.xml`, `security-junit.xml`,
   `integration-junit.xml`, `fault-injection-junit.xml`,
-  `scenarios-junit.xml`, `e2e-junit.xml` (`tools/ci_summary.py:23-31`).
+  `scenarios-junit.xml`, `e2e-junit.xml` (`tools/ci_summary.py`,
+  `EXPECTED_REPORTS`).
+- A mandatory report collected zero tests, or skipped every one of its tests,
+  or carries a provenance stamp for a different SHA, run or attempt.
 - gitleaks reports a finding.
 - Trivy reports a CRITICAL or HIGH vulnerability that is fixed
   (`ignore-unfixed: true` is the only permitted exclusion), in either the
@@ -241,10 +254,14 @@ gh api "repos/<owner>/<repo>/actions/runs/<run-id>/artifacts" \
   --jq '.artifacts[] | {name, size_in_bytes, expired, expires_at}'
 ```
 
-Expected artifact names: `sbom`, `dast-report`, `unit-junit`,
+Expected artifact names: `sbom`, `dast-report`, `image-digest`, `unit-junit`,
 `contract-junit`, `security-junit`, `integration-junit`,
 `fault-injection-junit`, `e2e-junit`, `scenarios-junit`
 (`.github/workflows/ci.yml`).
+
+Each `*-junit` artifact carries three files: the JUnit XML, the
+`<suite>.collect.txt` preflight record, and the `<suite>.meta` provenance
+stamp. A missing sidecar fails the CI summary.
 
 ### 5. Download and re-check the JUnit set
 
@@ -252,16 +269,27 @@ Expected artifact names: `sbom`, `dast-report`, `unit-junit`,
 mkdir -p reports/qualification
 gh run download <run-id> -p '*-junit' -D reports/qualification
 find reports/qualification -name '*-junit.xml' -exec cp {} reports/qualification/ \;
-python3 tools/ci_summary.py --reports reports/qualification --sha <merge-sha>
+find reports/qualification -name '*.collect.txt' -exec cp {} reports/qualification/ \;
+find reports/qualification -name '*.meta' -exec cp {} reports/qualification/ \;
+python3 tools/ci_summary.py \
+  --reports reports/qualification \
+  --sha <merge-sha> \
+  --run-id <run-id> \
+  --run-attempt 1 \
+  --retention-days 30 \
+  --no-require-needs
 ```
 
 `gh run download` extracts each artifact into its own directory; the `cp`
-step flattens them for `tools/ci_summary.py`, which expects the seven filenames in
-one directory (`tools/ci_summary.py:129-136`).
+step flattens them for `tools/ci_summary.py`, which expects the seven report
+filenames — and, since the anti-vacuity and provenance rules were added, the
+matching `*.collect.txt` and `*.meta` sidecars — in one directory.
 
 The local recomputation cannot see job conclusions: `NEEDS_RESULTS` is only
-populated inside the workflow (`ci.yml:725-729`). Use step 3 for job results
-and the run's summary page for the authoritative `ci-summary` output.
+populated inside the workflow. `--no-require-needs` is therefore required for
+a local re-check; without it the summary fails closed on the missing job
+results. Use step 3 for job results and the run's summary page for the
+authoritative `ci-summary` output.
 
 ### 6. Verify the gates were not weakened
 
@@ -305,17 +333,21 @@ Required gates table, `strict: true`, pull requests required,
 
 ## Where the summary comes from
 
-`ci-summary` runs `tools/ci_summary.py` with `--reports reports` and
-`--sha "$GITHUB_SHA"` (`.github/workflows/ci.yml:723-729`). It:
+`ci-summary` runs `tools/ci_summary.py` with the run's reports, commit SHA,
+run id, run attempt, PR head SHA and the declared retention window
+(`.github/workflows/ci.yml`). It:
 
-- requires all seven JUnit reports (`EXPECTED_REPORTS`);
-- sums failures, errors, and skips per report;
-- checks `NEEDS_RESULTS` and fails when any required job is not `success`
-  (only `dast` is optional by default);
+- requires all seven JUnit reports (`EXPECTED_REPORTS`), each present,
+  non-empty, parseable, with a non-zero test count and at least one executed
+  test;
+- requires the collect preflight record and the provenance stamp for every
+  report, and checks that the stamp matches this commit, run and attempt;
+- requires the declared retention window;
+- checks `NEEDS_RESULTS` and fails when a required job is absent from the
+  payload or did not reach `success` (no job is optional by default);
 - writes a Markdown table to `GITHUB_STEP_SUMMARY`, which renders on the
   run's summary page;
-- exits non-zero on a missing report, a failure/error, or a non-success
-  required job (`tools/ci_summary.py:144-184`).
+- exits non-zero on any of the above.
 
 The summary is the artifact of record. A green job list without a green
 `ci-summary` is not qualified.
@@ -367,14 +399,15 @@ qualification is evidence about one CI run on one commit under simulators.
   anchor.
 - `gh pr checks` may include non-required checks; only the required job set
   counts.
-- Artifact retention is GitHub-configured; an expired artifact cannot be
-  re-downloaded, and a qualified run whose artifacts expired is no longer
-  reviewable. Record `expires_at` at qualification time. `sbom` and
-  `dast-report` can be absent without failing their jobs; absence is an
-  evidence gap, not a green artifact.
-- The local `tools/ci_summary.py` recomputation cannot evaluate job conclusions
-  without `NEEDS_RESULTS`; it is a report-integrity check, not a substitute
-  for step 3.
+- Artifact retention is declared explicitly (30 days) but is still
+  GitHub-configured; an expired artifact cannot be re-downloaded, and a
+  qualified run whose artifacts expired is no longer reviewable. Record
+  `expires_at` at qualification time. `sbom` and `dast-report` can be absent
+  without failing their jobs; absence is an evidence gap, not a green
+  artifact.
+- The local `tools/ci_summary.py` recomputation cannot evaluate job
+  conclusions without `NEEDS_RESULTS`; it is a report-integrity check, not a
+  substitute for step 3.
 - Branch protection verification requires repository admin access that an
   agent or contributor may not have.
 - `main` requires **0** approving reviews (solo-maintained repository;
@@ -384,6 +417,6 @@ qualification is evidence about one CI run on one commit under simulators.
 - The protection policy was enabled on 2026-11-13, the same day as the
   qualified merge. The merge SHA, the run ID and the policy state are
   verifiable; the exact enablement time relative to the merge is not.
-- DAST is optional in `tools/ci_summary.py` but treated as required here. If it is
-  skipped, the run is not qualified unless the skip is explicitly approved
-  and recorded.
+- DAST is required in `tools/ci_summary.py` (no default exemption). A
+  skipped or failed DAST fails the CI summary and therefore the
+  qualification.
