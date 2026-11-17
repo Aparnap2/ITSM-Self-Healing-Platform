@@ -62,6 +62,22 @@ production credentials, and any real cloud or ITSM SaaS mutation.
   one finding into the target database. Use a **staging** database, never a
   production one.
 
+## The reviewer credential
+
+The rehearsal authenticates **the way the deployment does**. A staging API
+configured for OIDC refuses the HMAC bearer (`config.py` rejects
+`ITSM_AUTH_MODE=hmac` when `ITSM_ENV=staging`), so the rehearsal must speak
+OIDC too. Three modes, in order of preference:
+
+| Mode | Settings | When |
+|---|---|---|
+| **OIDC (staging)** | `ITSM_IDENTITY_BASE_URL`, `ITSM_IDENTITY_CA_FILE`, `ITSM_REVIEWER_SUBJECT_A`, `ITSM_REVIEWER_SUBJECT_B` | a staging deployment; tokens are fetched from the configured identity provider over TLS, with its CA pinned |
+| **explicit token** | `ITSM_REVIEWER_TOKEN` | the operator already holds a bearer token |
+| **local HMAC** | `ITSM_AUTH_HMAC_SECRET` | a non-OIDC local run only; clearly labelled, never a staging mode |
+
+The two subjects must differ: independent verification needs two identities,
+and the lifecycle refuses a self-verification.
+
 ## The exact environment variables
 
 | Variable | Required | Meaning |
@@ -120,6 +136,24 @@ With `--external-consumer` the runner only seeds the event and waits (up to
 60 s) for the finding to appear; if nothing appears it says so and tells you
 to start the packaged consumer.
 
+### 1a. Provision the two reviewers (administration plane)
+
+The rehearsal needs two reviewer identities in the authorization directory.
+That is an administration-plane action, never something the API can do:
+
+```sh
+ITSM_ADMIN_DSN='postgresql://<admin>@localhost:5432/itsm' \
+uv run python tools/provision_reviewer.py \
+    --issuer 'https://issuer.simulator.test' \
+    --subject reviewer-a --subject reviewer-b \
+    --roles reviewer \
+    --tenants '<tenant-uuid>' \
+    --reason 'staging rehearsal: two independent reviewers'
+```
+
+The runner verifies both identities resolve before it starts, and fails with
+a clear message if they do not.
+
 ### 2. Run the rehearsal
 
 ```sh
@@ -137,6 +171,27 @@ uv run python tools/e2e_staging_run.py \
 The `make` target prints the required variables before running. If any
 required variable is missing the runner prints exactly what is missing and
 exits `2` **without touching the network**.
+
+### 2a. What the rehearsal proves
+
+The run now covers the whole workflow, and every step can fail it:
+
+1. one simulated CloudTrail administrative role assumption is ingested through
+   the **signed** webhook;
+2. deterministic detection creates the finding (with its evidence reference);
+3. the advisory investigation runs under the hard model-call budget and its
+   proposal is validated against the evidence snapshot;
+4. **reviewer A** transitions the finding `ACKNOWLEDGED` → `RESOLVED`;
+5. **reviewer B** independently transitions it `RESOLVED` → `VERIFIED` — the
+   policy refuses a self-verification and the rehearsal does not work around
+   that refusal;
+6. the evidence bundle is fetched over HTTP. A non-200 is a **failed
+   rehearsal**, not a note: a reviewer cannot examine evidence the API does
+   not serve;
+7. the proposal's evidence references must be inside the snapshot **and**
+   resolve to persisted, tenant-scoped evidence.
+
+Any failure in steps 4-7 makes the run exit non-zero.
 
 ### 3. Read the artifact
 

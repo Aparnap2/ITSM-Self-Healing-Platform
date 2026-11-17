@@ -19,7 +19,7 @@ import sys
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -89,7 +89,6 @@ def test_preflight_accepts_a_complete_environment() -> None:
         ("ITSM_POSTGRES_DSN", "database DSN"),
         ("ITSM_NATS_URL", "NATS URL"),
         ("ITSM_WEBHOOK_SECRET", "webhook signing secret"),
-        ("ITSM_AUTH_HMAC_SECRET", "reviewer HMAC secret"),
         ("ITSM_GROQ_API_KEY", "Groq API key"),
     ],
 )
@@ -179,8 +178,8 @@ def test_main_exits_two_without_touching_the_network_when_nothing_is_configured(
         "database DSN",
         "NATS URL",
         "webhook signing secret",
-        "reviewer HMAC secret",
         "Groq API key",
+        "reviewer credential",
     ):
         assert label in captured.err
 
@@ -352,6 +351,138 @@ def test_required_environments_cover_every_documented_variable() -> None:
         "ITSM_NATS_URL",
         "NATS_URL",
         "ITSM_WEBHOOK_SECRET",
-        "ITSM_AUTH_HMAC_SECRET",
         "ITSM_GROQ_API_KEY",
     }
+    # The reviewer credential is a MODE, not a single mandatory variable: an
+    # OIDC deployment must not be told to set an HMAC secret.
+    assert "ITSM_AUTH_HMAC_SECRET" not in names
+
+
+# ---------------------------------------------------------------------------
+# Credential modes (the rehearsal authenticates the way the deployment does)
+# ---------------------------------------------------------------------------
+
+
+def test_oidc_mode_is_preferred_over_the_local_hmac_bearer() -> None:
+    env = _env(
+        ITSM_IDENTITY_BASE_URL="https://127.0.0.1:8443",
+        ITSM_IDENTITY_CA_FILE="/tmp/simulator-ca.pem",
+        ITSM_REVIEWER_SUBJECT_A="reviewer-a",
+        ITSM_REVIEWER_SUBJECT_B="reviewer-b",
+    )
+    assert runner.credential_mode(env) == runner.CREDENTIAL_MODE_OIDC
+    assert runner.missing_requirements(env) == []
+
+
+def test_an_explicit_token_selects_the_token_mode() -> None:
+    env = _env(ITSM_REVIEWER_TOKEN="header.payload.signature")
+    assert runner.credential_mode(env) == runner.CREDENTIAL_MODE_TOKEN
+
+
+def test_the_local_hmac_bearer_is_a_last_resort() -> None:
+    assert runner.credential_mode(FULL_ENV) == runner.CREDENTIAL_MODE_HMAC
+
+
+def test_no_credential_mode_fails_the_preflight() -> None:
+    env = _env()
+    env.pop("ITSM_AUTH_HMAC_SECRET")
+    assert runner.credential_mode(env) is None
+    assert any("reviewer credential" in item for item in runner.missing_requirements(env))
+
+
+def test_the_oidc_mode_needs_two_distinct_subjects() -> None:
+    env = _env(
+        ITSM_IDENTITY_BASE_URL="https://127.0.0.1:8443",
+        ITSM_IDENTITY_CA_FILE="/tmp/simulator-ca.pem",
+        ITSM_REVIEWER_SUBJECT_A="reviewer-a",
+    )
+    missing = runner.missing_requirements(env)
+    assert any("two reviewer subjects" in item for item in missing)
+
+    same = _env(
+        ITSM_IDENTITY_BASE_URL="https://127.0.0.1:8443",
+        ITSM_IDENTITY_CA_FILE="/tmp/simulator-ca.pem",
+        ITSM_REVIEWER_SUBJECT_A="reviewer-a",
+        ITSM_REVIEWER_SUBJECT_B="reviewer-a",
+    )
+    assert any("must differ" in item for item in runner.missing_requirements(same))
+
+
+# ---------------------------------------------------------------------------
+# Evidence grounding: the proposal must cite evidence that exists
+# ---------------------------------------------------------------------------
+
+
+def _proposal(*cited: str) -> Any:
+    from itsm_agent.domain.events import InvestigationProposal
+
+    return InvestigationProposal(
+        investigation_id=uuid.uuid4(),
+        hypothesis="a hypothesis",
+        supporting_evidence=list(cited),
+        contradicting_evidence=[],
+        missing_evidence=[],
+        uncertainty="medium",
+        recommended_disposition="CONFIRM",
+        model_version="m1",
+        prompt_version="p1",
+    )
+
+
+def test_grounding_accepts_evidence_inside_the_snapshot() -> None:
+    source_event_id = uuid.uuid4()
+    persisted = SimpleNamespace(id=uuid.uuid4(), source_event_id=source_event_id)
+
+    result = runner._evidence_grounding(  # noqa: SLF001 - unit assertion
+        proposal=_proposal(str(source_event_id)),
+        snapshot_ids=(source_event_id,),
+        persisted=[persisted],
+    )
+
+    assert result["checked"] is True
+    assert result["in_snapshot"] is True
+    assert result["resolves_to_persisted_evidence"] is True
+
+
+def test_grounding_rejects_a_fabricated_evidence_reference() -> None:
+    source_event_id = uuid.uuid4()
+    persisted = SimpleNamespace(id=uuid.uuid4(), source_event_id=source_event_id)
+
+    result = runner._evidence_grounding(  # noqa: SLF001 - unit assertion
+        proposal=_proposal(str(uuid.uuid4())),
+        snapshot_ids=(source_event_id,),
+        persisted=[persisted],
+    )
+
+    assert result["in_snapshot"] is False
+    assert result["resolves_to_persisted_evidence"] is False
+
+
+def test_grounding_without_a_proposal_is_not_checked() -> None:
+    result = runner._evidence_grounding(  # noqa: SLF001 - unit assertion
+        proposal=None,
+        snapshot_ids=(),
+        persisted=[],
+    )
+    assert result["checked"] is False
+
+
+# ---------------------------------------------------------------------------
+# The report must never carry a credential
+# ---------------------------------------------------------------------------
+
+
+def test_the_report_is_sanitised_of_configured_secrets() -> None:
+    api_key = "gsk-not-a-real-key"
+    report = {"model": {"api_key": api_key}, "note": "nothing secret here"}
+
+    sanitized = runner.sanitize_report(report, [api_key])
+
+    assert api_key not in json.dumps(sanitized)
+    assert sanitized["note"] == "nothing secret here"
+
+
+def test_the_report_path_lives_in_the_committed_staging_directory() -> None:
+    path = runner.default_report_path("2026-11-16T101500Z")
+    assert path.parent == runner.DEFAULT_REPORT_DIR
+    assert "staging" in path.parts

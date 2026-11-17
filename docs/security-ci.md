@@ -21,11 +21,18 @@ prove, and — deliberately — what it cannot. It is a companion to
 | Container scan | `build` | Trivy image `vuln,secret,misconfig` | CRITICAL/HIGH, fixed-only |
 | DAST | `dast` | OWASP ZAP baseline | Any configured FAIL rule |
 | Test suites | `unit-tests` … `scenarios` | pytest markers | Any failure; strict services mean no silent skips |
-| Summary | `ci-summary` | `tools/ci_summary.py` | Missing report, any failure, or a required job that did not succeed |
+| Summary | `ci-summary` | `tools/ci_summary.py` | Missing report, zero-test or fully-skipped report, stale provenance stamp, undeclared retention, any failure, or a required job that did not succeed |
 
 `ci-summary` consumes `${{ toJSON(needs) }}` via `NEEDS_RESULTS`, so a required
-job that fails without producing a JUnit artifact still fails the summary. The
-`dast` job may be `skipped` (e.g. when disabled) without failing the summary.
+job that fails without producing a JUnit artifact still fails the summary.
+**All 15 jobs are required, DAST included**: `tools/ci_summary.py` names the
+set in `REQUIRED_JOBS`, fails when a required job is absent from the payload
+or did not reach `success`, and has no default exemption. The
+`--optional-jobs` escape hatch exists but is empty by default, and the
+summary always prints the owner-marked optional list.
+
+See [`docs/ci/README.md`](ci/README.md) for the job-by-job contract and
+[`docs/ci/release-path.md`](ci/release-path.md) for the release path.
 
 ## DAST scope and honesty
 
@@ -67,7 +74,8 @@ docker run --rm --read-only --tmpfs /tmp --cap-drop ALL \
 CI invokes the same `make` targets used locally. Before pushing, run:
 
 ```
-make verify-ci
+make verify-fast   # fast, offline, no services
+make verify-ci     # strict CI-equivalent (needs PostgreSQL + NATS)
 ```
 
 and, optionally, execute the workflow locally with `act`; see
@@ -80,6 +88,10 @@ and, optionally, execute the workflow locally with `act`; see
 - The DAST lane targets an in-memory stub, not a fully wired API process.
 - zizmor results are console-gated; SARIF upload to GitHub Advanced Security
   is intentionally not enabled.
+- `make typecheck` covers `src/` and `tests/` only. `tools/` is formatted and
+  linted by CI (`ruff format --check .`, `ruff check .`) but is not covered by
+  the mypy gate, so `tools/ci_summary.py` is type-checked manually
+  (`uv run mypy tools`), not by the pipeline.
 - Dependency review was removed because this repository has GitHub Dependency
   Graph disabled (a repository setting an agent cannot change), which made the
   action fail with "not supported". pip-audit remains the blocking dependency

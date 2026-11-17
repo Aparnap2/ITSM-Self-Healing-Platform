@@ -5,13 +5,33 @@
 # GROQ_API_KEY (PRD §9.3).
 #
 # Suite contract (CI-0): every job's pytest selector must collect non-zero
-# tests — zero-collected selection exits code 5 and fails the job. All
-# service-backed jobs set ITSM_TEST_STRICT=1 so unreachable services FAIL
+# tests — zero-collected selection exits code 5 and fails the job. Every test
+# target additionally runs the `guard-collect` preflight (Makefile), which
+# fails loudly on a zero-collection selection and records the collected count
+# in reports/<suite>.collect.txt so the summary can cross-check it against
+# the JUnit report.
+#
+# All service-backed jobs set ITSM_TEST_STRICT=1 so unreachable services FAIL
 # instead of silently skipping (tests read ITSM_TEST_PG_DSN /
 # ITSM_TEST_NATS_URL; the worker also accepts ITSM_POSTGRES_DSN/ITSM_NATS_URL
-# and DATABASE_URL/NATS_URL fallbacks — see src/itsm_agent/workers/consumer.py).
+# and DATABASE_URL/NATS_URL fallbacks — see
+# src/itsm_agent/workers/consumer.py). Every job that starts PostgreSQL or
+# NATS also asserts the service is reachable before the suite runs, so a
+# down service is a red job rather than a green-with-skips job.
 #
-# All third-party actions are pinned to commit SHAs, not tags.
+# Provenance (CI-0): every mandatory report is uploaded with an explicit
+# retention window (ARTIFACT_RETENTION_DAYS) together with a provenance
+# stamp (reports/<suite>.meta) recording sha/run_id/run_attempt. The CI
+# Verification Summary proves that every report came from THIS run, so a
+# stale artifact cannot be presented as evidence.
+#
+# Required set: all 15 jobs are required. tools/ci_summary.py names them
+# explicitly (REQUIRED_JOBS) and fails on a missing job, a missing or empty
+# report, a failure/error, a silently skipped suite, or any required job
+# that did not succeed — DAST included.
+#
+# All third-party actions are pinned to commit SHAs, not tags. Every job
+# declares least-privilege `permissions:` and a `timeout-minutes`.
 
 name: CI
 
@@ -23,10 +43,17 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded PR runs, but never cancel a main-branch verification:
+  # the release path depends on a completed run for the tagged commit.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
+
+env:
+  # Explicit artifact retention window. The CI Verification Summary derives
+  # and prints the expiry from this value and fails when it is not declared.
+  ARTIFACT_RETENTION_DAYS: 30
 
 jobs:
   # --------------------------------------------------------------------------
@@ -36,6 +63,8 @@ jobs:
     name: Lint & Format
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -55,6 +84,8 @@ jobs:
     name: Type Check (mypy --strict)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -72,6 +103,10 @@ jobs:
     name: Secret Scan (gitleaks)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      # gitleaks-action lists the commits of a pull request through the API.
+      pull-requests: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -134,7 +169,8 @@ jobs:
         with:
           name: sbom
           path: reports/sbom.cyclonedx.json
-          if-no-files-found: ignore
+          if-no-files-found: warn
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
   # --------------------------------------------------------------------------
   # Workflow / CI configuration security (OWASP GitHub Actions guidance)
@@ -166,8 +202,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [lint, typecheck]
+    permissions:
+      contents: read
     env:
       PYTHONHASHSEED: "0"
+      # Unreachable services are a hard failure in CI, never a green skip.
+      ITSM_TEST_STRICT: "1"
       # Deliberately NO GROQ_API_KEY: unit tests must pass without it.
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -179,6 +219,8 @@ jobs:
           enable-cache: false
       - name: Install locked dependencies
         run: uv sync --frozen --extra dev --reinstall-package itsm-agent --no-cache
+      - name: Stamp the run identity for artifact provenance
+        run: make ci-stamp REPORT=unit-junit REPORT_JOB=unit-tests
       - name: Run unit tests
         run: |
           mkdir -p reports
@@ -188,16 +230,22 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: unit-junit
-          path: reports/unit-junit.xml
-          if-no-files-found: ignore
+          # The JUnit report, the collect preflight record, and the provenance
+          # stamp travel together; a missing one fails the upload.
+          path: reports/unit-junit.*
+          if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
   contract-tests:
     name: Contract Tests (simulators, offline)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [lint, typecheck]
+    permissions:
+      contents: read
     env:
       PYTHONHASHSEED: "0"
+      ITSM_TEST_STRICT: "1"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -208,6 +256,8 @@ jobs:
           enable-cache: false
       - name: Install locked dependencies
         run: uv sync --frozen --extra dev --reinstall-package itsm-agent --no-cache
+      - name: Stamp the run identity for artifact provenance
+        run: make ci-stamp REPORT=contract-junit REPORT_JOB=contract-tests
       - name: Run contract tests
         run: |
           mkdir -p reports
@@ -217,14 +267,17 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: contract-junit
-          path: reports/contract-junit.xml
-          if-no-files-found: ignore
+          path: reports/contract-junit.*
+          if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
   security-invariants:
     name: Security Invariant Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [lint, typecheck]
+    permissions:
+      contents: read
     env:
       PYTHONHASHSEED: "0"
       ITSM_TEST_PG_DSN: postgresql://itsm:itsm_test_password@localhost:5432/itsm_test
@@ -276,6 +329,8 @@ jobs:
           echo "Services not ready within 30s."
           docker ps -a
           exit 1
+      - name: Stamp the run identity for artifact provenance
+        run: make ci-stamp REPORT=security-junit REPORT_JOB=security-invariants
       - name: Run security invariant tests
         run: |
           mkdir -p reports
@@ -285,8 +340,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: security-junit
-          path: reports/security-junit.xml
-          if-no-files-found: ignore
+          path: reports/security-junit.*
+          if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
       - name: Cleanup simulator container
         if: always()
         run: docker rm -f itsm-nats-security-ci || true
@@ -299,6 +355,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [unit-tests, security-invariants, contract-tests]
+    permissions:
+      contents: read
     env:
       # Ephemeral, test-only values so `docker compose config` can interpolate.
       POSTGRES_PASSWORD: ci-config-check-password
@@ -311,15 +369,14 @@ jobs:
           persist-credentials: false
       - name: Validate compose file
         run: docker compose config -q
-      - name: Build application image (if Dockerfile exists)
+      - name: Build application image
         run: |
-          if [ -f Dockerfile ]; then
-            docker build -t itsm-api:ci .
-          else
-            echo "SKIP: Dockerfile not present yet (application slice pending)."
+          if [ ! -f Dockerfile ]; then
+            echo "::error::Dockerfile is missing — this job must build and scan the image."
+            exit 1
           fi
+          docker build -t itsm-api:ci .
       - name: Container image scan (trivy, vuln + secret + misconfig)
-        if: hashFiles('Dockerfile') != ''
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: itsm-api:ci
@@ -329,10 +386,24 @@ jobs:
           vuln-type: "os,library"
           scanners: "vuln,secret,misconfig"
           severity: "CRITICAL,HIGH"
+      - name: Record the built image digest
+        run: |
+          mkdir -p reports
+          docker image inspect itsm-api:ci --format '{{.Id}}' > reports/image-digest.txt
+          echo "Built image digest: $(cat reports/image-digest.txt)"
+      - name: Upload the built image digest
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-digest
+          path: reports/image-digest.txt
+          if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
   # --------------------------------------------------------------------------
   # DAST — isolated OWASP ZAP baseline against the deterministic target.
   # Never scans a public or production target; see tools/dast.sh.
+  # REQUIRED: a DAST failure fails the CI Verification Summary.
   # --------------------------------------------------------------------------
   dast:
     name: DAST (OWASP ZAP baseline, isolated target)
@@ -360,6 +431,7 @@ jobs:
           name: dast-report
           path: reports/zap-report.*
           if-no-files-found: warn
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
   # --------------------------------------------------------------------------
   # Integration — real Postgres + NATS + Mockoon simulator, mocked LLM
@@ -369,6 +441,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [build]
+    permissions:
+      contents: read
     env:
       # Exact names the test fixtures read (tests/conftest.py). Must match the
       # service credentials below; mismatch previously caused silent skips.
@@ -459,19 +533,20 @@ jobs:
                 -d itsm_test -v ON_ERROR_STOP=1 -f "$f"
             done
           fi
-
+      - name: Stamp the run identity for artifact provenance
+        run: make ci-stamp REPORT=integration-junit REPORT_JOB=integration-tests
       - name: Run integration tests
         run: |
           mkdir -p reports
           make test-integration PYTEST_OPTS='--junitxml=reports/integration-junit.xml'
-
       - name: Upload integration test report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: integration-junit
-          path: reports/integration-junit.xml
-          if-no-files-found: ignore
+          path: reports/integration-junit.*
+          if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
       - name: Cleanup simulator container
         if: always()
@@ -485,6 +560,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [build]
+    permissions:
+      contents: read
     env:
       ITSM_TEST_PG_DSN: postgresql://itsm:itsm_test_password@localhost:5432/itsm_test
       ITSM_TEST_NATS_URL: nats://localhost:4222
@@ -532,7 +609,7 @@ jobs:
           for i in $(seq 1 30); do
             if pg_isready -h localhost -U itsm -d itsm_test >/dev/null 2>&1 \
               && wget -q -O - http://127.0.0.1:8222/healthz >/dev/null 2>&1; then
-              echo "All services ready after ${i}s."
+              echo "Services ready after ${i}s."
               exit 0
             fi
             sleep 1
@@ -549,10 +626,13 @@ jobs:
           files=(migrations/*.sql)
           if [ ${#files[@]} -ne 0 ]; then
             for f in "${files[@]}"; do
+              echo "Applying $f"
               PGPASSWORD=itsm_test_password psql -h localhost -U itsm \
                 -d itsm_test -v ON_ERROR_STOP=1 -f "$f"
             done
           fi
+      - name: Stamp the run identity for artifact provenance
+        run: make ci-stamp REPORT=fault-injection-junit REPORT_JOB=fault-injection-tests
       - name: Run fault injection tests
         run: |
           mkdir -p reports
@@ -562,8 +642,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fault-injection-junit
-          path: reports/fault-injection-junit.xml
-          if-no-files-found: ignore
+          path: reports/fault-injection-junit.*
+          if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
       - name: Cleanup simulator container
         if: always()
@@ -577,6 +658,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [build]
+    permissions:
+      contents: read
     env:
       ITSM_TEST_PG_DSN: postgresql://itsm:itsm_test_password@localhost:5432/itsm_test
       ITSM_TEST_NATS_URL: nats://localhost:4222
@@ -618,17 +701,19 @@ jobs:
             --data /home/mockoon/data/mockoon.json \
             --port 3001 \
             --disable-admin-api
-      - name: Wait for simulator (bounded, 30s)
+      - name: Wait for PostgreSQL and the simulator (bounded, 30s)
         run: |
           set -e
           for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:3001/health >/dev/null 2>&1; then
-              echo "Simulator ready after ${i}s."
+            if pg_isready -h localhost -U itsm -d itsm_test >/dev/null 2>&1 \
+              && curl -sf http://127.0.0.1:3001/health >/dev/null 2>&1; then
+              echo "PostgreSQL and simulator ready after ${i}s."
               exit 0
             fi
             sleep 1
           done
-          echo "Simulator not ready within 30s."
+          echo "Services not ready within 30s."
+          docker ps -a
           docker logs --tail 100 itsm-mockoon-e2e || true
           exit 1
       - name: Apply migrations (guarded)
@@ -638,10 +723,13 @@ jobs:
           files=(migrations/*.sql)
           if [ ${#files[@]} -ne 0 ]; then
             for f in "${files[@]}"; do
+              echo "Applying $f"
               PGPASSWORD=itsm_test_password psql -h localhost -U itsm \
                 -d itsm_test -v ON_ERROR_STOP=1 -f "$f"
             done
           fi
+      - name: Stamp the run identity for artifact provenance
+        run: make ci-stamp REPORT=e2e-junit REPORT_JOB=e2e-tests
       - name: Run e2e tests
         run: |
           mkdir -p reports
@@ -651,8 +739,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: e2e-junit
-          path: reports/e2e-junit.xml
-          if-no-files-found: ignore
+          path: reports/e2e-junit.*
+          if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
       - name: Cleanup simulator container
         if: always()
         run: docker rm -f itsm-mockoon-e2e || true
@@ -665,8 +754,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [integration-tests]
+    permissions:
+      contents: read
     env:
       PYTHONHASHSEED: "0"
+      ITSM_TEST_STRICT: "1"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -677,6 +769,8 @@ jobs:
           enable-cache: false
       - name: Install locked dependencies
         run: uv sync --frozen --extra dev --reinstall-package itsm-agent --no-cache
+      - name: Stamp the run identity for artifact provenance
+        run: make ci-stamp REPORT=scenarios-junit REPORT_JOB=scenarios
       - name: Run scenario harness
         run: |
           mkdir -p reports
@@ -686,8 +780,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: scenarios-junit
-          path: reports/scenarios-junit.xml
-          if-no-files-found: ignore
+          path: reports/scenarios-junit.*
+          if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
   # --------------------------------------------------------------------------
   # CI Verification Summary — fails when a mandatory report is missing or red
@@ -712,6 +807,10 @@ jobs:
       - e2e-tests
       - scenarios
     if: always()
+    permissions:
+      contents: read
+      # Needed to download this run's artifacts.
+      actions: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -723,10 +822,21 @@ jobs:
           pattern: '*-junit'
           path: reports
           merge-multiple: true
+      - name: Verify every declared suite is run by CI
+        if: always()
+        run: python3 tools/ci_coverage.py
       - name: Aggregate verification summary and fail on missing groups
         if: always()
         env:
           # Serialised job results: a required job that did not succeed fails
           # the summary even when its JUnit artifact happened to be uploaded.
           NEEDS_RESULTS: ${{ toJSON(needs) }}
-        run: python3 tools/ci_summary.py --reports reports --sha "$GITHUB_SHA"
+        run: |
+          python3 tools/ci_summary.py \
+            --reports reports \
+            --sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --retention-days "$ARTIFACT_RETENTION_DAYS" \
+            --max-skipped 0
