@@ -363,7 +363,7 @@ jobs:
   # 3. Publish — OPT-IN, and only the exact image that was scanned
   # --------------------------------------------------------------------------
   publish:
-    name: Publish image (OPT-IN: registry credentials required)
+    name: "Publish image (OPT-IN: registry credentials required)"
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [build]
