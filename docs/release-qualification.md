@@ -10,7 +10,23 @@ prove. It is a companion to `docs/security-ci.md` and
 - Portfolio baseline: simulators only (Mockoon, Moto, the in-process
   infrastructure simulator). No real production data, credentials, or
   external SaaS mutations.
-- **Recorded qualification (observed 2026-11-15).** The vehicle is PR #16
+- **Current CI record (observed 2026-11-17).** The vehicle is PR #26
+  (`fix/release-workflow-yaml` into `main`), squash-merged on 2026-11-17 as
+  `f4b5640fba7294f18f8a4e14fd440f9809626ecb`. The `push` run `44016524854`
+  on `main` has `headSha`
+  `f4b5640fba7294f18f8a4e14fd440f9809626ecb`, event `push`, conclusion
+  `success`, **15/15 jobs `success`, 0 failures**, created
+  `2026-11-17T04:20:43Z` and completed `2026-11-17T04:25:22Z`. Re-running
+  `tools/ci_summary.py` offline against that run's downloaded reports
+  reproduces its verdict: **777 unique tests, 0 failures, 0 errors,
+  0 skipped**, seven mandatory suites present, all fifteen required jobs
+  `success`, no owner-marked optional job. Per-suite counts: unit 513,
+  contract 55, security 45, integration 161, fault injection 20, scenarios
+  24, e2e 12. Artifacts are unexpired and listed in the evidence table.
+  **This record qualifies CI only.** It does not confer staging readiness
+  or demo qualification; those are separate states with separate evidence,
+  defined below and currently **not achieved**.
+- **Superseded record (observed 2026-11-15).** The vehicle is PR #16
   (`feat/detection-precision` into `main`), squash-merged on 2026-11-15 as
   `2ebd7ef3ba426c6021bacc5054a74eb798edb510`. The `push` run `43672858417`
   on `main` has `headSha`
@@ -46,11 +62,85 @@ prove. It is a companion to `docs/security-ci.md` and
   assembles its key at runtime and the reviewer credential carries a neutral
   name (`35e112c`). The scan gate was not weakened and nothing was
   allowlisted.
+- **No inherited qualification.** Evidence is bound to one commit. `2ebd7ef`,
+  `8a3cc60` and every earlier record in this document **do not** qualify
+  `f4b5640`, and `f4b5640`'s record does not qualify any later commit. A
+  merged change moves the baseline; the qualification must be re-run against
+  the new merge commit. Reusing an older run's verdict, job list or test
+  counts for a newer SHA is a disqualifier, not a shortcut.
 - Re-verify before citing:
-  `gh run view 43672858417 --json headSha,event,conclusion,jobs` and
-  `gh api repos/<owner>/<repo>/actions/runs/43672858417/artifacts`.
+  `gh run view 44016524854 --json headSha,event,conclusion,jobs` and
+  `gh api repos/<owner>/<repo>/actions/runs/44016524854/artifacts`.
+  The superseded 2026-11-15 record is
+  `gh run view 43672858417 --json headSha,event,conclusion,jobs`.
 - A later run supersedes this record; a green `pull_request` run on the head
   branch is supporting evidence, not the qualified run.
+
+## Qualification states
+
+There are **two** qualification states, and they are not interchangeable.
+Passing one does not imply the other, and neither is implied by a green CI
+run or by merged code.
+
+| State | Question it answers | Evidence required |
+| --- | --- | --- |
+| **`STAGING_READY`** | Can this commit be run as a staging deployment — one documented command, real PostgreSQL with migrations and the constrained runtime role, durable JetStream consumer, OIDC authentication with no HMAC bypass, secrets from the environment and absent from logs, and metrics/traces covering the main workflow? | A staging-equivalent stack brought up from the recorded commit, with the stack's own health output and the authentication path exercised over TLS. Component tests alone are necessary but not sufficient. |
+| **`DEMO_QUALIFIED`** | Does one complete scenario run end to end with a real model and real reviewers: simulated CloudTrail ingestion → deterministic finding → grounded model investigation → evidence-reference validation → authenticated reviewer decision → independent verification by a second principal → reproducible retained report? | One retained, redacted rehearsal artifact that satisfies every disqualifier in "Rehearsal qualification" below, bound to the recorded commit SHA. |
+
+A commit that is CI-qualified **and** `STAGING_READY` is a candidate for
+`DEMO_QUALIFIED`; it is not `DEMO_QUALIFIED` until a rehearsal actually
+succeeds and its artifact is retained.
+
+### Status of `f4b5640`
+
+Recorded 2026-11-17 against `f4b5640fba7294f18f8a4e14fd440f9809626ecb`.
+Each row is judged on evidence that exists for **this** commit. "The tests
+pass" is not evidence for a row that no test exercises.
+
+**`CI_QUALIFIED` — PASS.** Run `44016524854`, 15/15 required jobs
+`success`, 777 unique tests, artifacts unexpired (evidence table below).
+
+**`STAGING_READY` — FAIL.** Not because a test failed, but because the
+deployment path that would prove it does not exist in a staging-compatible
+form: one criterion actively fails, and the rest have never been run as an
+integrated deployment. Verdicts use only `PASS`, `FAIL`, `NOT RUN`,
+`NOT APPLICABLE`.
+
+| # | Criterion | Verdict | Evidence |
+| --- | --- | --- | --- |
+| 1 | One documented command starts the stack | **NOT RUN** | `make compose-up` exists (`Makefile:184`), but CI only runs `docker compose config -q` (`.github/workflows/ci.yml`, "Validate compose file"). The file is syntax-checked; the stack is never brought up and exercised. |
+| 2 | Real PostgreSQL, migrations applied, constrained runtime role | **NOT RUN** | Proven at component level: `tests/integration/test_migration_safety.py` and `test_runtime_database_safety.py` pass against real PostgreSQL in CI. No deployment has been migrated and started. |
+| 3 | Real JetStream with a durable consumer | **NOT RUN** | Proven at component level: the `integration` and `fault_injection` suites use a real broker and assert durable-consumer behaviour. No deployed consumer has been observed. |
+| 4 | API health endpoints | **NOT RUN** | Health behaviour is exercised in `tests/integration/`; no running API has been probed. |
+| 5 | Relay and audit consumer start and stop gracefully | **NOT RUN** | Proven at component level in `tests/fault_injection/test_interruption_and_timeout.py` (mid-stream interruption and drain). |
+| 6 | Staging-compatible authentication (OIDC, no HMAC bypass) | **FAIL** | `compose.yaml:164` hardcodes `ITSM_ENV: local` and `compose.yaml:165` defaults `ITSM_AUTH_MODE` to `hmac`; `.env.example` ships the same. No compose service runs an OIDC provider. `src/itsm_agent/config.py:212` refuses `ITSM_AUTH_MODE=hmac` when `ITSM_ENV=staging`, so the documented stack cannot produce staging-compatible auth. |
+| 7 | Secrets supplied by environment, absent from logs | **NOT RUN** | Compose requires secrets through `:?` interpolation and gitleaks + the redaction tests are green, but no deployment's logs have been inspected. |
+| 8 | Worker restart neither loses nor duplicates durable processing | **NOT RUN** | Proven at component level by the fault-injection interrupt/drain tests. |
+| 9 | Logs, metrics and traces cover the main workflow | **NOT RUN** | `tests/integration/test_telemetry_surface.py` asserts the served metric names, counters and timings, but nothing asserts spans reach a real OTLP collector (a stated CI gap), and no deployment's telemetry has been observed. |
+
+Row 6 is the reason this is a **FAIL** rather than a "not yet verified"
+bundle: the stack the repository documents as *the* way to start the platform
+is a local HMAC stack. Wiring the identity simulator into `compose.yaml` with
+`ITSM_ENV=staging`, and replacing the CI step that only validates compose
+with one that brings the stack up and probes it, is the work that would move
+row 6 — this is WP-I's `make demo-up` work, not a documentation change. Note
+that the OIDC *implementation* is verified (the contract suite drives the
+production `OIDCAuthenticator` over TLS with a pinned CA); what fails is that
+no runnable stack serves it.
+
+**`DEMO_QUALIFIED` — NOT RUN.** No rehearsal has executed against a live
+stack with a real model at this commit or any commit in this milestone. What
+exists is implementation plus offline tests: the runner is unit-tested, the
+identity simulator's tokens are proven accepted by the production relying
+party in the contract suite, and the evidence producer is integration-tested.
+None of that is a rehearsal. There is no artifact in
+`evals/reports/staging/` to judge, so no disqualifier check can be evaluated.
+
+**Independent human review — NOT APPLICABLE.** The repository is
+solo-maintained; `main` requires 0 approving reviews because GitHub does not
+permit a PR author to approve their own PR. This is recorded, not waived.
+
+
 
 ## Definition of release qualified
 
@@ -140,31 +230,51 @@ Fill this in from the qualified run. Use `success` / `failure` / `skipped` /
 `cancelled` exactly as GitHub reports it. Do not paraphrase a result into
 "green".
 
-The table below is the **2026-11-06 record** (run `42214887310`, PR #9),
-kept as the last fully inventoried evidence set. It is superseded by the
-2026-11-14 record above: that run reports 15/15 jobs `success` with 0
-failures, but its artifacts were not re-inventoried during this refresh, so
-the table is not restated for it. Re-inventory run `43672858417` with step 4
-below before citing the newer run as artifact-backed.
+The table below is the **2026-11-17 record** for
+`f4b5640fba7294f18f8a4e14fd440f9809626ecb`, run `44016524854`
+(`https://github.com/Aparnap2/ITSM-Self-Healing-Platform/actions/runs/44016524854`),
+event `push` on `main`, attempt 1. Every row was re-inventoried from the run
+on 2026-11-17; the test counts are the ones `tools/ci_summary.py` reported
+when re-run offline against the downloaded reports, not counts copied from a
+previous record.
 
-| Gate | Job name | Result | Artifact/link | Notes |
+| Gate | Job name | Result | Artifact / expiry | Notes |
 | --- | --- | --- | --- | --- |
-| Formatting and lint | Lint & Format | `success` | run `42214887310` | |
-| Static typing | Type Check (mypy --strict) | `success` | run `42214887310` | 148 source files |
-| Secret scanning | Secret Scan (gitleaks) | `success` | `gitleaks-results.sarif` | no finding |
-| Workflow security | Workflow Security (zizmor) | `success` | run `42214887310` | |
-| Supply chain, SAST, SBOM | Supply Chain (pip-audit, bandit, SBOM) | `success` | `sbom` | Bandit/pip-audit/Trivy clean |
-| Build and compose | Build & Compose Config | `success` | run `42214887310` | |
-| DAST | DAST (OWASP ZAP baseline, isolated target) | `success` | `dast-report` | no FAIL rule |
-| Unit tests | Unit Tests | `success` | `unit-junit` | 246 tests, 0 failed |
-| Contract tests | Contract Tests (simulators, offline) | `success` | `contract-junit` | 40 tests, 0 failed |
-| Security invariants | Security Invariant Tests | `success` | `security-junit` | 45 tests, 0 failed |
-| Integration | Integration Tests | `success` | `integration-junit` | 113 tests, 0 failed; includes migration harness |
-| Fault injection | Fault Injection Tests | `success` | `fault-injection-junit` | 18 tests, 0 failed |
-| E2E | E2E Tests | `success` | `e2e-junit` | 9 tests, 0 failed |
-| Scenario harness | Scenario Harness | `success` | `scenarios-junit` | 24 tests, 0 failed |
-| Summary | CI Verification Summary | `success` | run `42214887310` | 444 unique tests, 0 failures + errors, 0 missing groups |
-| Run binding | `headSha` = `57c9d8cd049dd243d13c7610c5fe75270a687af2` | `success` | run `42214887310` | event `push` on `main` |
+| Formatting and lint | Lint & Format | `success` | run `44016524854` | 04:20:46 → 04:20:57 |
+| Static typing | Type Check (mypy --strict) | `success` | run `44016524854` | 04:20:46 → 04:21:03; `mypy --strict` clean on 189 source files locally |
+| Secret scanning | Secret Scan (gitleaks) | `success` | `gitleaks-results.sarif`, expires 2027-02-15 | no finding |
+| Workflow security | Workflow Security (zizmor) | `success` | run `44016524854` | **does not validate workflow YAML syntax** — see the defect note below |
+| Supply chain, SAST, SBOM | Supply Chain (pip-audit, bandit, SBOM) | `success` | `sbom`, expires 2026-12-17 | Bandit/pip-audit/Trivy clean |
+| Build and compose | Build & Compose Config | `success` | `image-digest`, expires 2026-12-17 | validates `docker compose config`; does **not** start the stack |
+| DAST | DAST (OWASP ZAP baseline, isolated target) | `success` | `dast-report`, expires 2026-12-17 | no FAIL rule |
+| Unit tests | Unit Tests | `success` | `unit-junit`, expires 2026-12-17 | 513 tests, 0 failed |
+| Contract tests | Contract Tests (simulators, offline) | `success` | `contract-junit`, expires 2026-12-17 | 55 tests, 0 failed; includes the identity simulator's tokens being accepted by the production relying party |
+| Security invariants | Security Invariant Tests | `success` | `security-junit`, expires 2026-12-17 | 45 tests, 0 failed |
+| Integration | Integration Tests | `success` | `integration-junit`, expires 2026-12-17 | 161 tests, 0 failed; includes the migration harness against real PostgreSQL |
+| Fault injection | Fault Injection Tests | `success` | `fault-injection-junit`, expires 2026-12-17 | 20 tests, 0 failed |
+| E2E | E2E Tests | `success` | `e2e-junit`, expires 2026-12-17 | 12 tests, 0 failed |
+| Scenario harness | Scenario Harness | `success` | `scenarios-junit`, expires 2026-12-17 | 24 tests, 0 failed |
+| Summary | CI Verification Summary | `success` | run `44016524854` | **777 unique tests, 0 failures, 0 errors, 0 skipped**, 0 missing groups, 0 non-success required jobs, no owner-marked optional job |
+| Run binding | `headSha` = `f4b5640fba7294f18f8a4e14fd440f9809626ecb` | `success` | run `44016524854` | event `push` on `main`, attempt 1 |
+
+Local corroboration at the same commit (`make verify`, real PostgreSQL on
+5544 and NATS on 4224, `ITSM_TEST_STRICT=1`): exit `0`; 830 test executions
+(unit 513, contract 55, security 45, fault injection 20, integration 161,
+scenarios 24, e2e 12), 0 failures — 777 unique tests once the suites that
+carry multiple markers are de-duplicated, matching CI. `ruff format --check`
+245 files; `ruff check` clean; `mypy --strict` clean on 189 files; Bandit
+clean.
+
+**Defect observed during this record (kept as an engineering lesson).** At
+`8a3cc60`, `release.yml` did not parse — an unquoted colon in a job's
+`name:` — and GitHub reported it as a jobless *failure* run named after the
+file path rather than as a CI failure. No gate caught it: `zizmor` checks
+security properties of workflows, not YAML validity, and no job runs
+`actionlint`. It was fixed in `f4b5640` (this commit). Adding a workflow-YAML
+validation step is a **future CI change** and must go through the same
+explicit gate-policy process; this record does not alter the 15-gate set to
+accommodate it. Until then, **a green `Workflow Security` job is not evidence
+that a workflow file parses.**
 
 ## Disqualifying conditions
 
@@ -207,6 +317,88 @@ call it "mostly green".
   gate, not independent human review, so this qualification does not claim
   that independent review occurred.
 - A secret appears in the diff, logs, artifacts, or audit payloads.
+
+## Rehearsal qualification (staging and demo track)
+
+This section defines `DEMO_QUALIFIED` independently of CI. A rehearsal
+artifact is judged **against this list only**, not against the author's
+description of it. If a required field is absent, the artifact does not
+qualify — an absent field is a failure, not a note.
+
+### What a qualifying rehearsal artifact must contain
+
+The artifact is the report written by `tools/e2e_staging_run.py` to
+`evals/reports/staging/staging-run-<run-id>.json` (SOP-06). It must carry:
+
+1. **`git_sha`** — the commit the rehearsal ran against, and it must equal the
+   commit being qualified.
+2. **`run_id`** and the report's own generation timestamp.
+3. **`credential_mode`** — `oidc`, `token`, or `hmac`. A staging rehearsal is
+   `oidc`; an `hmac` artifact is a local run and cannot qualify a staging
+   claim.
+4. **Source event identity** — source-event id and payload hash — and the
+   **finding** id with its detection outcome.
+5. **Model identity** — model id, model version, prompt version, the number of
+   model calls made, and the latency observed.
+6. **Request/proposal identifiers** and the **evidence-validation outcome**
+   (grounding).
+7. **Both reviewer identities** and their decisions, each a distinct
+   principal.
+8. **Final finding status**, which must be `VERIFIED`.
+9. The **bundle retrieval result**, which must be a 200.
+10. The explicit **"does not prove"** list, so the artifact cannot be read as
+    a broader claim than it is.
+11. **No secret.** No API key, bearer token, HMAC secret, DSN password, or
+    model-debug dump. The report path is sanitised before it is written.
+
+### Disqualifying conditions
+
+Any one of these makes the rehearsal **not qualified**. Do not average, do
+not waive, do not describe it as "passed with notes".
+
+- The artifact's `git_sha` is not the commit under qualification, or the
+  rehearsal did not run against a recorded SHA at all.
+- The evidence bundle was not retrieved (non-200), or the bundle is empty.
+- The proposal cited an evidence id that was **outside** the snapshot, or one
+  that does not resolve to a persisted, tenant-scoped `evidence_references`
+  row.
+- The model made **more calls than the budget** (hard cap 3). Retries beyond
+  the cap are a disqualifier, not a demonstration of resilience.
+- The two reviewers were **not distinct principals**, or a principal
+  transitioned the finding to `VERIFIED` on its own work. The policy refuses
+  self-verification; a rehearsal that works around that refusal does not
+  qualify.
+- The **finding status was changed by the model**, or by anything other than
+  an authenticated reviewer transition.
+- **A secret appeared** in the artifact, the logs, the trace, or an audit
+  payload.
+- The artifact is **not reproducible**: the commands in SOP-06, run against
+  the same commit on a clean stack, do not produce an artifact with the same
+  required fields.
+- The final status is not `VERIFIED`, or the incident was marked resolved
+  without independent postcondition verification.
+- The rehearsal ran against a **different model** than the one recorded, or
+  the model identity is absent.
+- The report was **hand-edited** after the run without a re-run; the artifact
+  must be machine-produced.
+
+### Judging an artifact from this document alone
+
+1. Open the JSON. Check `git_sha` equals the commit being qualified. If it
+   does not, stop — the artifact belongs to another commit and qualifies
+   nothing.
+2. Check `credential_mode`. A staging claim requires `oidc`.
+3. Check `model_calls <= 3`.
+4. Check the reviewer block: two entries, distinct `sub` values, decisions
+   `RESOLVED` then `VERIFIED`, in that order.
+5. Check `bundle_status == 200`.
+6. Check the grounding block: failures empty, and every cited evidence id
+   present in the snapshot.
+7. Check `final_status == "VERIFIED"`.
+8. Scan for `secret`, `token`, `password`, `api_key`, `authorization` values
+   that are non-empty. Any hit is a disqualifier and must be treated as an
+   incident, not a documentation bug.
+9. If every check passes, record `DEMO_QUALIFIED` **for that SHA only**.
 
 ## How to verify
 
@@ -290,6 +482,39 @@ populated inside the workflow. `--no-require-needs` is therefore required for
 a local re-check; without it the summary fails closed on the missing job
 results. Use step 3 for job results and the run's summary page for the
 authoritative `ci-summary` output.
+
+The payload can be recovered, which removes the need to trust the summary
+page. The summary job echoes it, so it is recoverable from the job log:
+
+```sh
+gh run view --job <ci-summary-job-id> --log > /tmp/ci-summary.log
+python3 - <<'PY'
+import io, json, re
+lines = io.open("/tmp/ci-summary.log", encoding="utf-8").read().splitlines()
+fixed = []
+for ln in lines:
+    ln = re.sub(r"^CI Verification Summary\t[^\t]*\t", "", ln)
+    ln = re.sub(r"^\ufeff?\d{4}-\d\d-\d\dT[\d:.]+Z ", "", ln)
+    fixed.append(ln)
+start = next(i for i, l in enumerate(fixed) if l.strip().startswith("NEEDS_RESULTS:"))
+buf, depth = ["{"], 1
+for l in fixed[start + 1:]:
+    buf.append(l)
+    depth += l.count("{") - l.count("}")
+    if depth == 0:
+        break
+io.open("/tmp/needs.json", "w").write(json.dumps(json.loads("\n".join(buf))))
+PY
+uv run python tools/ci_summary.py --reports /tmp/qual-flat \
+  --sha <merge-sha> --run-id <run-id> --run-attempt 1 --head-sha "" \
+  --retention-days 30 --max-skipped 0 \
+  --needs-json "$(cat /tmp/needs.json)"
+```
+
+This reproduces the full verdict — required-job table, per-suite counts and
+the qualification line — from downloaded artifacts plus the run's own
+payload. It is how the `f4b5640` record above was produced: an exit code of
+`0` and no "not qualified" line is the check.
 
 ### 6. Verify the gates were not weakened
 
@@ -406,8 +631,10 @@ qualification is evidence about one CI run on one commit under simulators.
   without failing their jobs; absence is an evidence gap, not a green
   artifact.
 - The local `tools/ci_summary.py` recomputation cannot evaluate job
-  conclusions without `NEEDS_RESULTS`; it is a report-integrity check, not a
-  substitute for step 3.
+  conclusions without `NEEDS_RESULTS`. The payload is recoverable from the
+  summary job's log (step 5), so a full replay is possible; it still proves
+  report integrity and job conclusions, not that those jobs tested the right
+  thing.
 - Branch protection verification requires repository admin access that an
   agent or contributor may not have.
 - `main` requires **0** approving reviews (solo-maintained repository;
@@ -420,3 +647,33 @@ qualification is evidence about one CI run on one commit under simulators.
 - DAST is required in `tools/ci_summary.py` (no default exemption). A
   skipped or failed DAST fails the CI summary and therefore the
   qualification.
+- **The `Workflow Security` gate does not prove a workflow parses.**
+  `zizmor` checks security properties; there is no `actionlint` step. A
+  syntax-invalid workflow is reported by GitHub as a jobless failure run
+  named after the file path, which no gate reads. Observed at `8a3cc60` and
+  fixed in `f4b5640`. Adding YAML validation is a tracked, deliberate future
+  CI change — not part of this record, and not a reason to weaken the
+  existing 15 gates.
+- **Detection is narrowed by a declared privilege gap.** There is no
+  PostgreSQL privilege rule in the detection engine, so the
+  `mal-pg-alter-role-superuser` scenario is declared `"known_gap": true` in
+  `evals/datasets/pilot_scenarios.json` and excluded from the rule-supported
+  recall figure. Recall on that scenario is not measured and must not be
+  inferred from the pilot's overall numbers.
+- **No load test and no throughput gate.** Concurrency is asserted for
+  *correctness* only (`tests/integration/test_concurrency_load.py`): the same
+  event delivered concurrently is stored and processed exactly once. No
+  latency, throughput, or capacity claim is made or gated. A green run says
+  nothing about behaviour under production load.
+- **No trace-export assertion against a real collector.** Spans are verified
+  in-process and the API's metric endpoint is asserted
+  (`tests/integration/test_telemetry_surface.py`), but no test asserts that
+  spans actually reach an OTLP collector. A broken exporter configuration
+  would not fail CI.
+- **Single-node infrastructure only.** PostgreSQL, NATS and the application
+  are each a single instance in CI. No failover, leader election, partition
+  behaviour, or broker-cluster recovery is tested. `docs/nats-stream-config.md`
+  states the single-node scope.
+- **Nothing here is a production-readiness claim.** No staging stack has been
+  brought up from this commit, no rehearsal has run with a real model, and no
+  independent human review has occurred.

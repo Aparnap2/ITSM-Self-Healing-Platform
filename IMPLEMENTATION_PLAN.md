@@ -216,16 +216,38 @@ No external task tracker configured (AGENTS.md §11a). This file is the task sou
 - **Acceptance gate:** all CI jobs green with exact passed/failed/skipped counts reported; no zero-collected suites. **Accepted:** CI run 41271007745 on commit 98e83ef is fully green. The branch/PR remains draft and unmerged, so merge is still outstanding. Tasks marked 🟡 above remain "implemented; independent acceptance review pending" until the PR is reviewed and merged.
 - **Test phase:** Integration + CI gates (no new features; qualification only)
 
-## Milestone: Staging & Full E2E Demo Qualification (plan under review)
+## Milestone: Staging & Full E2E Demo Qualification
 
 The implementation plan for this milestone lives in
-`docs/staging-e2e-qualification-plan.md` (DRAFT — not approved work, nothing
-executed). It was derived from a read-only audit of the repository and is
-ordered by dependency: reviewer identity provisioning → local OIDC identity
-simulator → evidence-reference producer → observability wiring → rehearsal
-runner upgrade → failure-scenario gaps → artifact split → qualification
-record → demo storyboard. Five decisions are flagged in §6 of that document
-and are needed before execution starts.
+`docs/staging-e2e-qualification-plan.md` (approved 2026-11-16). Ordered by
+dependency: reviewer identity provisioning → local OIDC identity simulator →
+evidence-reference producer → observability wiring → rehearsal runner upgrade
+→ failure-scenario gaps → artifact split → qualification record → demo
+storyboard. The five decisions flagged in §6 were approved before execution.
+
+**Status as of 2026-11-17, baseline `f4b5640`** (merge commit of PR #26;
+CI run `44016524854`, 15/15 jobs `success`, 777 unique tests):
+
+| WP | State | Evidence | What is NOT proven |
+| --- | --- | --- | --- |
+| A — reviewer provisioning | ✅ merged (#19) | 13 unit + 11 integration tests; runtime role still cannot write the directory; every change versioned and audited per tenant | — |
+| B — RS256 identity simulator | ✅ merged (#24) | 15 contract tests drive the production `OIDCAuthenticator` + `HttpJwksProvider` over TLS with a pinned CA; a self-granted `admin` claim is ignored in favour of the directory | not wired into `compose.yaml`; no staging stack serves it |
+| C — evidence producer | ✅ merged (#21) | 4 integration tests; the reference is written in the finding's own tenant transaction | — |
+| D — observability | ✅ merged (#20) | 23 declared metrics with a doc/code parity guard; API scrape enabled | no assertion that spans reach a real OTLP collector |
+| E — rehearsal runner | ✅ merged (#25) | OIDC/token/HMAC credential modes, two-reviewer lifecycle, mandatory bundle, grounding checks, redacted committed report; unit-tested | **never executed against a live stack with a real model** |
+| F — failure scenarios | ✅ merged (#22) | 2 new fault-injection tests (mid-stream broker interruption, real httpx read timeout) | — |
+| G — artifact split | ✅ merged (#22) | `pilot-metrics.json` byte-stable and asserted; `pilot-performance.json` machine-dependent and never asserted | — |
+| H — qualification record | ✅ this change | `docs/release-qualification.md`: two qualification states, per-criterion status for `f4b5640`, rehearsal disqualifier set | — |
+| I — demo workflow | ⬜ NOT STARTED | — | `make demo-up` / `demo-run` / `demo-down` and the storyboard do not exist in the required form |
+| J — independent review | ⛔ BLOCKED | `main` requires 0 approving reviews; solo-maintained | no independent human review exists |
+
+**Qualification states for `f4b5640`** (see `docs/release-qualification.md`):
+`CI_QUALIFIED` **PASS**; `STAGING_READY` **FAIL** (criterion 6: the
+documented stack runs `ITSM_ENV=local` with `ITSM_AUTH_MODE=hmac` and no
+compose service provides an OIDC provider, so the staging-compatible
+authentication row fails); `DEMO_QUALIFIED` **NOT RUN** (no rehearsal
+artifact exists). Do not restate this as "staging ready" or "demo qualified".
+
 
 ## Remaining work — 2026-11-14 (todo list for delegated execution)
 
