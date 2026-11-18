@@ -234,11 +234,11 @@ CI run `44016524854`, 15/15 jobs `success`, 777 unique tests):
 | B — RS256 identity simulator | ✅ merged (#24), wired into compose in WP-I | 17 contract tests drive the production `OIDCAuthenticator` + `HttpJwksProvider` over TLS with a pinned CA; a self-granted `admin` claim is ignored in favour of the directory; the compose `identity` service serves it with the CA pinned by every client | the tokens are simulator-issued; no real IdP was exercised |
 | C — evidence producer | ✅ merged (#21) | 4 integration tests; the reference is written in the finding's own tenant transaction | — |
 | D — observability | ✅ merged (#20) | 23 declared metrics with a doc/code parity guard; API scrape enabled | no assertion that spans reach a real OTLP collector |
-| E — rehearsal runner | ✅ merged (#25), executed in WP-I | OIDC/token/HMAC credential modes, two-reviewer lifecycle, mandatory bundle, grounding checks, redacted committed report; **executed live at `9ee4713`**: 1 real Groq call of 3, 3 accepted transitions, grounding `in_snapshot=True` | one run on one tenant; not a statistical sample of model quality |
+| E — rehearsal runner | ✅ merged (#25), executed in WP-I | OIDC/token/HMAC credential modes, two-reviewer lifecycle, mandatory bundle, grounding checks, redacted committed report; **executed live at `00b479f`**: 1 real Groq call of 3, 3 accepted transitions, grounding `in_snapshot=True` and `resolves=True` | one run on one tenant; not a statistical sample of model quality |
 | F — failure scenarios | ✅ merged (#22) | 2 new fault-injection tests (mid-stream broker interruption, real httpx read timeout) | — |
 | G — artifact split | ✅ merged (#22) | `pilot-metrics.json` byte-stable and asserted; `pilot-performance.json` machine-dependent and never asserted | — |
-| H — qualification record | ✅ merged (#27, #28) | `docs/release-qualification.md`: two qualification states, per-criterion status for `f4b5640`, rehearsal disqualifier set; superseded for demo purposes by `docs/staging-demo-qualification.md` | the `f4b5640` CI numbers are that SHA's; WP-I evidence is bound to `9ee4713` (CI at `ac78876d`) |
-| I — demo workflow | ✅ implemented, executed and recorded at `9ee4713`; CI 15/15 at `ac78876d` | `docs/staging-demo-qualification.md`: runnable staging stack (compose + OIDC + migration gate), `make demo-up/demo-verify/demo-evidence/demo-run/demo-down`, live `STAGING_READY: PASS` (14 emitted checks, 16 criteria) and `DEMO_QUALIFIED: PASS` with screenshots and raw captures under `evals/reports/staging/`; CI run `44228453609` = 849 executions, 0 failures, 0 skipped | local staging-equivalent only; no cloud staging; system outbox rows not drained (pre-existing); the rehearsal is one run on one tenant |
+| H — qualification record | ✅ merged (#27, #28) | `docs/release-qualification.md`: two qualification states, per-criterion status for `f4b5640`, rehearsal disqualifier set; superseded for demo purposes by `docs/staging-demo-qualification.md` | the `f4b5640` CI numbers are that SHA's; WP-I evidence is bound to `00b479f` |
+| I — demo workflow | ✅ implemented, executed and recorded at `00b479f`; CI 15/15 at the same SHA | `docs/staging-demo-qualification.md`: runnable staging stack (compose + OIDC + migration gate), `make demo-up/demo-verify/demo-evidence/demo-run/demo-down`, live `STAGING_READY: PASS` (14 emitted checks, 16 criteria) and `DEMO_QUALIFIED: PASS` with screenshots and raw captures under `evals/reports/staging/`; CI run `44231206364` = 850 executions, 0 failures, 0 skipped | local staging-equivalent only; no cloud staging; system outbox rows not drained (pre-existing); the rehearsal is one run on one tenant |
 | J — independent review | ⛔ BLOCKED | `main` requires 0 approving reviews; solo-maintained | no independent human review exists |
 
 **Qualification states for `f4b5640`** (historical, see
@@ -248,11 +248,10 @@ CI run `44016524854`, 15/15 jobs `success`, 777 unique tests):
 the staging-compatible authentication row failed); `DEMO_QUALIFIED`
 **NOT RUN** (no rehearsal artifact existed).
 
-**Qualification states for `9ee4713`** (see
-`docs/staging-demo-qualification.md`): `CI_QUALIFIED` **PASS** (15/15 jobs at
-the docs-only descendant `ac78876d`, 849 executions); `STAGING_READY`
-**PASS**; `DEMO_QUALIFIED` **PASS**. The `9ee4713` PASS does not retroactively
-upgrade `f4b5640`, which remains the FAIL/NOT RUN above.
+**Qualification states for `00b479f`** (see
+`docs/staging-demo-qualification.md`): `CI_QUALIFIED` **PASS**; `STAGING_READY`
+**PASS**; `DEMO_QUALIFIED` **PASS**. The PASS does not retroactively upgrade
+`f4b5640`, which remains the FAIL/NOT RUN above.
 
 
 ## Remaining work — 2026-11-14 (todo list for delegated execution)
