@@ -1,0 +1,29 @@
+{
+  "tenant": "11111111-1111-1111-1111-111111111111",
+  "probes": [
+    {
+      "case": "no authorization header",
+      "http_status": 401,
+      "detail": "{\"detail\":\"invalid or missing credentials\"}",
+      "expected": "401/403"
+    },
+    {
+      "case": "malformed bearer token",
+      "http_status": 401,
+      "detail": "{\"detail\":\"invalid or missing credentials\"}",
+      "expected": "401/403"
+    },
+    {
+      "case": "valid reviewer token",
+      "http_status": 403,
+      "detail": "{\"detail\":\"principal is not a member of the requested tenant\"}",
+      "expected": "200"
+    },
+    {
+      "case": "signed token, no directory row",
+      "http_status": 401,
+      "detail": "{\"detail\":\"invalid or missing credentials\"}",
+      "expected": "401/403"
+    }
+  ]
+}

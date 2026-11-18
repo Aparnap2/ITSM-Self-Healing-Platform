@@ -1,0 +1,96 @@
+{
+  "applied_migrations": [
+    {
+      "filename": "001_initial_schema.sql",
+      "applied_at": "2026-11-17 05:08:08.807388+00:00"
+    },
+    {
+      "filename": "002_source_events.sql",
+      "applied_at": "2026-11-17 05:08:08.821903+00:00"
+    },
+    {
+      "filename": "003_identity_mappings.sql",
+      "applied_at": "2026-11-17 05:08:08.829853+00:00"
+    },
+    {
+      "filename": "004_detection.sql",
+      "applied_at": "2026-11-17 05:08:08.850078+00:00"
+    },
+    {
+      "filename": "005_review_decisions.sql",
+      "applied_at": "2026-11-17 05:08:08.855642+00:00"
+    },
+    {
+      "filename": "006_audit_processing.sql",
+      "applied_at": "2026-11-17 05:08:08.863702+00:00"
+    },
+    {
+      "filename": "007_tenant_isolation.sql",
+      "applied_at": "2026-11-17 05:08:08.883192+00:00"
+    },
+    {
+      "filename": "008_retention_erasure.sql",
+      "applied_at": "2026-11-17 05:08:08.905558+00:00"
+    },
+    {
+      "filename": "009_tenant_scoped_inbox.sql",
+      "applied_at": "2026-11-17 05:08:08.910560+00:00"
+    },
+    {
+      "filename": "010_runtime_role.sql",
+      "applied_at": "2026-11-17 05:08:08.926518+00:00"
+    },
+    {
+      "filename": "011_tenant_owned_workflow.sql",
+      "applied_at": "2026-11-17 05:08:08.951689+00:00"
+    },
+    {
+      "filename": "012_retention_scheduler.sql",
+      "applied_at": "2026-11-17 05:08:08.958063+00:00"
+    },
+    {
+      "filename": "013_least_privilege_schema_migrations.sql",
+      "applied_at": "2026-11-17 05:08:08.959822+00:00"
+    },
+    {
+      "filename": "014_least_privilege_tenant_registry.sql",
+      "applied_at": "2026-11-17 05:08:08.961445+00:00"
+    },
+    {
+      "filename": "015_findings_lifecycle.sql",
+      "applied_at": "2026-11-17 05:08:08.973303+00:00"
+    },
+    {
+      "filename": "016_investigation_ledger.sql",
+      "applied_at": "2026-11-17 05:08:08.999218+00:00"
+    }
+  ],
+  "reviewer_authorizations": [
+    {
+      "subject": "reviewer-a",
+      "roles": [
+        "reviewer"
+      ],
+      "tenants": [
+        "ac1afce1-91a4-4d6d-92f6-1a833cbd81ca"
+      ],
+      "version": "5"
+    },
+    {
+      "subject": "reviewer-b",
+      "roles": [
+        "reviewer"
+      ],
+      "tenants": [
+        "ac1afce1-91a4-4d6d-92f6-1a833cbd81ca"
+      ],
+      "version": "5"
+    }
+  ],
+  "source_events": 5,
+  "findings": 4,
+  "outbox": {
+    "published": 5,
+    "pending": 5
+  }
+}

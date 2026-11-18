@@ -1,0 +1,118 @@
+{
+  "status": "success",
+  "data": {
+    "activeTargets": [
+      {
+        "discoveredLabels": {
+          "__address__": "api:8000",
+          "__always_scrape_classic_histograms__": "false",
+          "__convert_classic_histograms_to_nhcb__": "false",
+          "__metrics_path__": "/metrics",
+          "__scheme__": "http",
+          "__scrape_interval__": "15s",
+          "__scrape_native_histograms__": "false",
+          "__scrape_timeout__": "10s",
+          "job": "api"
+        },
+        "labels": {
+          "instance": "api:8000",
+          "job": "api"
+        },
+        "scrapePool": "api",
+        "scrapeUrl": "http://api:8000/metrics",
+        "globalUrl": "http://api:8000/metrics",
+        "lastError": "",
+        "lastScrape": "2026-11-18T03:07:32.416867986Z",
+        "lastScrapeDuration": 0.003443141,
+        "health": "up",
+        "scrapeInterval": "15s",
+        "scrapeTimeout": "10s"
+      },
+      {
+        "discoveredLabels": {
+          "__address__": "otel-collector:8888",
+          "__always_scrape_classic_histograms__": "false",
+          "__convert_classic_histograms_to_nhcb__": "false",
+          "__metrics_path__": "/metrics",
+          "__scheme__": "http",
+          "__scrape_interval__": "15s",
+          "__scrape_native_histograms__": "false",
+          "__scrape_timeout__": "10s",
+          "job": "otel-collector"
+        },
+        "labels": {
+          "instance": "otel-collector:8888",
+          "job": "otel-collector"
+        },
+        "scrapePool": "otel-collector",
+        "scrapeUrl": "http://otel-collector:8888/metrics",
+        "globalUrl": "http://otel-collector:8888/metrics",
+        "lastError": "",
+        "lastScrape": "2026-11-18T03:07:34.74149747Z",
+        "lastScrapeDuration": 0.000921297,
+        "health": "up",
+        "scrapeInterval": "15s",
+        "scrapeTimeout": "10s"
+      },
+      {
+        "discoveredLabels": {
+          "__address__": "otel-collector:8889",
+          "__always_scrape_classic_histograms__": "false",
+          "__convert_classic_histograms_to_nhcb__": "false",
+          "__metrics_path__": "/metrics",
+          "__scheme__": "http",
+          "__scrape_interval__": "15s",
+          "__scrape_native_histograms__": "false",
+          "__scrape_timeout__": "10s",
+          "job": "otel-exported-app-metrics"
+        },
+        "labels": {
+          "instance": "otel-collector:8889",
+          "job": "otel-exported-app-metrics"
+        },
+        "scrapePool": "otel-exported-app-metrics",
+        "scrapeUrl": "http://otel-collector:8889/metrics",
+        "globalUrl": "http://otel-collector:8889/metrics",
+        "lastError": "",
+        "lastScrape": "2026-11-18T03:07:32.764696743Z",
+        "lastScrapeDuration": 0.000508024,
+        "health": "up",
+        "scrapeInterval": "15s",
+        "scrapeTimeout": "10s"
+      },
+      {
+        "discoveredLabels": {
+          "__address__": "localhost:9090",
+          "__always_scrape_classic_histograms__": "false",
+          "__convert_classic_histograms_to_nhcb__": "false",
+          "__metrics_path__": "/metrics",
+          "__scheme__": "http",
+          "__scrape_interval__": "15s",
+          "__scrape_native_histograms__": "false",
+          "__scrape_timeout__": "10s",
+          "job": "prometheus"
+        },
+        "labels": {
+          "instance": "localhost:9090",
+          "job": "prometheus"
+        },
+        "scrapePool": "prometheus",
+        "scrapeUrl": "http://localhost:9090/metrics",
+        "globalUrl": "http://9ad8a0653b49:9090/metrics",
+        "lastError": "",
+        "lastScrape": "2026-11-18T03:07:35.776116262Z",
+        "lastScrapeDuration": 0.003453441,
+        "health": "up",
+        "scrapeInterval": "15s",
+        "scrapeTimeout": "10s"
+      }
+    ],
+    "droppedTargets": [],
+    "droppedTargetCounts": {
+      "api": 0,
+      "otel-collector": 0,
+      "otel-exported-app-metrics": 0,
+      "prometheus": 0
+    }
+  }
+}
