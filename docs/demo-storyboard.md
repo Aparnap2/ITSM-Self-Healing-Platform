@@ -50,6 +50,11 @@ investigation, and we refuse to manufacture one.
 `make demo-verify` re-runs the gate in full mode (adds a real token-expiry
 wait) and writes `evals/reports/staging/readiness-*.json`.
 
+The fast mode run by `demo-up` calls itself `STAGING_SMOKE`, not
+`STAGING_READY`: it skips the time-boxed expiry probe, and a check that did
+not run is not evidence. Only `--full` can pronounce `STAGING_READY`, and in
+that mode a `NOT RUN` check fails the gate.
+
 ### What the readiness gate actually asserts
 
 | Check | Live evidence |
@@ -67,7 +72,7 @@ wait) and writes `evals/reports/staging/readiness-*.json`.
 | expired token rejected | same token 200 before expiry, 401 after a real TTL elapses |
 | api metrics endpoint | `/metrics` serves the declared `itsm_*` metric families |
 | prometheus targets | all four declared scrape targets `up` |
-| pipeline processes | outbox backlog readable and drained |
+| outbox backlog | tenant-scoped rows either drained or still inside the 60 s grace window; `NOT APPLICABLE` on a fresh stack (no rows = no evidence) |
 
 The `reviewer-intruder` case is the security-boundary demonstration: a
 correctly signed token is still refused, because authentication is not
@@ -142,6 +147,11 @@ can diff.
   *content* is not).
 - That the PostgreSQL runtime role has exactly the intended privilege set
   (the known privilege gap remains open).
+- That the outbox relay drains **system** rows. The relay runs one scoped pass
+  per registered tenant, so `outbox` rows with `tenant_id IS NULL` (the legacy
+  `IncidentCreated` workflow) stay pending once any tenant exists. This is
+  pre-existing behaviour, not introduced here; the demo's own
+  `SourceEventIngested` rows are tenant-scoped and do drain.
 
 ## Repeatability
 

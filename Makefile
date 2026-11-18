@@ -220,6 +220,7 @@ demo-up: ## Start the staging stack (OIDC + migrations + reviewers) and verify r
 	@$(MAKE) --no-print-directory demo-env
 	docker compose up -d --build --wait
 	$(DEMO_ENV) && uv run python tools/provision_reviewer.py \
+		--admin-dsn "$$ITSM_POSTGRES_DSN" \
 		--issuer "$$ITSM_OIDC_ISSUER" \
 		--subject reviewer-a --subject reviewer-b \
 		--roles reviewer \

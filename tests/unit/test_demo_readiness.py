@@ -30,8 +30,8 @@ def readiness_module() -> ModuleType:
     return module
 
 
-def _report(module: ModuleType) -> Any:
-    return module.Readiness(commit="deadbeef", started_at="2026-01-01T00:00:00Z", mode="fast")
+def _report(module: ModuleType, mode: str = "full") -> Any:
+    return module.Readiness(commit="deadbeef", started_at="2026-01-01T00:00:00Z", mode=mode)
 
 
 def test_all_pass_is_pass(readiness_module: ModuleType) -> None:
@@ -48,12 +48,35 @@ def test_any_fail_is_fail(readiness_module: ModuleType) -> None:
     assert report.verdict == "FAIL"
 
 
-def test_not_run_never_reads_as_pass(readiness_module: ModuleType) -> None:
-    """A check that could not run is not evidence of readiness."""
-    report = _report(readiness_module)
+def test_not_run_never_reads_as_pass_in_the_full_gate(
+    readiness_module: ModuleType,
+) -> None:
+    """In full mode an unrun check is not evidence of readiness."""
+    report = _report(readiness_module, mode="full")
     report.add("a", "PASS", "ok")
     report.add("b", "NOT RUN", "API unreachable")
     assert report.verdict == "FAIL"
+
+
+def test_smoke_mode_makes_no_qualification_claim(
+    readiness_module: ModuleType,
+) -> None:
+    """A smoke check is not the gate, and says so in its own name."""
+    report = _report(readiness_module, mode="fast")
+    report.add("a", "PASS", "ok")
+    report.add("b", "NOT RUN", "skipped in the fast path")
+    assert report.gate == "STAGING_SMOKE"
+    assert report.verdict == "PASS"
+    assert report.evidence()["gate"] == "STAGING_SMOKE"
+
+
+def test_full_mode_reports_the_qualification_gate_name(
+    readiness_module: ModuleType,
+) -> None:
+    report = _report(readiness_module, mode="full")
+    report.add("a", "PASS", "ok")
+    assert report.gate == "STAGING_READY"
+    assert report.evidence()["gate"] == "STAGING_READY"
 
 
 def test_not_applicable_does_not_block_an_otherwise_passing_gate(

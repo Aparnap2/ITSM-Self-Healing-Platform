@@ -68,16 +68,24 @@ class Readiness:
         self.checks.append(Check(name=name, verdict=verdict, detail=detail))
 
     @property
+    def gate(self) -> str:
+        """Only the full mode can speak for STAGING_READY."""
+        return "STAGING_READY" if self.mode == "full" else "STAGING_SMOKE"
+
+    @property
     def verdict(self) -> Verdict:
         if any(c.verdict == "FAIL" for c in self.checks):
             return "FAIL"
-        if any(c.verdict == "NOT RUN" for c in self.checks):
+        # In fast (smoke) mode a skipped time-boxed check is expected; it makes
+        # no claim either way. In full mode an unrun check means the gate has
+        # not been demonstrated, and must not read as a pass.
+        if self.mode == "full" and any(c.verdict == "NOT RUN" for c in self.checks):
             return "FAIL"
         return "PASS"
 
     def evidence(self) -> dict[str, Any]:
         return {
-            "gate": "STAGING_READY",
+            "gate": self.gate,
             "verdict": self.verdict,
             "commit": self.commit,
             "started_at": self.started_at,
@@ -449,17 +457,53 @@ async def check_pipeline_processes(report: Readiness) -> None:
         return
     try:
         with psycopg.connect(dsn, connect_timeout=10) as conn, conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM outbox WHERE status = 'pending'")
-            backlog_row = cur.fetchone()
-            backlog = int(backlog_row[0]) if backlog_row else 0
+            cur.execute(
+                "SELECT count(*), "
+                "count(*) FILTER (WHERE tenant_id IS NULL), "
+                "count(*) FILTER (WHERE tenant_id IS NOT NULL AND status = 'pending'), "
+                "coalesce(extract(epoch FROM now() - min(created_at) "
+                "  FILTER (WHERE tenant_id IS NOT NULL AND status = 'pending')), 0) "
+                "FROM outbox"
+            )
+            row = cur.fetchone()
     except psycopg.Error as exc:
         report.add("pipeline processes", "FAIL", f"cannot read outbox: {exc}"[:300])
         return
-    report.add(
-        "pipeline processes",
-        "PASS",
-        f"outbox backlog={backlog} (relay drains it; 0 is the steady state)",
-    )
+
+    total, system_rows, tenant_pending, oldest_pending_seconds = row if row else (0, 0, 0, 0)
+    total = int(total)
+    tenant_pending = int(tenant_pending)
+    oldest_pending_seconds = float(oldest_pending_seconds)
+
+    if total == 0:
+        # A freshly started stack has no rows yet; publishing is asserted by
+        # the rehearsal, not here. An empty table is not evidence of anything.
+        report.add(
+            "outbox backlog",
+            "NOT APPLICABLE",
+            "no outbox rows yet — publishing is asserted by the rehearsal",
+        )
+        return
+
+    if tenant_pending and oldest_pending_seconds > 60:
+        report.add(
+            "outbox backlog",
+            "FAIL",
+            f"{tenant_pending} tenant-scoped row(s) still pending after "
+            f"{oldest_pending_seconds:.0f}s; the relay is not draining them",
+        )
+        return
+
+    detail = f"{tenant_pending} tenant-scoped row(s) pending, oldest {oldest_pending_seconds:.0f}s"
+    if system_rows:
+        # Pre-existing behaviour, recorded rather than hidden: the relay runs
+        # one scoped pass per registered tenant, so rows with no tenant (the
+        # legacy incident workflow) are outside its reach once a tenant exists.
+        detail += (
+            f"; {system_rows} system row(s) with tenant_id NULL are NOT drained by the "
+            "tenant-scoped relay (known limitation, documented in the qualification record)"
+        )
+    report.add("outbox backlog", "PASS", detail)
 
 
 async def main_async(args: argparse.Namespace) -> int:
@@ -495,7 +539,7 @@ async def main_async(args: argparse.Namespace) -> int:
     for check in report.checks:
         print(f"{check.name:<34} {check.verdict:<8} {check.detail[:64]}")
     print("-" * 110)
-    print(f"STAGING_READY: {report.verdict}   (commit {report.commit[:12]}, mode {report.mode})")
+    print(f"{report.gate}: {report.verdict}   (commit {report.commit[:12]}, mode {report.mode})")
 
     if args.out:
         target = Path(args.out)
