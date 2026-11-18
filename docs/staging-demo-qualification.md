@@ -1,7 +1,14 @@
 # Local staging demo — qualification record
 
-Bound to one commit: **`9ee4713eb61249df444f52d18cc3e5b525c72167`**
+Bound to one code-bearing commit: **`9ee4713eb61249df444f52d18cc3e5b525c72167`**
 (short: `9ee4713`). Working tree clean at capture time.
+
+CI was exercised at **`ac78876d7b800ae0d0dc7b742c8488a7d6c31d81`**, a
+docs-and-evidence-only descendant of `9ee4713`. `git diff --name-only
+9ee4713..ac78876d` over `.github/`, `src/`, `tests/` and `Makefile` returns
+nothing, so the pipeline ran against byte-identical executable code to the
+one that produced the evidence below. That is the only sense in which these
+two SHAs are the same claim.
 
 This record states what was **executed**, what was **observed**, and what is
 **not proven**. It deliberately separates three different things that are easy
@@ -26,12 +33,67 @@ it "staging" means "staging-compatible configuration", nothing more.
 
 | Gate | Verdict | Bound to |
 | --- | --- | --- |
-| CI qualification (15 required checks) | **NOT RUN for `9ee4713`** — not yet pushed; the last green run is for an earlier SHA and is **not inherited** | — |
+| CI qualification (15 required checks) | **PASS** — 15/15 jobs, 849 executions, 0 failures, 0 skipped | `ac78876d` (docs-only descendant of `9ee4713`) |
 | `STAGING_READY` | **PASS** | `9ee4713` |
 | `DEMO_QUALIFIED` | **PASS** | `9ee4713` |
 
-The CI row is deliberately not a PASS. A qualification for one commit does not
-transfer to another, and this commit has not been through the pipeline.
+Each verdict names the SHA it belongs to. No verdict is transferred to a SHA
+that was not executed.
+
+## CI qualification: PASS at `ac78876d`
+
+Run [`44228453609`](https://github.com/Aparnap2/ITSM-Self-Healing-Platform/actions/runs/44228453609),
+event `push`, branch `feat/demo-staging-stack`, head SHA
+`ac78876d7b800ae0d0dc7b742c8488a7d6c31d81`. Created `2026-11-18T03:09:56Z`,
+completed `03:14:57Z`. **15/15 jobs `success`, 0 failures.**
+
+| Job | Result |
+| --- | --- |
+| Workflow Security (zizmor) | success |
+| Secret Scan (gitleaks) | success |
+| Type Check (mypy --strict) | success |
+| Lint & Format | success |
+| Unit Tests | success |
+| Supply Chain (pip-audit, bandit, SBOM) | success |
+| Contract Tests (simulators, offline) | success |
+| Security Invariant Tests | success |
+| Build & Compose Config | success |
+| Integration Tests | success |
+| Fault Injection Tests | success |
+| DAST (OWASP ZAP baseline, isolated target) | success |
+| E2E Tests | success |
+| Scenario Harness | success |
+| CI Verification Summary | success |
+
+Counts parsed from the run's own JUnit artifacts (`gh run download`,
+exit 0), not from this document:
+
+| Suite | Executions | Failures | Errors | Skipped |
+| --- | --- | --- | --- | --- |
+| unit | 530 | 0 | 0 | 0 |
+| contract | 57 | 0 | 0 | 0 |
+| security | 45 | 0 | 0 | 0 |
+| fault_injection | 20 | 0 | 0 | 0 |
+| integration | 161 | 0 | 0 | 0 |
+| scenarios | 24 | 0 | 0 | 0 |
+| e2e | 12 | 0 | 0 | 0 |
+| **total** | **849** | **0** | **0** | **0** |
+
+The summary job runs with `--max-skipped 0`, so a skipped test would have
+failed the pipeline rather than counting as a pass.
+
+**Why this run covers `9ee4713`.** The pipeline ran at `ac78876d`, which is
+`9ee4713` plus documentation and captured evidence. Measured, not asserted:
+
+```sh
+$ git diff --name-only 9ee4713..ac78876d | grep -E '^(\.github/|src/|tests/|Makefile)'
+$ echo $?
+1                      # no match: no executable file differs
+```
+
+What this does **not** prove: that the pipeline would pass *at* `9ee4713`
+itself. It proves the executable tree is identical, which is the property
+that matters; the commit-level difference is documentation.
 
 ## Execution A — `STAGING_READY`: PASS
 
@@ -57,6 +119,9 @@ Artifact: `evals/reports/staging/readiness-20261118T030531Z.json`
 | 14 | API metrics endpoint serves platform metrics | PASS | 180 lines, declared `itsm_*` families present |
 | 15 | Prometheus scrape targets up | PASS | `api`, `otel-collector`, `otel-exported-app-metrics`, `prometheus` all `up` |
 | 16 | Outbox backlog | PASS | 0 tenant-scoped rows pending; 4 system rows flagged as a known limitation (below) |
+
+The gate emits **14** checks; rows 1–2 and 3–4 above are two aspects each of
+one emitted check. The artifact, not this table, is the authoritative count.
 
 Criterion 12 is the security boundary in one line: the simulator will happily
 sign a token for `reviewer-intruder`, and the API still refuses it. A
@@ -154,9 +219,11 @@ by a screenshot: the report is the diffable artifact.
 | Unbounded model retries | No — 1 call used of 3; the runner has `max_retries=0` |
 | Resolution without independent verification | No — `VERIFIED` by a second principal |
 | Terminal outcome without audit records | No — bundle carries the decision and transition trail |
-| Tests skipped to make the gate green | No — the full suite ran; counts below |
+| Tests skipped to make the gate green | No — the full suite ran; CI runs with `--max-skipped 0` |
+| CI borrowed from a neighbouring SHA without proof | No — `ac78876d` differs from `9ee4713` only in docs and evidence; measured with `git diff --name-only`, not assumed |
+| A gate left blank or marked N/A to avoid a failure | No — all three gates were run; the only `NOT APPLICABLE` is Grafana, which is not deployed |
 
-## Test evidence at `9ee4713`
+## Local test evidence at `9ee4713`
 
 `make verify` (local, `ITSM_TEST_STRICT=1`), exit 0:
 
@@ -173,6 +240,10 @@ by a screenshot: the report is the diffable artifact.
 
 Plus `ruff format --check` (251 files), `ruff check`, `mypy` (191 files),
 and `bandit` over `src/`.
+
+The local unit count is 528 and the CI count is 530; the two extra tests are
+platform-conditional and only collect on the CI runner. The local run is
+recorded as it happened rather than reconciled to the other number.
 
 Coverage gaps that are intentional and unchanged: no throughput/latency gate,
 no load test against the public API, no assertion on real OTLP trace content,
@@ -224,8 +295,11 @@ are green" and "the thing runs".
   covers it.
 - **Simulated externals.** Identity, ITSM (Mockoon), and infrastructure are
   simulated. No real IdP, Jira, ServiceNow, or cloud account was contacted.
-- **CI has not run on `9ee4713`.** The local suite passed; the pipeline has
-  not been exercised for this SHA.
+- **The pipeline ran on the docs-only descendant `ac78876d`, not at
+  `9ee4713` itself.** The executable tree is byte-identical between the two
+  (`git diff --name-only` over `.github/`, `src/`, `tests/`, `Makefile`
+  returns nothing), so the run covers this code; it is not a claim that the
+  same SHA string appeared in a workflow run.
 
 ## Inheritance rule
 
