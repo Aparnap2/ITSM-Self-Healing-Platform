@@ -259,7 +259,7 @@ by a screenshot: the report is the diffable artifact.
 | e2e | 12 |
 | **total executions** | **850** |
 
-Plus `ruff format --check` (251 files), `ruff check`, `mypy` (191 files),
+Plus `ruff format --check` (253 files), `ruff check`, `mypy` (191 files),
 and `bandit` over `src/`.
 
 Local and CI agree exactly at this commit: 531 unit, 850 total executions.
@@ -286,7 +286,7 @@ are green" and "the thing runs".
 3. **The rehearsal runner could never emit an OIDC report.** `sanitize_report`
    evaluated `options.reviewer_token` unconditionally and raised *after* the
    work was done. Fixed, with a regression test.
-4. **The report told the truth about an older runner.** It claimed the
+4. **The report described a runner that no longer existed.** It claimed the
    rehearsal "stops at the proposal", which stopped being true when the
    two-reviewer lifecycle was added. Statements are now derived per run.
 5. **The collector's self-metrics target was always down.** The declared
@@ -365,6 +365,14 @@ make demo-run       # Execution B: fresh tenant, real bounded model call
 make demo-evidence-run
 make demo-down
 ```
+
+`make demo-up` runs `make demo-env` first: it writes a gitignored `.env` with
+generated local secrets and inherits `GROQ_API_KEY` as `ITSM_GROQ_API_KEY`.
+Without a Groq key the stack still starts, but the rehearsal's model stage
+fails closed at startup rather than quietly skipping the model, so the run
+would fail rather than produce a hollow pass. Expect about 100 s for
+`demo-verify` (the token-expiry probe) and one billed model call per
+`demo-run`.
 
 `make demo-run` stops the generic `worker` first: the rehearsal drives the
 durable consumer in-process, and two processes cannot bind the same consumer.
