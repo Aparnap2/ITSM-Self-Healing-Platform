@@ -240,11 +240,12 @@ demo-run: ## Execute the full E2E rehearsal against the running stack (Execution
 	@set -a; . ./.env; set +a; \
 	TENANT=$$(uv run python -c 'import uuid; print(uuid.uuid4())'); \
 	echo "rehearsal tenant: $$TENANT (fresh, so the run is repeatable)"; \
+	echo "keeping $(DEMO_TENANT) authorized: provisioning replaces the tenant list"; \
 	uv run python tools/provision_reviewer.py \
 		--admin-dsn "$$ITSM_POSTGRES_DSN" \
 		--issuer "$$ITSM_OIDC_ISSUER" \
 		--subject reviewer-a --subject reviewer-b \
-		--roles reviewer --tenants "$$TENANT" \
+		--roles reviewer --tenants "$(DEMO_TENANT),$$TENANT" \
 		--reason "rehearsal tenant $$TENANT" > /dev/null; \
 	uv run python tools/e2e_staging_run.py \
 		--tenant-id "$$TENANT" \

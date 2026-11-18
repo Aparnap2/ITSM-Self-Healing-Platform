@@ -1,0 +1,86 @@
+{
+  "gate": "STAGING_READY",
+  "verdict": "FAIL",
+  "commit": "21ebf24e624da60560ad3e58e80f33994a605197",
+  "started_at": "2026-11-18T12:16:38.915875+00:00",
+  "mode": "full",
+  "generated_at": "2026-11-18T12:18:19.389463+00:00",
+  "checks": [
+    {
+      "name": "compose services",
+      "verdict": "PASS",
+      "detail": "postgres=running/healthy, nats=running/healthy, identity=running/healthy, mockoon=running/healthy, otel-collector=running, prometheus=running/healthy, api=running/healthy, worker=running, relay=running, retention=running"
+    },
+    {
+      "name": "postgres migrations",
+      "verdict": "PASS",
+      "detail": "16/16 migrations applied; 2 reviewer authorization row(s)"
+    },
+    {
+      "name": "nats jetstream",
+      "verdict": "PASS",
+      "detail": "http://127.0.0.1:8223/jsz?consumers=true: streams=2 consumers=1 durable=0"
+    },
+    {
+      "name": "oidc discovery",
+      "verdict": "PASS",
+      "detail": "https://127.0.0.1:8444/.well-known/openid-configuration: issuer=https://identity:8443 jwks_uri=https://identity:8443/jwks"
+    },
+    {
+      "name": "oidc jwks",
+      "verdict": "PASS",
+      "detail": "1 key(s), alg=['RS256']"
+    },
+    {
+      "name": "api health",
+      "verdict": "PASS",
+      "detail": "http://127.0.0.1:8001/healthz: HTTP 200"
+    },
+    {
+      "name": "oidc token accepted",
+      "verdict": "FAIL",
+      "detail": "GET /v1/findings as reviewer-a: HTTP 403 {\"detail\":\"principal is not a member of the requested tenant\"}"
+    },
+    {
+      "name": "malformed token rejected",
+      "verdict": "PASS",
+      "detail": "GET /v1/findings with 'Bearer not-a-jwt': HTTP 401 {\"detail\":\"invalid or missing credentials\"}"
+    },
+    {
+      "name": "missing token rejected",
+      "verdict": "PASS",
+      "detail": "GET /v1/findings with no Authorization header: HTTP 401 {\"detail\":\"invalid or missing credentials\"}"
+    },
+    {
+      "name": "unauthorized principal rejected",
+      "verdict": "PASS",
+      "detail": "signed token for reviewer-intruder (no directory row): HTTP 401 {\"detail\":\"invalid or missing credentials\"}"
+    },
+    {
+      "name": "expired token rejected",
+      "verdict": "FAIL",
+      "detail": "same token: HTTP 403 before expiry, 401 after 100s {\"detail\":\"invalid or missing credentials\"}"
+    },
+    {
+      "name": "api metrics endpoint",
+      "verdict": "PASS",
+      "detail": "http://127.0.0.1:8001/metrics: HTTP 200, 119 lines, names present=['itsm_ingestion_events_total', 'itsm_consumer_messages_total', 'itsm_outbox_backlog']"
+    },
+    {
+      "name": "prometheus targets",
+      "verdict": "PASS",
+      "detail": "http://127.0.0.1:9091/api/v1/targets: up=['api', 'otel-collector', 'otel-exported-app-metrics', 'prometheus']"
+    },
+    {
+      "name": "outbox backlog",
+      "verdict": "PASS",
+      "detail": "0 tenant-scoped row(s) pending, oldest 0s; 6 system row(s) with tenant_id NULL are NOT drained by the tenant-scoped relay (known limitation, documented in the qualification record)"
+    }
+  ],
+  "does_not_prove": [
+    "production readiness",
+    "throughput or latency under load",
+    "multi-node failover",
+    "that spans reach a real OTLP collector (metrics are asserted, traces are not)"
+  ]
+}
