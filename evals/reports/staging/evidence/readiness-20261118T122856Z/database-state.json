@@ -72,9 +72,10 @@
         "reviewer"
       ],
       "tenants": [
-        "9eaa521a-781e-4d79-9755-e612a903f2fa"
+        "11111111-1111-1111-1111-111111111111",
+        "52160597-2bd8-4c6f-973c-c3d6719cb533"
       ],
-      "version": "7"
+      "version": "11"
     },
     {
       "subject": "reviewer-b",
@@ -82,15 +83,16 @@
         "reviewer"
       ],
       "tenants": [
-        "9eaa521a-781e-4d79-9755-e612a903f2fa"
+        "11111111-1111-1111-1111-111111111111",
+        "52160597-2bd8-4c6f-973c-c3d6719cb533"
       ],
-      "version": "7"
+      "version": "11"
     }
   ],
-  "source_events": 6,
-  "findings": 5,
+  "source_events": 7,
+  "findings": 6,
   "outbox": {
-    "published": 6,
-    "pending": 6
+    "published": 7,
+    "pending": 7
   }
 }

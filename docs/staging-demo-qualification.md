@@ -1,10 +1,10 @@
 # Local staging demo — qualification record
 
-Bound to one code-bearing commit: **`00b479ff3b66508b80f990e284eae15a608b4ca4`**
-(short: `00b479f`). Working tree clean at capture time.
+Bound to one code-bearing commit: **`70e9220616b25800ad8ff3742b125ef632215593`**
+(short: `70e9220`). Working tree clean at capture time.
 
 All three gates — CI, `STAGING_READY`, `DEMO_QUALIFIED` — were executed at
-that same commit, `00b479f`. Nothing here is inherited from a neighbouring
+that same commit, `70e9220`. Nothing here is inherited from a neighbouring
 SHA, and nothing needs to be: the pipeline run, the readiness probe and the
 rehearsal all name it. This document itself is a later, documentation-and-
 evidence-only commit that inherits the record under the rule at the end.
@@ -32,18 +32,18 @@ it "staging" means "staging-compatible configuration", nothing more.
 
 | Gate | Verdict | Bound to |
 | --- | --- | --- |
-| CI qualification (15 required checks) | **PASS** — 15/15 jobs, 850 executions, 0 failures, 0 skipped | `00b479f` |
-| `STAGING_READY` | **PASS** | `00b479f` |
-| `DEMO_QUALIFIED` | **PASS** | `00b479f` |
+| CI qualification (15 required checks) | **PASS** — 15/15 jobs, 850 executions, 0 failures, 0 skipped | `70e9220` |
+| `STAGING_READY` | **PASS** | `70e9220` |
+| `DEMO_QUALIFIED` | **PASS** | `70e9220` |
 
 One SHA, three independently executed gates. No verdict is transferred from
 a commit that was not executed.
 
-## CI qualification: PASS at `00b479f`
+## CI qualification: PASS at `70e9220`
 
-Run [`44231206364`](https://github.com/Aparnap2/ITSM-Self-Healing-Platform/actions/runs/44231206364),
+Run [`44304536783`](https://github.com/Aparnap2/ITSM-Self-Healing-Platform/actions/runs/44304536783),
 event `push`, branch `feat/demo-staging-stack`, head SHA
-`00b479ff3b66508b80f990e284eae15a608b4ca4`. **15/15 jobs `success`,
+`70e9220616b25800ad8ff3742b125ef632215593`. **15/15 jobs `success`,
 0 failures.**
 
 | Job | Result |
@@ -84,8 +84,8 @@ failed the pipeline rather than counting as a pass.
 ## Execution A — `STAGING_READY`: PASS
 
 Command: `make demo-verify` (full mode).
-Artifact: `evals/reports/staging/readiness-20261118T033011Z.json`
-(started `2026-11-18T03:30:11Z`, finished `03:31:52Z`, mode `full`).
+Artifact: `evals/reports/staging/readiness-20261118T122619Z.json`
+(started `2026-11-18T12:26:20Z`, finished `12:28:00Z`, mode `full`).
 
 | # | Criterion | Verdict | Observed |
 | --- | --- | --- | --- |
@@ -102,9 +102,9 @@ Artifact: `evals/reports/staging/readiness-20261118T033011Z.json`
 | 11 | Missing token is rejected | PASS | no header → 401 |
 | 12 | Unauthorized principal is rejected | PASS | valid signature for `reviewer-intruder`, no directory row → 401 |
 | 13 | Expired token is rejected | PASS | same token 200 before expiry, 401 after 100 s (60 s TTL + 30 s leeway + margin) |
-| 14 | API metrics endpoint serves platform metrics | PASS | 180 lines, declared `itsm_*` families present |
+| 14 | API metrics endpoint serves platform metrics | PASS | `HTTP 200, 121 lines` in this run — the total varies with which processes are running, so the check asserts the declared `itsm_*` families (`itsm_ingestion_events_total`, `itsm_consumer_messages_total`, `itsm_outbox_backlog`), not a line count |
 | 15 | Prometheus scrape targets up | PASS | `api`, `otel-collector`, `otel-exported-app-metrics`, `prometheus` all `up` |
-| 16 | Outbox backlog | PASS | 0 tenant-scoped rows pending; 5 system rows (`tenant_id IS NULL`) flagged as a known limitation (below) |
+| 16 | Outbox backlog | PASS | 0 tenant-scoped rows pending; 6 system rows (`tenant_id IS NULL`) flagged as a known limitation (below) |
 
 The gate emits **14** checks; rows 1–2 and 3–4 above are two aspects each of
 one emitted check. The artifact, not this table, is the authoritative count.
@@ -115,7 +115,7 @@ signature proves who spoke, never what they may do.
 
 ### Execution A captures
 
-Directory: `evals/reports/staging/evidence/readiness-20261118T033217Z/`
+Directory: `evals/reports/staging/evidence/readiness-20261118T122856Z/`
 
 | File | Kind | Content |
 | --- | --- | --- |
@@ -150,28 +150,29 @@ are what a reviewer can diff and hash.
 ## Execution B — `DEMO_QUALIFIED`: PASS
 
 Command: `make demo-run`.
-Artifact: `evals/reports/staging/staging-run-9eaa521a-781e-4d79-9755-e612a903f2fa-20261118T033207Z.json`.
+Artifact: `evals/reports/staging/staging-run-52160597-2bd8-4c6f-973c-c3d6719cb533-20261118T122844Z.json`.
 
-Tenant `9eaa521a-781e-4d79-9755-e612a903f2fa` is fresh per run, so the
+Tenant `52160597-2bd8-4c6f-973c-c3d6719cb533` is fresh per run, so the
 rehearsal is repeatable and cannot be satisfied by rows left over from an
-earlier attempt. Reviewers are provisioned for that tenant immediately before
-the run.
+earlier attempt. Reviewers are provisioned immediately before the run for that
+tenant *and* for the readiness tenant — a list that is added to deliberately,
+because provisioning replaces it (defect 8 below).
 
 | # | Stage | Verdict | Observed |
 | --- | --- | --- | --- |
-| 1 | Synthetic event ingested | PASS | `source_event_ingest = ACCEPTED`, external id `cloudtrail:staging-6b3b80cf67d1…` |
+| 1 | Synthetic event ingested | PASS | `source_event_ingest = ACCEPTED`, external id `cloudtrail:staging-ea6f865939b1…` |
 | 2 | Signed webhook accepted by the API | PASS | HTTP 202 with an idempotency key |
 | 3 | Durable persistence before publishing | PASS | source event + outbox row committed, then `outbox_relay` published 1 message |
 | 4 | NATS consumer processed the message | PASS | `detection = processed` (in-process consumer) |
-| 5 | Deterministic finding created | PASS | `MISSING_APPROVAL`, severity P2, outcome `SUSPICIOUS`, risk 60, finding `847b01af…` |
+| 5 | Deterministic finding created | PASS | `MISSING_APPROVAL`, severity P2, outcome `SUSPICIOUS`, risk 60, finding `0452a56a…` |
 | 6 | Real model investigation, bounded | PASS | status `COMPLETED`, **1** real Groq call against a budget of 3 |
-| 7 | Proposal is advisory only | PASS | finding status unchanged by the investigation stage |
-| 8 | Evidence reference persisted and resolvable | PASS | cited id `35f844e0…`, `in_snapshot=True`, `resolves_to_persisted_evidence=True` |
-| 9 | Evidence bundle served over HTTP | PASS | bundle hash `2faab459…` |
+| 7 | Proposal is advisory only | PASS | `finding_status_unchanged_by_investigation=true`; the status is sampled straight after the model stage (`OPEN → OPEN`) and again after review (`→ VERIFIED`), so the model's non-effect and the reviewers' effect are separate observations |
+| 8 | Evidence reference persisted and resolvable | PASS | cited id `e55b3d3a…`, `in_snapshot=True`, `resolves_to_persisted_evidence=True` |
+| 9 | Evidence bundle served over HTTP | PASS | bundle hash `73e0f5c3…` |
 | 10 | Reviewer A authenticates via OIDC | PASS | credential mode `oidc`, token accepted |
 | 11 | Reviewer A acknowledges and resolves | PASS | `ACKNOWLEDGED: 200`, `RESOLVED: 200` |
 | 12 | Reviewer B independently verifies | PASS | `VERIFIED: 200` — a different principal from the resolver |
-| 13 | Final lifecycle state | PASS | `OPEN → VERIFIED` |
+| 13 | Final lifecycle state | PASS | `OPEN → OPEN (after investigation) → VERIFIED (after review)` |
 | 14 | Audit trail retrievable | PASS | bundle contains finding, evidence, review decisions, limitations, hash |
 
 The report also carries `what_this_run_does_not_prove`, generated from what
@@ -207,13 +208,13 @@ a strength: failure evidence should have been archived outside the tracked
 tree instead of removed. What survives is the live observation in the run
 log and the regression test added afterwards.
 
-The honest reading of the PASS below is therefore narrow: **the gate accepts
+The honest reading of the PASS above is therefore narrow: **the gate accepts
 a grounded citation and refuses an ungrounded one; this run produced a
 grounded one.** It is not evidence that the model grounds reliably.
 
 ### Execution B captures
 
-Directory: `evals/reports/staging/evidence/rehearsal-20261118T033220Z/`
+Directory: `evals/reports/staging/evidence/rehearsal-20261118T122900Z/`
 
 | File | Kind | Content |
 | --- | --- | --- |
@@ -230,7 +231,7 @@ by a screenshot: the report is the diffable artifact.
 
 | Disqualifier | Status |
 | --- | --- |
-| Evidence inherited from another SHA | No — every artifact records `00b479f` |
+| Evidence inherited from another SHA | No — every passing artifact records `70e9220`. The one artifact that records a different SHA (`21ebf24`) is the kept failure under `failures/`, labelled as a failure, and it backs no verdict |
 | Gate marked PASS from unit/contract tests | No — every criterion is a live probe or a live run |
 | Screenshot of a mockup or fixture | No — four live pages, two live metric endpoints; originals retained |
 | Success manufactured after a failure | No — no result was edited or re-labelled. One attempt was refused by the grounding gate; it is described above, and the fact that its report was deleted is disclosed rather than hidden |
@@ -240,10 +241,10 @@ by a screenshot: the report is the diffable artifact.
 | Resolution without independent verification | No — `VERIFIED` by a second principal |
 | Terminal outcome without audit records | No — bundle carries the decision and transition trail |
 | Tests skipped to make the gate green | No — the full suite ran; CI runs with `--max-skipped 0` |
-| CI borrowed from a neighbouring SHA | No longer applicable — CI, readiness and the rehearsal all ran at `00b479f` itself |
+| CI borrowed from a neighbouring SHA | No longer applicable — CI, readiness and the rehearsal all ran at `70e9220` itself |
 | A gate left blank or marked N/A to avoid a failure | No — all three gates were run; the only `NOT APPLICABLE` is Grafana, which is not deployed |
 
-## Local test evidence at `00b479f`
+## Local test evidence at `70e9220`
 
 `make verify` (local, `ITSM_TEST_STRICT=1`), exit 0:
 
@@ -296,6 +297,19 @@ are green" and "the thing runs".
    dedupes by `(tenant, type, title)`, so a second run met a terminal finding
    and its transitions were refused with 409. `demo-run` now provisions a
    fresh tenant per run.
+8. **Re-provisioning silently de-authorized the readiness tenant.** Fixing
+   defect 7 introduced a worse one: provisioning *replaces* a subject's tenant
+   list, so every rehearsal removed the reviewers from `1111…` and the next
+   readiness probe failed closed with 403. The gate was correct and the
+   automation was wrong. The failing report is kept in
+   `evals/reports/staging/failures/`.
+9. **The report blamed the model for the reviewers' change.** The finding
+   status was read once at the end of the run, so
+   `finding_status_unchanged_by_model` compared the pre-investigation status
+   with the post-review one and reported `false` for a run in which the model
+   had changed nothing. It now samples immediately after the investigation
+   stage and keeps the final value separately. The original test could not
+   have caught this: it asserted the boolean with before equal to after.
 
 ## Known limitations
 
@@ -315,6 +329,12 @@ are green" and "the thing runs".
   covers it.
 - **Simulated externals.** Identity, ITSM (Mockoon), and infrastructure are
   simulated. No real IdP, Jira, ServiceNow, or cloud account was contacted.
+- **One transient gate failure is unexplained.** After defect 8 was fixed, a
+  single `make demo-up` smoke run failed `oidc token accepted` (403) and every
+  subsequent run passed, including a deliberate replay of the exact
+  re-provision-then-probe sequence. The cause was not identified; it is
+  recorded in `failures/README.md` rather than smoothed away. A gate that can
+  fail once for unknown reasons is a known weakness of this record.
 - **The rehearsal drives the consumer in-process, not in its container.** The
   durable consumer `itsm-workflow` can only have one binding, so `demo-run`
   stops the `worker` container and runs the same `AuditConsumer` code inside
@@ -322,16 +342,16 @@ are green" and "the thing runs".
   path; it does not prove the container's own supervisor loop, which the
   separate worker service exercises outside the run.
 - **This document postdates the commit it qualifies.** The record is
-  committed after `00b479f` and changes only documentation and captured
+  committed after `70e9220` and changes only documentation and captured
   evidence, so it inherits that commit's verdicts under the rule below. The
   inheritance is a convenience, not a re-run: the three gates were executed
-  at `00b479f`, and this text did not exist when they ran.
+  at `70e9220`, and this text did not exist when they ran.
 
 ## Inheritance rule
 
 Documentation-only commits may inherit this record only if they change no
 `.github/`, `src/`, `tests/`, or `Makefile` files, do not alter criteria or
-claims, and name the inherited code-bearing commit (`00b479f`). Any change
+claims, and name the inherited code-bearing commit (`70e9220`). Any change
 that affects executable behaviour invalidates the record and requires a fresh
 run.
 
