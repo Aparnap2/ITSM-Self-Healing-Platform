@@ -191,7 +191,12 @@ def generate_tls_material(
 
 
 def write_tls_material(material: TlsMaterial, directory: str) -> dict[str, str]:
-    """Write the CA, certificate and key to a directory; return the paths."""
+    """Write the CA, certificate and key to a directory; return the paths.
+
+    The private key is written ``0600``: the CA and certificate are public
+    material the host-side runner must read, but nothing outside the simulator
+    process has any business reading the key that signs tokens.
+    """
     from pathlib import Path
 
     base = Path(directory)
@@ -204,6 +209,9 @@ def write_tls_material(material: TlsMaterial, directory: str) -> dict[str, str]:
     paths["ca"].write_bytes(material.ca_cert_pem)
     paths["cert"].write_bytes(material.server_cert_pem)
     paths["key"].write_bytes(material.server_key_pem)
+    paths["ca"].chmod(0o644)
+    paths["cert"].chmod(0o644)
+    paths["key"].chmod(0o600)
     return {name: str(path) for name, path in paths.items()}
 
 

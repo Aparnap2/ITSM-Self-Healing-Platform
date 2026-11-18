@@ -14,7 +14,8 @@ SHELL := /bin/sh
         test-security test-fault-injection test-integration test-scenarios \
         test-e2e verify verify-fast verify-ci test sast audit-deps hooks-install \
         verify-pre-push act-ci compose-up compose-down \
-        compose-reset demo-reset demo-run e2e-staging \
+        compose-reset demo-env demo-up demo-verify demo-down demo-reset \
+        demo-run demo-evidence demo-evidence-run demo-worker-restart e2e-staging \
         guard-collect ci-stamp
 
 help: ## Show available targets
@@ -198,15 +199,73 @@ compose-reset: ## Stop stack and DELETE all volumes (local only)
 	fi; \
 	docker compose down -v --remove-orphans
 
-# --- Demo (Phase 8) --------------------------------------------------------------
+# --- Demo (Phase 8 / WP-I) -------------------------------------------------------
+#
+# The demo runs a STAGING-equivalent stack: ITSM_ENV=staging, OIDC only, the
+# local RS256 identity simulator as the signing authority, migrations applied
+# by a one-shot gate, and the reviewer directory in PostgreSQL as the only
+# authorization source.
+#
+# `demo-env` writes local-only secrets into .env (gitignored) and never
+# overwrites a value you set. Nothing is printed — only the key names.
 
-demo-reset: ## Reset stack to a clean state and bring it back up
+DEMO_TENANT := 11111111-1111-1111-1111-111111111111
+# Load .env into the shell for host-side tools (docker compose reads it itself).
+DEMO_ENV = set -a && . ./.env && set +a
+
+demo-env: ## Create/complete .env for the demo stack (local secrets generated)
+	uv run python tools/demo_env.py ensure
+
+demo-up: ## Start the staging stack (OIDC + migrations + reviewers) and verify readiness
+	@$(MAKE) --no-print-directory demo-env
+	docker compose up -d --build --wait
+	$(DEMO_ENV) && uv run python tools/provision_reviewer.py \
+		--issuer "$$ITSM_OIDC_ISSUER" \
+		--subject reviewer-a --subject reviewer-b \
+		--roles reviewer \
+		--tenants $(DEMO_TENANT) \
+		--reason "local demo stack: two independent reviewers"
+	$(DEMO_ENV) && uv run python tools/demo_readiness.py
+
+demo-verify: ## Full readiness gate (incl. expired-token wait) and write Execution-A evidence
+	$(DEMO_ENV) && uv run python tools/demo_readiness.py --full \
+		--out evals/reports/staging/readiness-$$(date -u +%Y%m%dT%H%M%SZ).json
+
+demo-run: ## Execute the full E2E rehearsal against the running stack (Execution B)
+	@$(MAKE) --no-print-directory demo-env
+	@echo "Stopping the generic worker: the rehearsal drives the consumer in-process"
+	@echo "and two processes cannot bind the same durable consumer (itsm-workflow)."
+	docker compose stop worker
+	@set -a; . ./.env; set +a; \
+	TENANT=$$(uv run python -c 'import uuid; print(uuid.uuid4())'); \
+	echo "rehearsal tenant: $$TENANT (fresh, so the run is repeatable)"; \
+	uv run python tools/provision_reviewer.py \
+		--admin-dsn "$$ITSM_POSTGRES_DSN" \
+		--issuer "$$ITSM_OIDC_ISSUER" \
+		--subject reviewer-a --subject reviewer-b \
+		--roles reviewer --tenants "$$TENANT" \
+		--reason "rehearsal tenant $$TENANT" > /dev/null; \
+	uv run python tools/e2e_staging_run.py \
+		--tenant-id "$$TENANT" \
+		--report-path "evals/reports/staging/staging-run-$$TENANT-$$(date -u +%Y%m%dT%H%M%SZ).json"
+
+demo-evidence: ## Capture Execution-A evidence (raw captures + live screenshots)
+	$(DEMO_ENV) && uv run python tools/demo_capture.py --phase a \
+		--out-dir evals/reports/staging/evidence/readiness-$$(date -u +%Y%m%dT%H%M%SZ)
+
+demo-worker-restart: ## Restart the generic worker stopped by demo-run
+	docker compose start worker
+
+demo-evidence-run: ## Capture Execution-B evidence after demo-run
+	$(DEMO_ENV) && uv run python tools/demo_capture.py --phase b \
+		--out-dir evals/reports/staging/evidence/rehearsal-$$(date -u +%Y%m%dT%H%M%SZ)
+
+demo-down: ## Stop the demo stack (volumes preserved)
+	docker compose down --remove-orphans
+
+demo-reset: ## Wipe the demo stack state and start it clean
 	$(MAKE) compose-reset
-	$(MAKE) compose-up
-
-demo-run: ## Bring stack up, then run the scenario harness
-	$(MAKE) compose-up
-	uv run pytest -m scenarios
+	$(MAKE) demo-up
 
 # --- Manual staging rehearsal (NOT part of verify-ci) -------------------------
 #

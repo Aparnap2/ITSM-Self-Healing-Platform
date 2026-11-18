@@ -337,3 +337,50 @@ async def test_simulator_is_offline_and_uses_no_services() -> None:
 
 def _unused() -> None:  # pragma: no cover - keeps asyncio import meaningful
     asyncio.get_event_loop_policy()
+
+
+async def test_discovery_document_advertises_the_configured_base_url() -> None:
+    """Discovery describes the surface the stack is actually wired to.
+
+    The relying party does not use this document — it is configured with an
+    explicit JWKS URL — so the value of discovery is that a readiness probe
+    can compare what the simulator advertises with what the platform pins.
+    """
+    key = generate_signing_key()
+    app = create_app(
+        SimulatorConfig(
+            issuer=ISSUER,
+            audience=AUDIENCE,
+            key=key,
+            subjects=(SUBJECT_A,),
+            base_url="https://identity:8443",
+        )
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="https://identity:8443") as client:
+        response = await client.get("/.well-known/openid-configuration")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["issuer"] == ISSUER
+    assert body["jwks_uri"] == "https://identity:8443/jwks"
+    assert body["token_endpoint"] == "https://identity:8443/token"
+    assert body["id_token_signing_alg_values_supported"] == ["RS256"]
+    # The absence of client authentication is advertised, not hidden.
+    assert body["token_endpoint_auth_methods_supported"] == ["none"]
+    assert body["x-simulator"] is True
+    assert response.headers["x-simulator"] == "itsm-identity-simulator"
+
+
+async def test_container_bind_is_opt_in_and_narrow() -> None:
+    """A wildcard bind needs the explicit flag and never admits a real address."""
+    with pytest.raises(ValueError, match="loopback"):
+        assert_loopback("0.0.0.0")
+
+    assert_loopback("0.0.0.0", allow_container_bind=True)
+    assert_loopback("::", allow_container_bind=True)
+
+    with pytest.raises(ValueError, match="loopback"):
+        assert_loopback("10.0.0.5", allow_container_bind=True)
+    with pytest.raises(ValueError, match="loopback"):
+        assert_loopback("identity", allow_container_bind=True)

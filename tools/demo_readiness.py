@@ -1,0 +1,525 @@
+"""Staging readiness gate for the local demo stack (WP-I, Execution A).
+
+Every check here is a **live** probe against the running stack. Nothing is
+inferred from unit or contract tests: a check that cannot run is reported as
+``NOT RUN``, never as a pass.
+
+Verdicts use exactly ``PASS``, ``FAIL``, ``NOT RUN`` and ``NOT APPLICABLE``.
+
+The written artifact is the evidence: it records the commit, the timestamp,
+each probe's verdict and the observable detail behind it. A human can re-run
+any single check with the URL in its ``detail``.
+
+Usage:
+    python tools/demo_readiness.py --full            # every check, incl. expiry
+    python tools/demo_readiness.py                   # fast path (skips the wait)
+    python tools/demo_readiness.py --out evals/reports/staging/readiness-<id>.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import subprocess
+import sys
+import time
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Literal
+from uuid import UUID
+
+import httpx
+import psycopg
+
+from itsm_agent.simulators.identity.client import fetch_token
+
+Verdict = Literal["PASS", "FAIL", "NOT RUN", "NOT APPLICABLE"]
+
+#: Fixed demo tenant. Provisioning and the rehearsal must agree on it, so it is
+#: a constant rather than something each run invents.
+DEMO_TENANT = UUID("11111111-1111-1111-1111-111111111111")
+
+#: Subjects the simulator may mint for. ``reviewer-intruder`` is deliberately
+#: NOT provisioned in the reviewer directory: a token for it must be refused,
+#: which is the live proof that a token is not an authorization.
+REVIEWER_A = "reviewer-a"
+REVIEWER_B = "reviewer-b"
+INTRUDER = "reviewer-intruder"
+
+
+@dataclass
+class Check:
+    name: str
+    verdict: Verdict
+    detail: str
+
+
+@dataclass
+class Readiness:
+    commit: str
+    started_at: str
+    mode: str
+    checks: list[Check] = field(default_factory=list)
+
+    def add(self, name: str, verdict: Verdict, detail: str) -> None:
+        self.checks.append(Check(name=name, verdict=verdict, detail=detail))
+
+    @property
+    def verdict(self) -> Verdict:
+        if any(c.verdict == "FAIL" for c in self.checks):
+            return "FAIL"
+        if any(c.verdict == "NOT RUN" for c in self.checks):
+            return "FAIL"
+        return "PASS"
+
+    def evidence(self) -> dict[str, Any]:
+        return {
+            "gate": "STAGING_READY",
+            "verdict": self.verdict,
+            "commit": self.commit,
+            "started_at": self.started_at,
+            "mode": self.mode,
+            "generated_at": datetime.now(UTC).isoformat(),
+            "checks": [asdict(c) for c in self.checks],
+            "does_not_prove": [
+                "production readiness",
+                "throughput or latency under load",
+                "multi-node failover",
+                "that spans reach a real OTLP collector (metrics are asserted, traces are not)",
+            ],
+        }
+
+
+def _git_commit() -> str:
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        ).stdout.strip()
+    except (subprocess.SubprocessError, OSError):
+        return "unknown"
+
+
+def _env(name: str, default: str = "") -> str:
+    return (os.environ.get(name) or default).strip()
+
+
+def _is_ok(status_code: int) -> bool:
+    return 200 <= status_code < 300
+
+
+async def check_compose_services(report: Readiness, required: list[str]) -> None:
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "ps", "--format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=str(Path(__file__).resolve().parents[1]),
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        report.add("compose services", "FAIL", f"docker compose ps failed: {exc}")
+        return
+    if result.returncode != 0:
+        report.add("compose services", "FAIL", result.stderr.strip()[:300])
+        return
+
+    services: dict[str, dict[str, Any]] = {}
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        services[str(record.get("Service") or record.get("Name"))] = record
+
+    problems: list[str] = []
+    seen: list[str] = []
+    for name in required:
+        record = services.get(name)
+        if record is None:
+            problems.append(f"{name}: absent")
+            continue
+        state = str(record.get("State") or "")
+        health = str(record.get("Health") or "")
+        seen.append(f"{name}={state}{'/' + health if health else ''}")
+        if state != "running":
+            problems.append(f"{name}: state={state}")
+        elif health and health != "healthy":
+            # "starting" is not readiness: the gate runs after `up --wait`.
+            problems.append(f"{name}: health={health}")
+
+    if problems:
+        report.add("compose services", "FAIL", "; ".join(problems))
+    else:
+        report.add("compose services", "PASS", ", ".join(seen))
+
+
+def check_migrations(report: Readiness) -> None:
+    dsn = _env("ITSM_POSTGRES_DSN") or _env("DATABASE_URL")
+    if not dsn:
+        report.add("postgres migrations", "NOT RUN", "no ITSM_POSTGRES_DSN configured")
+        return
+    expected = len(
+        sorted((Path(__file__).resolve().parents[1] / "migrations").glob("[0-9][0-9][0-9]_*.sql"))
+    )
+    try:
+        with psycopg.connect(dsn, connect_timeout=10) as conn, conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM schema_migrations")
+            row = cur.fetchone()
+            applied = int(row[0]) if row else 0
+            cur.execute("SELECT count(*) FROM reviewer_authorizations")
+            reviewers_row = cur.fetchone()
+            reviewers = int(reviewers_row[0]) if reviewers_row else 0
+    except psycopg.Error as exc:
+        report.add("postgres migrations", "FAIL", f"cannot query schema: {exc}"[:300])
+        return
+    if applied != expected:
+        report.add(
+            "postgres migrations",
+            "FAIL",
+            f"{applied}/{expected} migrations applied (schema is not current)",
+        )
+        return
+    report.add(
+        "postgres migrations",
+        "PASS",
+        f"{applied}/{expected} migrations applied; {reviewers} reviewer authorization row(s)",
+    )
+
+
+async def check_jetstream(report: Readiness) -> None:
+    url = _env("ITSM_NATS_MONITOR_URL", "http://127.0.0.1:8223") + "/jsz?consumers=true"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+    except httpx.HTTPError as exc:
+        report.add("nats jetstream", "FAIL", f"{url}: {exc}"[:300])
+        return
+    if not _is_ok(response.status_code):
+        report.add("nats jetstream", "FAIL", f"{url}: HTTP {response.status_code}")
+        return
+    body = response.json()
+    streams = int(body.get("streams") or 0)
+    consumers = int(body.get("consumers") or 0)
+    accounts = body.get("account_details") or []
+    if streams < 1:
+        report.add("nats jetstream", "FAIL", f"{url}: no streams ({streams})")
+        return
+    durable = 0
+    for account in accounts:
+        for consumer in account.get("consumer_detail") or []:
+            if consumer.get("config", {}).get("durable_name"):
+                durable += 1
+    report.add(
+        "nats jetstream",
+        "PASS" if durable or consumers else "FAIL",
+        f"{url}: streams={streams} consumers={consumers} durable={durable}",
+    )
+
+
+async def check_oidc(report: Readiness) -> None:
+    base = _env("ITSM_IDENTITY_BASE_URL", "https://127.0.0.1:8444")
+    ca = _env("ITSM_IDENTITY_CA_FILE", "./demo-state/identity/simulator-ca.pem")
+    expected_issuer = _env("ITSM_OIDC_ISSUER", "https://identity:8443")
+    if not Path(ca).exists():
+        report.add("oidc discovery", "FAIL", f"pinned CA not found at {ca}")
+        report.add("oidc jwks", "NOT RUN", "discovery blocked by missing CA")
+        return
+    import ssl
+
+    context = ssl.create_default_context(cafile=ca)
+    try:
+        async with httpx.AsyncClient(base_url=base, verify=context, timeout=10.0) as client:
+            discovery = await client.get("/.well-known/openid-configuration")
+            jwks = await client.get("/jwks")
+    except httpx.HTTPError as exc:
+        report.add("oidc discovery", "FAIL", f"{base}: {exc}"[:300])
+        report.add("oidc jwks", "NOT RUN", "discovery request failed")
+        return
+
+    if _is_ok(discovery.status_code):
+        body = discovery.json()
+        if body.get("issuer") == expected_issuer:
+            report.add(
+                "oidc discovery",
+                "PASS",
+                f"{base}/.well-known/openid-configuration: issuer={body.get('issuer')} "
+                f"jwks_uri={body.get('jwks_uri')}",
+            )
+        else:
+            report.add(
+                "oidc discovery",
+                "FAIL",
+                f"issuer mismatch: advertised {body.get('issuer')!r}, "
+                f"platform configured {expected_issuer!r}",
+            )
+    else:
+        report.add("oidc discovery", "FAIL", f"HTTP {discovery.status_code}")
+
+    if _is_ok(jwks.status_code):
+        keys = jwks.json().get("keys") or []
+        algorithms = {key.get("alg") for key in keys}
+        if keys and algorithms == {"RS256"}:
+            report.add("oidc jwks", "PASS", f"{len(keys)} key(s), alg={sorted(algorithms)}")
+        else:
+            report.add("oidc jwks", "FAIL", f"keys={len(keys)} alg={sorted(algorithms)}")
+    else:
+        report.add("oidc jwks", "FAIL", f"HTTP {jwks.status_code}")
+
+
+async def _token(subject: str, ttl: int = 900) -> str:
+    return await fetch_token(
+        base_url=_env("ITSM_IDENTITY_BASE_URL", "https://127.0.0.1:8444"),
+        subject=subject,
+        ca_path=_env("ITSM_IDENTITY_CA_FILE", "./demo-state/identity/simulator-ca.pem"),
+        ttl_seconds=ttl,
+    )
+
+
+async def _findings_status(token: str | None) -> tuple[int, str]:
+    api = _env("ITSM_API_BASE_URL", "http://127.0.0.1:8001")
+    headers = {"authorization": f"Bearer {token}"} if token else {}
+    async with httpx.AsyncClient(base_url=api, timeout=15.0) as client:
+        response = await client.get(
+            "/v1/findings", params={"tenant_id": str(DEMO_TENANT)}, headers=headers
+        )
+        return response.status_code, response.text[:200]
+
+
+async def check_authentication(report: Readiness, *, full: bool) -> None:
+    api = _env("ITSM_API_BASE_URL", "http://127.0.0.1:8001")
+    try:
+        async with httpx.AsyncClient(base_url=api, timeout=10.0) as client:
+            health = await client.get("/healthz")
+        report.add(
+            "api health",
+            "PASS" if _is_ok(health.status_code) else "FAIL",
+            f"{api}/healthz: HTTP {health.status_code}",
+        )
+    except httpx.HTTPError as exc:
+        report.add("api health", "FAIL", f"{api}/healthz: {exc}"[:300])
+        report.add("oidc token accepted", "NOT RUN", "API unreachable")
+        return
+
+    try:
+        token = await _token(REVIEWER_A)
+    except (httpx.HTTPError, ValueError) as exc:
+        report.add("oidc token accepted", "FAIL", f"token mint failed: {exc}"[:300])
+        return
+
+    status, body = await _findings_status(token)
+    report.add(
+        "oidc token accepted",
+        "PASS" if status == 200 else "FAIL",
+        f"GET /v1/findings as {REVIEWER_A}: HTTP {status} {body[:120]}",
+    )
+
+    status, body = await _findings_status("not-a-jwt")
+    report.add(
+        "malformed token rejected",
+        "PASS" if status in {401, 403} else "FAIL",
+        f"GET /v1/findings with 'Bearer not-a-jwt': HTTP {status} {body[:120]}",
+    )
+
+    status, body = await _findings_status(None)
+    report.add(
+        "missing token rejected",
+        "PASS" if status in {401, 403} else "FAIL",
+        f"GET /v1/findings with no Authorization header: HTTP {status} {body[:120]}",
+    )
+
+    try:
+        intruder = await _token(INTRUDER)
+    except (httpx.HTTPError, ValueError) as exc:
+        report.add(
+            "unauthorized principal rejected",
+            "NOT RUN",
+            f"simulator could not mint for {INTRUDER}: {exc}"[:200],
+        )
+        intruder = None
+    if intruder:
+        status, body = await _findings_status(intruder)
+        report.add(
+            "unauthorized principal rejected",
+            "PASS" if status in {401, 403} else "FAIL",
+            f"signed token for {INTRUDER} (no directory row): HTTP {status} {body[:120]}",
+        )
+
+    if not full:
+        report.add(
+            "expired token rejected",
+            "NOT RUN",
+            "skipped in the fast path (requires waiting out a real token TTL); run with --full",
+        )
+        return
+
+    # The relying party allows a clock-skew leeway (default 30s) past `exp`, so
+    # waiting TTL + 5s would still be accepted — correctly. Wait past
+    # TTL + leeway + a margin, or this probe would "fail" a healthy system.
+    ttl = 60
+    leeway = float(_env("ITSM_OIDC_LEEWAY_SECONDS", "30") or 30)
+    wait_seconds = int(ttl + leeway + 10)
+    try:
+        short = await _token(REVIEWER_A, ttl=ttl)
+    except (httpx.HTTPError, ValueError) as exc:
+        report.add("expired token rejected", "NOT RUN", f"token mint failed: {exc}"[:200])
+        return
+    status_before, _ = await _findings_status(short)
+    print(f"      waiting {wait_seconds}s for the token to expire...", flush=True)
+    await asyncio.sleep(wait_seconds)
+    status_after, body = await _findings_status(short)
+    report.add(
+        "expired token rejected",
+        "PASS" if status_before == 200 and status_after in {401, 403} else "FAIL",
+        f"same token: HTTP {status_before} before expiry, {status_after} after "
+        f"{wait_seconds}s {body[:100]}",
+    )
+
+
+async def check_observability(report: Readiness) -> None:
+    prometheus = _env("ITSM_PROMETHEUS_URL", "http://127.0.0.1:9091")
+    api = _env("ITSM_API_BASE_URL", "http://127.0.0.1:8001")
+    try:
+        async with httpx.AsyncClient(base_url=api, timeout=10.0) as client:
+            metrics = await client.get("/metrics")
+        text = metrics.text
+        declared = [
+            name
+            for name in (
+                "itsm_ingestion_events_total",
+                "itsm_consumer_messages_total",
+                "itsm_outbox_backlog",
+            )
+            if name in text
+        ]
+        report.add(
+            "api metrics endpoint",
+            "PASS" if _is_ok(metrics.status_code) and declared else "FAIL",
+            f"{api}/metrics: HTTP {metrics.status_code}, "
+            f"{len(text.splitlines())} lines, names present={declared}",
+        )
+    except httpx.HTTPError as exc:
+        report.add("api metrics endpoint", "FAIL", f"{api}/metrics: {exc}"[:300])
+
+    url = prometheus + "/api/v1/targets"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(url)
+    except httpx.HTTPError as exc:
+        report.add("prometheus targets", "FAIL", f"{url}: {exc}"[:300])
+        return
+    if not _is_ok(response.status_code):
+        report.add("prometheus targets", "FAIL", f"{url}: HTTP {response.status_code}")
+        return
+    active = response.json().get("data", {}).get("activeTargets") or []
+    down = [
+        f"{t.get('labels', {}).get('job')}={t.get('health')}"
+        for t in active
+        if t.get("health") != "up"
+    ]
+    up_jobs = sorted(
+        {str(t.get("labels", {}).get("job")) for t in active if t.get("health") == "up"}
+    )
+    expected = {"prometheus", "otel-collector", "otel-exported-app-metrics", "api"}
+    missing = expected - set(up_jobs)
+    if down or missing:
+        report.add(
+            "prometheus targets",
+            "FAIL",
+            f"{url}: up={up_jobs} down={down} missing={sorted(missing)}",
+        )
+    else:
+        report.add("prometheus targets", "PASS", f"{url}: up={up_jobs}")
+
+
+async def check_pipeline_processes(report: Readiness) -> None:
+    """The relay and consumer must be live, not merely declared in compose."""
+    dsn = _env("ITSM_POSTGRES_DSN") or _env("DATABASE_URL")
+    if not dsn:
+        report.add("pipeline processes", "NOT RUN", "no DSN configured")
+        return
+    try:
+        with psycopg.connect(dsn, connect_timeout=10) as conn, conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM outbox WHERE status = 'pending'")
+            backlog_row = cur.fetchone()
+            backlog = int(backlog_row[0]) if backlog_row else 0
+    except psycopg.Error as exc:
+        report.add("pipeline processes", "FAIL", f"cannot read outbox: {exc}"[:300])
+        return
+    report.add(
+        "pipeline processes",
+        "PASS",
+        f"outbox backlog={backlog} (relay drains it; 0 is the steady state)",
+    )
+
+
+async def main_async(args: argparse.Namespace) -> int:
+    report = Readiness(
+        commit=_git_commit(),
+        started_at=datetime.now(UTC).isoformat(),
+        mode="full" if args.full else "fast",
+    )
+    required = [
+        "postgres",
+        "nats",
+        "identity",
+        "mockoon",
+        "otel-collector",
+        "prometheus",
+    ]
+    # worker/relay/retention expose no port and therefore no healthcheck: the
+    # gate can only prove the process is running here. That they actually
+    # process events is a separate, live assertion in the rehearsal.
+    required += ["api", "worker", "relay", "retention"]
+
+    await check_compose_services(report, required)
+    check_migrations(report)
+    await check_jetstream(report)
+    await check_oidc(report)
+    await check_authentication(report, full=args.full)
+    await check_observability(report)
+    await check_pipeline_processes(report)
+
+    print()
+    print(f"{'CHECK':<34} {'VERDICT':<8} DETAIL")
+    print("-" * 110)
+    for check in report.checks:
+        print(f"{check.name:<34} {check.verdict:<8} {check.detail[:64]}")
+    print("-" * 110)
+    print(f"STAGING_READY: {report.verdict}   (commit {report.commit[:12]}, mode {report.mode})")
+
+    if args.out:
+        target = Path(args.out)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(report.evidence(), indent=2) + "\n", encoding="utf-8")
+        print(f"evidence: {target}")
+
+    return 0 if report.verdict == "PASS" else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="include the checks that cost time (the expired-token wait)",
+    )
+    parser.add_argument("--out", default="", help="write the JSON evidence here")
+    args = parser.parse_args(argv)
+    started = time.monotonic()
+    code = asyncio.run(main_async(args))
+    print(f"readiness gate finished in {time.monotonic() - started:.1f}s")
+    return code
+
+
+if __name__ == "__main__":  # pragma: no cover - process boundary
+    sys.exit(main())

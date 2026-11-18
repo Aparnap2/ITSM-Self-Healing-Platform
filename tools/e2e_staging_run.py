@@ -452,6 +452,22 @@ async def _acquire_credentials(options: StagingOptions) -> tuple[str, str, str]:
     return token_a, token_b, mode
 
 
+def redaction_secrets(options: StagingOptions) -> list[str]:
+    """Credentials that must never appear in a report, for this run's mode.
+
+    Only the credential actually in use is resolved: in OIDC mode the runner
+    holds no reviewer token at all, and asking for one used to raise here —
+    after the run had already done its work.
+    """
+    secrets = [options.groq_api_key]
+    mode = options.credential_mode
+    if mode == CREDENTIAL_MODE_HMAC:
+        secrets.append(options.reviewer_secret)
+    elif mode == CREDENTIAL_MODE_TOKEN:
+        secrets.append(options.reviewer_token)
+    return [secret for secret in secrets if secret]
+
+
 async def _apply_transition(
     client: httpx.AsyncClient,
     *,
@@ -854,6 +870,42 @@ async def run_staging(options: StagingOptions) -> tuple[dict[str, Any], int]:
         await pool.close()
 
 
+def _not_proven_statements(
+    *, persisted_evidence_count: int, transitions_accepted: int
+) -> list[str]:
+    """Limits that are true for *this* run, not boilerplate.
+
+    The earlier version hard-coded "the rehearsal stops at the proposal", which
+    was false as soon as the two-reviewer lifecycle was added — a report that
+    understates the run is as misleading as one that overstates it.
+    """
+    evidence_statement = (
+        f"The model cited evidence ids that resolve to {persisted_evidence_count} "
+        "persisted, redacted evidence reference(s). Resolvability is not "
+        "evidential sufficiency: nothing here judges whether the evidence is "
+        "adequate to justify the outcome."
+        if persisted_evidence_count
+        else "The finding carries no evidence references, so the model was given "
+        "the question only and no evidence ids to reference."
+    )
+    return [
+        "The source event is a simulated CloudTrail record, not a real AWS API "
+        "call; no cloud account was involved.",
+        "The model PROPOSES. It cannot authorize an action, cannot change a "
+        "finding status, and cannot run a command.",
+        f"{transitions_accepted} lifecycle transition(s) were accepted by the API. "
+        "The reviewers are simulator-issued identities: a real identity provider "
+        "was not exercised, and the policy engine authorizes every transition "
+        "independently of who signed the token.",
+        "No production credentials were used; every secret came from the operator's environment.",
+        evidence_statement,
+        "The LLM budget bounds the number of real, billed model calls; it is not "
+        "a quality or accuracy guarantee.",
+        "Nothing was sent to a real ITSM system: Mockoon stands in for Jira "
+        "Service Management and ServiceNow.",
+    ]
+
+
 def _build_report(
     *,
     options: StagingOptions,
@@ -961,20 +1013,10 @@ def _build_report(
             "finding_status_before": status_before_investigation,
             "finding_status_after": status_after_investigation,
             "model_calls_used": model_calls_used,
-            "what_this_run_does_not_prove": [
-                "The source event is a simulated CloudTrail record, not a real "
-                "AWS API call; no cloud account was involved.",
-                "The model PROPOSES. It cannot authorize an action, cannot change "
-                "a finding status, and cannot run a command.",
-                "No independent verification of a real finding was performed: the "
-                "rehearsal stops at the proposal and the evidence bundle.",
-                "No production credentials were used; every secret came from the "
-                "operator's environment.",
-                "The finding carries no evidence references yet, so the model was "
-                "given the question only and no evidence ids to reference.",
-                "The LLM budget bounds the number of real, billed model calls; it "
-                "is not a quality or accuracy guarantee.",
-            ],
+            "what_this_run_does_not_prove": _not_proven_statements(
+                persisted_evidence_count=persisted_evidence,
+                transitions_accepted=sum(1 for item in (transitions or []) if item["accepted"]),
+            ),
         },
     }
 
@@ -1037,6 +1079,15 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="How long to wait for the finding to appear (default: %(default)s).",
     )
     parser.add_argument(
+        "--tenant-id",
+        default="",
+        help=(
+            "Tenant to run the rehearsal in (default: a fresh random UUID). "
+            "Pass a fixed value when the reviewer authorizations were provisioned "
+            "for a known tenant — repeatability requires the two to agree."
+        ),
+    )
+    parser.add_argument(
         "--llm-budget-calls",
         type=int,
         default=None,
@@ -1093,7 +1144,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         api_base_url=args.api_base_url,
         report_path=Path(args.report_path),
         in_process=args.in_process,
-        tenant_id=uuid.uuid4(),
+        tenant_id=uuid.UUID(args.tenant_id) if args.tenant_id else uuid.uuid4(),
         poll_seconds=args.poll_seconds,
         llm_budget_calls=budget,
     )
@@ -1108,14 +1159,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     report["report_path"] = str(options.report_path)
-    report = sanitize_report(
-        report,
-        [
-            options.groq_api_key,
-            options.reviewer_secret if options.credential_mode == CREDENTIAL_MODE_HMAC else "",
-            options.reviewer_token,
-        ],
-    )
+    report = sanitize_report(report, redaction_secrets(options))
     options.report_path.parent.mkdir(parents=True, exist_ok=True)
     options.report_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     _print_summary(report)

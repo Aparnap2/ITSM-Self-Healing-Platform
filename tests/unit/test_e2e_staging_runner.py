@@ -486,3 +486,58 @@ def test_the_report_path_lives_in_the_committed_staging_directory() -> None:
     path = runner.default_report_path("2026-11-16T101500Z")
     assert path.parent == runner.DEFAULT_REPORT_DIR
     assert "staging" in path.parts
+
+
+def test_oidc_mode_report_redaction_never_reads_a_reviewer_token(
+    tmp_path: Path,
+) -> None:
+    """Regression: the OIDC path must not require ITSM_REVIEWER_TOKEN.
+
+    `sanitize_report` used to evaluate `options.reviewer_token` unconditionally,
+    so an OIDC run crashed *after* doing all the work — the mode the staging
+    deployment actually uses could never produce a report.
+    """
+    env = _env(
+        ITSM_IDENTITY_BASE_URL="https://127.0.0.1:8444",
+        ITSM_IDENTITY_CA_FILE="/tmp/simulator-ca.pem",
+        ITSM_REVIEWER_SUBJECT_A="reviewer-a",
+        ITSM_REVIEWER_SUBJECT_B="reviewer-b",
+    )
+    env.pop("ITSM_AUTH_HMAC_SECRET", None)
+    env.pop("ITSM_REVIEWER_TOKEN", None)
+
+    options = runner.StagingOptions(
+        env=env,
+        api_base_url="http://127.0.0.1:8001",
+        report_path=tmp_path / "report.json",
+    )
+
+    assert options.credential_mode == runner.CREDENTIAL_MODE_OIDC
+    # Must not raise, and must redact only what was actually used.
+    assert runner.redaction_secrets(options) == ["gsk-not-a-real-key"]
+
+
+def test_token_mode_redacts_the_supplied_token(tmp_path: Path) -> None:
+    env = _env(ITSM_REVIEWER_TOKEN="header.payload.signature")
+    env.pop("ITSM_AUTH_HMAC_SECRET", None)
+    options = runner.StagingOptions(
+        env=env,
+        api_base_url="http://127.0.0.1:8001",
+        report_path=tmp_path / "report.json",
+    )
+    assert runner.redaction_secrets(options) == [
+        "gsk-not-a-real-key",
+        "header.payload.signature",
+    ]
+
+
+def test_hmac_mode_redacts_the_signing_secret_not_a_token(tmp_path: Path) -> None:
+    options = runner.StagingOptions(
+        env=_env(),
+        api_base_url="http://127.0.0.1:8001",
+        report_path=tmp_path / "report.json",
+    )
+    assert runner.redaction_secrets(options) == [
+        "gsk-not-a-real-key",
+        "reviewer-secret-value-0123456789",
+    ]

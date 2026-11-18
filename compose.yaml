@@ -72,6 +72,134 @@ services:
           memory: 256m
 
   # ---------------------------------------------------------------------------
+  # Demo state bootstrap — one-shot, root-only, private-network.
+  #
+  # Creates the bind-mounted directory the identity simulator writes its TLS
+  # material into and hands it to the simulator's unprivileged user. Without
+  # this the simulator cannot write to a root-owned bind mount, and the demo
+  # stack would "start" while every TLS fetch failed.
+  #
+  # Mode 0755 on the directory (not 0700): the host-side readiness probe and
+  # rehearsal runner must read the CA. The private key itself is written 0600
+  # by the simulator.
+  # ---------------------------------------------------------------------------
+  demo-init:
+    image: alpine:3.20.3
+    user: "0:0"
+    command:
+      - sh
+      - -c
+      - "mkdir -p /state && chown -R 10001:10001 /state && chmod 0755 /state"
+    volumes:
+      - ./demo-state/identity:/state
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Identity simulator — LOCAL RS256 signing authority (WP-B/WP-I).
+  #
+  # It signs tokens and publishes its JWKS; it holds NO application
+  # authorization (no role or tenant claim is ever minted). The relying party
+  # resolves reviewer state from the reviewer directory in PostgreSQL.
+  #
+  # Reachability: the service must listen on a routable address so the api
+  # container can fetch its JWKS, hence --allow-container-bind. The host port
+  # is still published on 127.0.0.1 only, TLS is always on, and the CA is
+  # pinned by every client — verification is never disabled.
+  # ---------------------------------------------------------------------------
+  identity:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # The simulator refuses to run outside local/test/staging.
+      ITSM_ENV: ${ITSM_ENV:-staging}
+    command:
+      - python
+      - -m
+      - itsm_agent.simulators.identity
+      - --issuer
+      - ${ITSM_OIDC_ISSUER:-https://identity:8443}
+      - --audience
+      - ${ITSM_OIDC_AUDIENCE:-itsm-audience}
+      - --subject
+      - reviewer-a
+      - --subject
+      - reviewer-b
+      # Deliberately NOT provisioned in the reviewer directory. A token minted
+      # for it must be refused by the API: that is the live proof that a
+      # signature is authentication, never authorization.
+      - --subject
+      - reviewer-intruder
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8443"
+      - --public-url
+      - ${ITSM_OIDC_ISSUER:-https://identity:8443}
+      - --tls-hostname
+      - identity
+      - --tls-hostname
+      - localhost
+      - --tls-hostname
+      - 127.0.0.1
+      - --state-dir
+      - /state
+      - --allow-container-bind
+    volumes:
+      # Bind-mounted, not a named volume: the rehearsal runner and the
+      # readiness probe on the host pin this same CA file.
+      - ./demo-state/identity:/state
+    depends_on:
+      demo-init:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${IDENTITY_HOST_PORT:-8443}:8443"
+    healthcheck:
+      # Proves TLS + pinned-CA + the discovery surface, not just a live port.
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import ssl, urllib.request
+          ctx = ssl.create_default_context(cafile="/state/simulator-ca.pem")
+          urllib.request.urlopen("https://localhost:8443/healthz", context=ctx, timeout=3)
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  # ---------------------------------------------------------------------------
+  # Migrations — one-shot gate. Runs as the ADMIN login (the schema owner),
+  # never as itsm_app; every application service waits for it to succeed.
+  # ---------------------------------------------------------------------------
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      PYTHONPATH: /app/src
+    command:
+      - python
+      - -m
+      - migrations.apply
+      - --dsn
+      - postgresql://${POSTGRES_USER:-itsm}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (see .env.example)}@postgres:5432/${POSTGRES_DB:-itsm}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
   # Mockoon — deterministic external API simulator (ITSM / identity / infra).
   # Contract: simulators/mockoon/README.md. Config mounted read-only.
   # Admin API disabled to keep the mock surface minimal.
@@ -161,12 +289,22 @@ services:
       # bypass RLS, so the admin user must not be used here.
       DATABASE_URL: postgresql://itsm_app:${ITSM_RUNTIME_DB_PASSWORD:?ITSM_RUNTIME_DB_PASSWORD must be set in .env (see .env.example)}@postgres:5432/${POSTGRES_DB:-itsm}
       NATS_URL: nats://nats:4222
-      ITSM_ENV: local
+      # Staging-compatible: OIDC only. `config.py` refuses ITSM_AUTH_MODE=hmac
+      # when ITSM_ENV=staging, so this stack cannot silently fall back to the
+      # development HMAC bearer.
+      ITSM_ENV: staging
       ITSM_API_HOST: 0.0.0.0
       ITSM_API_PORT: "8000"
       ITSM_WEBHOOK_SECRET: ${ITSM_WEBHOOK_SECRET:?ITSM_WEBHOOK_SECRET must be set in .env (see .env.example)}
-      ITSM_AUTH_MODE: ${ITSM_AUTH_MODE:-hmac}
-      ITSM_AUTH_HMAC_SECRET: ${ITSM_AUTH_HMAC_SECRET:?ITSM_AUTH_HMAC_SECRET must be set in .env (see .env.example)}
+      ITSM_AUTH_MODE: oidc
+      # The simulator is the signing authority; the reviewer directory in
+      # PostgreSQL remains the authorization source.
+      ITSM_OIDC_ISSUER: ${ITSM_OIDC_ISSUER:-https://identity:8443}
+      ITSM_OIDC_AUDIENCE: ${ITSM_OIDC_AUDIENCE:-itsm-audience}
+      ITSM_OIDC_JWKS_URL: ${ITSM_OIDC_JWKS_URL:-https://identity:8443/jwks}
+      # Pin the simulator's CA. TLS verification is never disabled.
+      ITSM_OIDC_JWKS_CA_FILE: /identity-ca/simulator-ca.pem
+      ITSM_OIDC_ALGORITHMS: RS256
       ITSM_MOCKOON_ITSM_BASE_URL: http://mockoon:3001
       ITSM_MOCKOON_IDENTITY_BASE_URL: http://mockoon:3001
       ITSM_MOCKOON_INFRASTRUCTURE_BASE_URL: http://mockoon:3001
@@ -189,6 +327,28 @@ services:
         condition: service_healthy
       otel-collector:
         condition: service_started
+      # Schema must exist before the API opens a pool against it.
+      migrate:
+        condition: service_completed_successfully
+      # The CA the API pins is written by the simulator at startup.
+      identity:
+        condition: service_healthy
+    volumes:
+      - ./demo-state/identity:/identity-ca:ro
+    healthcheck:
+      # A real request, so `docker compose up --wait` means "the API answers",
+      # not merely "the container process exists".
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import urllib.request
+          urllib.request.urlopen("http://127.0.0.1:8000/healthz", timeout=3)
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     restart: unless-stopped
     deploy:
       resources:
@@ -212,6 +372,20 @@ services:
       ITSM_API_BASE_URL: http://mockoon:3001
       IDENTITY_API_BASE_URL: http://mockoon:3001
       INFRA_API_BASE_URL: http://mockoon:3001
+      # The investigation stage is what the demo proves, so it is ON here —
+      # deliberately, and bounded. The hard budget is enforced by the runner
+      # and by the domain policy, not by this switch.
+      ITSM_INVESTIGATION_ENABLED: ${ITSM_INVESTIGATION_ENABLED:-true}
+      ITSM_INVESTIGATION_MAX_MODEL_CALLS: ${ITSM_INVESTIGATION_MAX_MODEL_CALLS:-2}
+      ITSM_INVESTIGATION_MAX_TOOL_CALLS: ${ITSM_INVESTIGATION_MAX_TOOL_CALLS:-5}
+      ITSM_INVESTIGATION_LLM_BUDGET_CALLS: ${ITSM_INVESTIGATION_LLM_BUDGET_CALLS:-3}
+      # NOT required at interpolation time: `docker compose config` must stay
+      # valid in CI without secrets. The consumer itself fails closed at
+      # startup when the investigation stage is enabled and this is empty
+      # (audit_consumer.py exits 2), which is the enforcement that matters.
+      ITSM_GROQ_API_KEY: ${ITSM_GROQ_API_KEY:-}
+      ITSM_GROQ_MODEL: ${ITSM_GROQ_MODEL:-openai/gpt-oss-120b}
+      ITSM_GROQ_BASE_URL: ${ITSM_GROQ_BASE_URL:-https://api.groq.com/openai/v1}
       ITSM_OTEL_EXPORTER_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -225,6 +399,8 @@ services:
         condition: service_healthy
       otel-collector:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
     command: ["python", "-m", "itsm_agent.workers.consumer"]
     restart: unless-stopped
     deploy:
@@ -262,6 +438,8 @@ services:
         condition: service_healthy
       otel-collector:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
     command: ["python", "-m", "itsm_agent.workers.relay"]
     restart: unless-stopped
     deploy:
@@ -301,6 +479,8 @@ services:
         condition: service_healthy
       otel-collector:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
     command: ["python", "-m", "itsm_agent.workers.retention"]
     restart: unless-stopped
     deploy:
