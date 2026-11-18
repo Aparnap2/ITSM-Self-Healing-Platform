@@ -458,6 +458,30 @@ def test_grounding_rejects_a_fabricated_evidence_reference() -> None:
     assert result["resolves_to_persisted_evidence"] is False
 
 
+def test_grounding_rejects_a_real_id_that_was_never_in_the_prompt() -> None:
+    """Resolving to a persisted row is not the same as having been shown it.
+
+    An evidence-reference row has its own id, distinct from the source event
+    id that the prompt actually renders as the evidence key. A model that
+    cites the reference id has cited something real that it was never given,
+    so `resolves` can be True while `in_snapshot` is False. Both must be
+    checked; accepting either one alone would let an unsupported claim
+    through.
+    """
+    source_event_id = uuid.uuid4()
+    reference_id = uuid.uuid4()
+    persisted = SimpleNamespace(id=reference_id, source_event_id=source_event_id)
+
+    result = runner._evidence_grounding(  # noqa: SLF001 - unit assertion
+        proposal=_proposal(str(reference_id)),
+        snapshot_ids=(source_event_id,),
+        persisted=[persisted],
+    )
+
+    assert result["resolves_to_persisted_evidence"] is True
+    assert result["in_snapshot"] is False
+
+
 def test_grounding_without_a_proposal_is_not_checked() -> None:
     result = runner._evidence_grounding(  # noqa: SLF001 - unit assertion
         proposal=None,
