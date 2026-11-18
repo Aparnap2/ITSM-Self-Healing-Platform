@@ -731,6 +731,19 @@ async def run_staging(options: StagingOptions) -> tuple[dict[str, Any], int]:
             f"{budgeted.calls_used} model call(s) used",
         )
 
+        # Read the status the moment the investigation stage is done, before any
+        # reviewer touches the finding. This is what makes "the model did not
+        # mutate the finding" a real observation instead of a restatement of the
+        # final state: reviewers change the status later in the run, so a probe
+        # taken at the end would always report a change and attribute it to the
+        # model.
+        stored_after_investigation = await repositories.findings.get(options.tenant_id, finding.id)
+        status_after_investigation = (
+            stored_after_investigation.status
+            if stored_after_investigation is not None
+            else "UNKNOWN"
+        )
+
         # --- 6. reviewer credentials ----------------------------------------
         # The rehearsal authenticates the way the deployment does: through the
         # configured identity provider. The HMAC bearer is a labelled local
@@ -812,7 +825,7 @@ async def run_staging(options: StagingOptions) -> tuple[dict[str, Any], int]:
         )
 
         stored = await repositories.findings.get(options.tenant_id, finding.id)
-        status_after_investigation = stored.status if stored is not None else "UNKNOWN"
+        status_final = stored.status if stored is not None else "UNKNOWN"
 
         report = _build_report(
             options=options,
@@ -825,6 +838,7 @@ async def run_staging(options: StagingOptions) -> tuple[dict[str, Any], int]:
             finding=finding,
             status_before_investigation=status_before_investigation,
             status_after_investigation=status_after_investigation,
+            status_final=status_final,
             investigation_status=investigation_status,
             proposal=proposal,
             model_calls_used=budgeted.calls_used,
@@ -918,6 +932,7 @@ def _build_report(
     finding: Finding,
     status_before_investigation: str,
     status_after_investigation: str,
+    status_final: str,
     investigation_status: str,
     proposal: InvestigationProposal | None,
     model_calls_used: int,
@@ -984,6 +999,7 @@ def _build_report(
             "risk_score": finding.risk_score,
             "status_before_investigation": status_before_investigation,
             "status_after_investigation": status_after_investigation,
+            "status_final": status_final,
         },
         "investigation": {
             "status": investigation_status,
@@ -1007,11 +1023,12 @@ def _build_report(
                 "investigation ledger and is never applied to the finding lifecycle; "
                 "deterministic policy and a human reviewer remain authoritative."
             ),
-            "finding_status_unchanged_by_model": (
+            "finding_status_unchanged_by_investigation": (
                 status_before_investigation == status_after_investigation
             ),
             "finding_status_before": status_before_investigation,
-            "finding_status_after": status_after_investigation,
+            "finding_status_after_investigation": status_after_investigation,
+            "finding_status_final": status_final,
             "model_calls_used": model_calls_used,
             "what_this_run_does_not_prove": _not_proven_statements(
                 persisted_evidence_count=persisted_evidence,
@@ -1033,7 +1050,8 @@ def _print_summary(report: dict[str, Any]) -> None:
     print(f"finding           : {detection['finding_id']} ({detection['finding_type']})")
     print(
         f"finding status    : {detection['status_before_investigation']} -> "
-        f"{detection['status_after_investigation']}"
+        f"{detection['status_after_investigation']} (after investigation) -> "
+        f"{detection['status_final']} (after review)"
     )
     print(f"investigation     : {investigation['status']}")
     print(

@@ -317,6 +317,7 @@ def test_report_states_that_the_proposal_is_advisory() -> None:
         finding=finding,
         status_before_investigation="OPEN",
         status_after_investigation="OPEN",
+        status_final="VERIFIED",
         investigation_status="COMPLETED",
         proposal=None,
         model_calls_used=1,
@@ -329,7 +330,14 @@ def test_report_states_that_the_proposal_is_advisory() -> None:
 
     statements = report["statements"]
     assert "ADVISORY" in statements["proposal_is_advisory"]
-    assert statements["finding_status_unchanged_by_model"] is True
+    # The investigation stage left the finding alone...
+    assert statements["finding_status_unchanged_by_investigation"] is True
+    assert statements["finding_status_after_investigation"] == "OPEN"
+    # ...and the reviewers, not the model, moved it to a terminal state. These
+    # two facts must be distinguishable: reading the status once at the end of
+    # the run would report "changed" and blame the model for it.
+    assert statements["finding_status_final"] == "VERIFIED"
+    assert report["detection"]["status_final"] == "VERIFIED"
     assert statements["model_calls_used"] == 1
     assert statements["what_this_run_does_not_prove"]
     assert any("simulated" in item for item in statements["what_this_run_does_not_prove"])
