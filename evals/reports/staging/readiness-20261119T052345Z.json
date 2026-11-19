@@ -1,10 +1,10 @@
 {
   "gate": "STAGING_READY",
   "verdict": "PASS",
-  "commit": "70e9220616b25800ad8ff3742b125ef632215593",
-  "started_at": "2026-11-18T12:26:20.128903+00:00",
+  "commit": "b9644e41e3b102a996a9a42b3bdf6f9da5f36a1b",
+  "started_at": "2026-11-19T05:23:45.344279+00:00",
   "mode": "full",
-  "generated_at": "2026-11-18T12:28:00.466825+00:00",
+  "generated_at": "2026-11-19T05:25:25.703659+00:00",
   "checks": [
     {
       "name": "compose services",
@@ -74,9 +74,10 @@
     {
       "name": "outbox backlog",
       "verdict": "PASS",
-      "detail": "0 tenant-scoped row(s) pending, oldest 0s; 6 system row(s) with tenant_id NULL are NOT drained by the tenant-scoped relay (known limitation, documented in the qualification record)"
+      "detail": "0 tenant-scoped row(s) pending, oldest 0s; 7 system row(s) with tenant_id NULL are NOT drained by the tenant-scoped relay (known limitation, documented in the qualification record)"
     }
   ],
+  "diagnostics": {},
   "does_not_prove": [
     "production readiness",
     "throughput or latency under load",

@@ -1,18 +1,18 @@
 {
-  "phase": "a",
-  "commit": "70e9220616b25800ad8ff3742b125ef632215593",
-  "captured_at": "2026-11-18T12:28:57.088584+00:00",
+  "phase": "b",
+  "commit": "b9644e41e3b102a996a9a42b3bdf6f9da5f36a1b",
+  "captured_at": "2026-11-19T05:25:53.074115+00:00",
   "screenshots_ignore_certificate_errors": true,
   "raw_captures": [
     {
       "file": "compose-ps.json",
       "source": "docker compose ps",
-      "bytes": 13511
+      "bytes": 13476
     },
     {
       "file": "prometheus-targets.json",
       "source": "http://127.0.0.1:9091/api/v1/targets",
-      "bytes": 3938
+      "bytes": 3939
     },
     {
       "file": "oidc-discovery.json",
@@ -32,7 +32,7 @@
     {
       "file": "api-metrics.txt",
       "source": "http://127.0.0.1:8001/metrics",
-      "bytes": 12836
+      "bytes": 12855
     }
   ],
   "database": {
@@ -42,35 +42,19 @@
   },
   "screenshots": [
     {
-      "file": "01-prometheus-targets.png",
-      "url": "http://127.0.0.1:9091/targets",
-      "status": "PASS",
-      "bytes": 93939,
-      "note": "live Prometheus scrape targets",
-      "stderr": ""
-    },
-    {
-      "file": "02-prometheus-query-ingestion.png",
+      "file": "10-prometheus-ingestion-after-run.png",
       "url": "http://127.0.0.1:9091/api/v1/query?query=itsm_ingestion_events_total",
       "status": "PASS",
-      "bytes": 19412,
-      "note": "live Prometheus query response for the platform's own metric",
+      "bytes": 19234,
+      "note": "ingestion counter after the event was processed",
       "stderr": ""
     },
     {
-      "file": "03-api-metrics.png",
+      "file": "11-api-metrics-after-run.png",
       "url": "http://127.0.0.1:8001/metrics",
       "status": "PASS",
-      "bytes": 281824,
-      "note": "live API /metrics",
-      "stderr": ""
-    },
-    {
-      "file": "04-oidc-discovery.png",
-      "url": "https://127.0.0.1:8444/.well-known/openid-configuration",
-      "status": "PASS",
-      "bytes": 30602,
-      "note": "live OIDC discovery document over TLS (browser ignores the throwaway CA; the platform pins it)",
+      "bytes": 283748,
+      "note": "live API /metrics after the run",
       "stderr": ""
     }
   ],

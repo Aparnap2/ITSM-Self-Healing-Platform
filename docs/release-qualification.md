@@ -25,7 +25,7 @@ prove. It is a companion to `docs/security-ci.md` and
   24, e2e 12. Artifacts are unexpired and listed in the evidence table.
   **This record qualifies CI for `f4b5640` only.** It does not confer
   staging readiness or demo qualification on that commit, and it is not
-  inherited by later commits. A later commit (`70e9220`) does hold both;
+  inherited by later commits. A later commit (`b9644e4`) does hold both;
   see `docs/staging-demo-qualification.md`. Its CI evidence is a separate
   run (849 executions) and is not a re-use of the numbers above.
 - **Superseded record (observed 2026-11-15).** The vehicle is PR #16

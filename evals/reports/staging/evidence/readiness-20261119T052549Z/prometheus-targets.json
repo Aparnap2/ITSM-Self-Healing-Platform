@@ -22,8 +22,8 @@
         "scrapeUrl": "http://api:8000/metrics",
         "globalUrl": "http://api:8000/metrics",
         "lastError": "",
-        "lastScrape": "2026-11-18T12:28:47.416005611Z",
-        "lastScrapeDuration": 0.003309639,
+        "lastScrape": "2026-11-19T05:25:47.063335434Z",
+        "lastScrapeDuration": 0.004090723,
         "health": "up",
         "scrapeInterval": "15s",
         "scrapeTimeout": "10s"
@@ -48,8 +48,8 @@
         "scrapeUrl": "http://otel-collector:8888/metrics",
         "globalUrl": "http://otel-collector:8888/metrics",
         "lastError": "",
-        "lastScrape": "2026-11-18T12:28:49.740999472Z",
-        "lastScrapeDuration": 0.00104725,
+        "lastScrape": "2026-11-19T05:25:49.387601113Z",
+        "lastScrapeDuration": 0.001018373,
         "health": "up",
         "scrapeInterval": "15s",
         "scrapeTimeout": "10s"
@@ -74,8 +74,8 @@
         "scrapeUrl": "http://otel-collector:8889/metrics",
         "globalUrl": "http://otel-collector:8889/metrics",
         "lastError": "",
-        "lastScrape": "2026-11-18T12:28:47.763516028Z",
-        "lastScrapeDuration": 0.000533253,
+        "lastScrape": "2026-11-19T05:25:47.409997289Z",
+        "lastScrapeDuration": 0.000640347,
         "health": "up",
         "scrapeInterval": "15s",
         "scrapeTimeout": "10s"
@@ -100,8 +100,8 @@
         "scrapeUrl": "http://localhost:9090/metrics",
         "globalUrl": "http://9ad8a0653b49:9090/metrics",
         "lastError": "",
-        "lastScrape": "2026-11-18T12:28:50.775830107Z",
-        "lastScrapeDuration": 0.003110741,
+        "lastScrape": "2026-11-19T05:25:35.421901515Z",
+        "lastScrapeDuration": 0.003087531,
         "health": "up",
         "scrapeInterval": "15s",
         "scrapeTimeout": "10s"

@@ -1,9 +1,9 @@
 {
   "run": {
-    "started_at": "2026-11-18T12:28:44.949873+00:00",
-    "finished_at": "2026-11-18T12:28:47.878032+00:00",
+    "started_at": "2026-11-19T05:25:42.108775+00:00",
+    "finished_at": "2026-11-19T05:25:44.512919+00:00",
     "mode": "in-process",
-    "tenant_id": "52160597-2bd8-4c6f-973c-c3d6719cb533",
+    "tenant_id": "72a99034-604c-4328-aff7-313f798ed136",
     "api_base_url": "http://127.0.0.1:8001",
     "model": "openai/gpt-oss-120b",
     "llm_budget_calls": 3
@@ -12,12 +12,12 @@
     {
       "step": "tenant",
       "outcome": "registered",
-      "detail": "52160597-2bd8-4c6f-973c-c3d6719cb533"
+      "detail": "72a99034-604c-4328-aff7-313f798ed136"
     },
     {
       "step": "source_event_ingest",
       "outcome": "ACCEPTED",
-      "detail": "cloudtrail:staging-ea6f865939b14af7b5fc2565464e5866"
+      "detail": "cloudtrail:staging-6411ff3b58a94b73919fba3e5721842d"
     },
     {
       "step": "signed_webhook_ingest",
@@ -52,7 +52,7 @@
     {
       "step": "evidence_bundle",
       "outcome": "fetched",
-      "detail": "bundle_hash=73e0f5c3cad90272dabeaab78640c8a189a1920a1074d4c20f86f8b238090ca0"
+      "detail": "bundle_hash=a0205813a0c60283766d4cda061ef38f2742ad5b3fcbd78bf78285c79b7a92a4"
     },
     {
       "step": "transition",
@@ -76,17 +76,17 @@
     }
   ],
   "source_event": {
-    "event_id": "e55b3d3a-69d8-48c3-aba0-5556957b0794",
+    "event_id": "301428b5-4d9c-4c71-b4e9-fe83aea2f070",
     "source": "cloudtrail",
     "event_type": "AssumeRole",
     "ingest_outcome": "ACCEPTED"
   },
   "webhook_ingest": {
     "status_code": 202,
-    "body": "{\"status\": \"accepted\", \"correlation_id\": \"6c7b829d-55a3-48a0-a10e-057e21b6b8f4\", \"idempotency_key\": \"aws-cloudtrail:staging-ea6f865939b14af7b5fc2565464e5866\"}"
+    "body": "{\"status\": \"accepted\", \"correlation_id\": \"3a4a45ac-b348-4272-b94c-e7f5d7eff4d2\", \"idempotency_key\": \"aws-cloudtrail:staging-6411ff3b58a94b73919fba3e5721842d\"}"
   },
   "detection": {
-    "finding_id": "0452a56a-e1d7-4b20-b03d-c1fba859d5d9",
+    "finding_id": "6e5e1b0a-c8a3-488d-bda6-d943796409a7",
     "finding_type": "MISSING_APPROVAL",
     "severity": "P2",
     "outcome": "SUSPICIOUS",
@@ -100,24 +100,19 @@
     "model_calls_used": 1,
     "llm_budget_calls": 3,
     "proposal": {
-      "hypothesis": "User alice assumed the Admin role via an AssumeRole call, which may represent an unauthorized privilege escalation.",
+      "hypothesis": "The finding appears to involve an identity (arn:aws:iam::123:user/alice) performing an AssumeRole action to assume the arn:aws:iam::123:role/Admin role, with the CloudTrail event indicating a successful outcome. The evidence confirms the identity and action, but does not show whether the user was authorized by an IAM policy or trust relationship to assume the Admin role, nor does it provide context such as purpose or justification for the role assumption.",
       "supporting_evidence": [
-        "e55b3d3a-69d8-48c3-aba0-5556957b0794"
+        "301428b5-4d9c-4c71-b4e9-fe83aea2f070"
       ],
       "contradicting_evidence": [],
       "missing_evidence": [
-        "policy definition for the Admin role",
-        "justification for the role assumption",
-        "evidence of user alice's permission to assume the role",
-        "approval or ticket for the role assumption",
-        "MFA usage evidence",
-        "post\u2011assumption activity logs",
-        "evidence of least\u2011privilege compliance",
-        "timestamp correlation with other suspicious events",
-        "audit trail of role assumption requests",
-        "evidence of role usage after assumption"
+        "IAM policy granting alice permission to assume the Admin role",
+        "Trust relationship document for the Admin role",
+        "Justification or business need for the role assumption",
+        "Timestamp correlation with other privileged actions",
+        "Evidence of multi\u2011factor authentication for the assume role event"
       ],
-      "uncertainty": "Only a single successful AssumeRole event is available; without policy, approval, or context it is unclear whether the action was authorized.",
+      "uncertainty": "Without the IAM policy and trust relationship details, it is unclear whether the AssumeRole operation was legitimately authorized or represents a policy violation. The current evidence confirms the action but lacks the authorization context needed to definitively assess compliance.",
       "recommended_disposition": "NEEDS_MORE_EVIDENCE"
     },
     "model_failure": null,
@@ -125,24 +120,24 @@
   },
   "evidence_bundle": {
     "finding": {
-      "id": "0452a56a-e1d7-4b20-b03d-c1fba859d5d9",
-      "tenant_id": "52160597-2bd8-4c6f-973c-c3d6719cb533",
+      "id": "6e5e1b0a-c8a3-488d-bda6-d943796409a7",
+      "tenant_id": "72a99034-604c-4328-aff7-313f798ed136",
       "finding_type": "MISSING_APPROVAL",
       "severity": "P2",
       "status": "OPEN",
       "title": "Privileged action without approval: AssumeRole",
       "description": "Privileged action AssumeRole by arn:aws:iam::123:user/alice on arn:aws:iam::123:role/Admin has no approval evidence",
-      "detected_at": "2026-11-18T12:28:45.022231+00:00",
+      "detected_at": "2026-11-19T05:25:42.181848+00:00",
       "rule_version": "detection-rules-v2",
       "outcome": "SUSPICIOUS"
     },
     "evidence": [
       {
-        "id": "3474f59e-25b2-4aab-be00-dff5bd94c402",
-        "source_event_id": "e55b3d3a-69d8-48c3-aba0-5556957b0794",
+        "id": "8be348d7-acc7-4523-a88f-734b6f1ebf54",
+        "source_event_id": "301428b5-4d9c-4c71-b4e9-fe83aea2f070",
         "access_fact_id": null,
-        "content_hash": "3846b95cae14a4fe796ebbc645efa262a219270ad5832b2becf2a987bbc0ad45",
-        "excerpt": "source=cloudtrail; type=AssumeRole; actor=arn:aws:iam::123:user/alice; resource=arn:aws:iam::123:role/Admin; outcome=success; hash=3846b95cae14a4fe796ebbc645efa262a219270ad5832b2becf2a987bbc0ad45",
+        "content_hash": "39e1f0ea24eac8b1ea421516027327952f87189dc1421319fc1df854859d134f",
+        "excerpt": "source=cloudtrail; type=AssumeRole; actor=arn:aws:iam::123:user/alice; resource=arn:aws:iam::123:role/Admin; outcome=success; hash=39e1f0ea24eac8b1ea421516027327952f87189dc1421319fc1df854859d134f",
         "trust_level": "SIMULATOR_OBSERVATION",
         "collected_at": "2026-01-01T12:00:00+00:00"
       }
@@ -152,7 +147,7 @@
       "Evidence is limited to configured sources and retention windows.",
       "Report is evidence, not certification."
     ],
-    "bundle_hash": "73e0f5c3cad90272dabeaab78640c8a189a1920a1074d4c20f86f8b238090ca0"
+    "bundle_hash": "a0205813a0c60283766d4cda061ef38f2742ad5b3fcbd78bf78285c79b7a92a4"
   },
   "evidence_bundle_error": "",
   "credential_mode": "oidc",
@@ -182,13 +177,13 @@
   "evidence_grounding": {
     "checked": true,
     "cited_evidence_ids": [
-      "e55b3d3a-69d8-48c3-aba0-5556957b0794"
+      "301428b5-4d9c-4c71-b4e9-fe83aea2f070"
     ],
     "in_snapshot": true,
     "resolves_to_persisted_evidence": true
   },
   "persisted_evidence_count": 1,
-  "git_sha": "70e9220616b25800ad8ff3742b125ef632215593",
+  "git_sha": "b9644e41e3b102a996a9a42b3bdf6f9da5f36a1b",
   "notes": [],
   "statements": {
     "proposal_is_advisory": "The model's proposal is ADVISORY. It is stored verbatim in the investigation ledger and is never applied to the finding lifecycle; deterministic policy and a human reviewer remain authoritative.",
@@ -207,5 +202,5 @@
       "Nothing was sent to a real ITSM system: Mockoon stands in for Jira Service Management and ServiceNow."
     ]
   },
-  "report_path": "evals/reports/staging/staging-run-52160597-2bd8-4c6f-973c-c3d6719cb533-20261118T122844Z.json"
+  "report_path": "evals/reports/staging/staging-run-72a99034-604c-4328-aff7-313f798ed136-20261119T052541Z.json"
 }
