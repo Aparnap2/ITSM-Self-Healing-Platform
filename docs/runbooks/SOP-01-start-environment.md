@@ -1,6 +1,7 @@
 # SOP-01 — Start and verify the local environment
 
-Scope: local Docker Compose stack for the ITSM self-healing platform.
+Scope: local Docker Compose stack for the event-driven, evidence-first
+security audit platform.
 Audience: developers and agents running deterministic tests locally.
 
 ## Prerequisites

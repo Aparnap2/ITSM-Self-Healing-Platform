@@ -28,13 +28,17 @@ evaluation and the conditions under which it would be revisited.
 
 ## Findings that decide it
 
-**1. It is a paid feature.** The documentation lists the feature as
-"Included in Plans: Base, Ultimate". It is implemented in a `pro` module
-(`localstack.pro.core.services.iam.policy_engine`), i.e. it is not available
-in the community image at all. AGENTS.md requires licensing and plan terms to
-be verified before reliance, and this repository's baseline must be runnable
-by a reviewer without a commercial plan. LocalStack therefore cannot be a
-requirement for any gate that supports a public claim.
+**1. The explanation is a paid feature, and the distinction is precise.**
+The IAM *service* is community (`minimumPlan: Hobby` in the published plan
+data), but the *policy engine that enforces and explains* denials is not:
+Explainable IAM is listed as "Included in Plans: Base, Ultimate", it lives in
+a `pro` module (`localstack.pro.core.services.iam.policy_engine`), and it
+requires `ENFORCE_IAM=1`, `DEBUG=1` and a `LOCALSTACK_AUTH_TOKEN`. So an
+emulated IAM API is free; a real denial with a reason is not. AGENTS.md
+requires licensing and plan terms to be verified before reliance, and this
+repository's baseline must be runnable by a reviewer without a commercial
+plan. LocalStack therefore cannot be a requirement for any gate that supports
+a public claim.
 
 **2. The explanations are not audit events.** They are delivered in the API
 error response and in the LocalStack container log. Neither is a canonical,
@@ -105,6 +109,24 @@ If condition 1 is met, the smallest useful spike is:
 The spike is four steps and produces a single question's answer: does the
 denial text change the investigation's explanation in a way an operator would
 call better? If that cannot be answered, the feature is not worth its cost.
+
+## CI/CD
+
+Nothing is added to the required checks. The fifteen gated jobs are
+untouched, and the experiment ships as
+`.github/workflows/localstack-iam-spike.yml`:
+
+- triggered by `workflow_dispatch` only, so it never runs on a push or a pull
+  request and adds no status check that branch protection could require;
+- without a `LOCALSTACK_AUTH_TOKEN` it records **NOT RUN** in the job summary
+  and stops, because "no plan was available" and "the denial was not
+  explained" are different outcomes and must not look alike;
+- when a denial *is* produced but carries no readable explanation, it fails —
+  that explanation is the entire product of the spike.
+
+The workflow has not been executed: no plan token was available when it was
+written. It is an unrun experiment, not evidence, and it should be deleted
+rather than kept as decoration if it is still unrun after the next review.
 
 ## Consequences
 

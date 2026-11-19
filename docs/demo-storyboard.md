@@ -1,4 +1,4 @@
-# Demo storyboard — local staging, end-to-end self-healing workflow
+# Demo storyboard — local staging, end-to-end evidence-backed audit workflow
 
 Scope: the **local staging-equivalent stack** (`ITSM_ENV=staging`, OIDC only,
 PostgreSQL + NATS JetStream + a local RS256 identity simulator) and the
