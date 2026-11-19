@@ -66,6 +66,36 @@ At-least-once delivery only. There is no exactly-once claim anywhere in this
 repository: PostgreSQL is canonical, NATS is transport, and consumers must
 be idempotent.
 
+### Demonstrated end to end (executed, not asserted)
+
+The whole path above also runs as a live local stack — real PostgreSQL, real
+NATS JetStream, an RS256 identity simulator, Mockoon as the ITSM stand-in,
+Prometheus plus an OTel collector, and a real bounded model call — driven by
+three commands (`make demo-up`, `make demo-verify`, `make demo-run`).
+
+All three gates were executed at the same commit, `b9644e4`:
+
+| Gate | Result |
+| --- | --- |
+| CI (15 required jobs) | **15/15**, 856 executions, 0 failures, 0 skipped |
+| `STAGING_READY` | **14/14** emitted checks, full mode, including a real 100-second token-expiry probe |
+| `DEMO_QUALIFIED` | **14/14** stage criteria (13 recorded steps plus a derived audit-trail check), 1 model call of a 3-call budget, `OPEN → OPEN (after investigation) → VERIFIED (after review)` |
+
+The sequence that matters: a signed CloudTrail-shaped event is accepted
+durably, relayed, detected deterministically, investigated by a real model
+that cites a persisted evidence id, and then closed by **two distinct
+reviewer identities** — with the finding's status sampled immediately after
+the investigation to show the model did not move it.
+
+What this does **not** establish: the two reviewers are simulator-issued
+application identities, not independently accountable humans, so the
+independent-human-review criterion is **NOT SATISFIED**. It is one run on one
+tenant, not a sample of model quality, and nothing here is a production
+deployment.
+
+Record, per-criterion verdicts and captured evidence:
+`docs/staging-demo-qualification.md` and `evals/reports/staging/`.
+
 ### Explicitly not done yet
 
 - The HMAC bearer is a minimal replaceable point, not an IdP: no key
@@ -204,8 +234,13 @@ docker run -d --name itsm-test-pg \
   -p 5544:5432 postgres:16
 
 # NATS with JetStream
+# The config path is passed explicitly and the tag is pinned to the version CI
+# uses. Newer `nats:2` images read a relative `nats-server.conf` that shadows
+# this mount, which silently gives you a server with JetStream disabled and
+# four fault-injection tests failing with ServiceUnavailableError.
 docker run -d --name itsm-test-nats -p 4224:4222 -p 8224:8222 \
-  -v "$PWD/ci/nats.conf:/etc/nats/nats-server.conf:ro" nats:2
+  -v "$PWD/ci/nats.conf:/etc/nats/nats-server.conf:ro" \
+  nats:2.12.10-alpine -c /etc/nats/nats-server.conf -js
 
 # Apply migrations (forward-only, idempotent, tracked in schema_migrations)
 uv run python -m migrations.apply \
