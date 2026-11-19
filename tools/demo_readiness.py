@@ -63,6 +63,9 @@ class Readiness:
     started_at: str
     mode: str
     checks: list[Check] = field(default_factory=list)
+    #: Extra context attached when a check fails and the cause is not obvious
+    #: from the check text alone (e.g. the reviewer-authorization row).
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def add(self, name: str, verdict: Verdict, detail: str) -> None:
         self.checks.append(Check(name=name, verdict=verdict, detail=detail))
@@ -92,6 +95,7 @@ class Readiness:
             "mode": self.mode,
             "generated_at": datetime.now(UTC).isoformat(),
             "checks": [asdict(c) for c in self.checks],
+            "diagnostics": self.diagnostics,
             "does_not_prove": [
                 "production readiness",
                 "throughput or latency under load",
@@ -303,6 +307,59 @@ async def _findings_status(token: str | None) -> tuple[int, str]:
         return response.status_code, response.text[:200]
 
 
+def directory_probe(subject: str, *, tenant: UUID = DEMO_TENANT) -> dict[str, Any]:
+    """Read the reviewer's authorization row for diagnosis, best effort.
+
+    Uses the administrative DSN the operator already has (the runtime role
+    cannot read this table usefully without a tenant context). It never
+    raises: a diagnostic that fails must not replace the failure it was
+    meant to explain.
+
+    The point is to separate the two explanations for a 403 "not a member of
+    the requested tenant": the stored row disagrees with what the probe asked
+    for, or the row agrees and the API answered out of stale state. The age
+    of ``updated_at`` is what tells them apart.
+    """
+    dsn = _env("ITSM_POSTGRES_DSN") or _env("DATABASE_URL")
+    issuer = _env("ITSM_OIDC_ISSUER")
+    if not dsn:
+        return {"available": False, "reason": "no administrative DSN configured"}
+    try:
+        with psycopg.connect(dsn, connect_timeout=10) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT tenant_ids, roles, active, authorization_version, updated_at "
+                "  FROM reviewer_authorizations WHERE issuer = %s AND subject = %s",
+                (issuer, subject),
+            )
+            row = cur.fetchone()
+    except psycopg.Error as exc:
+        return {"available": False, "reason": str(exc)[:200]}
+    if row is None:
+        return {
+            "available": True,
+            "row_found": False,
+            "issuer": issuer,
+            "subject": subject,
+            "requested_tenant": str(tenant),
+        }
+    tenant_ids, roles, active, version, updated_at = row
+    members = [str(item) for item in tenant_ids]
+    return {
+        "available": True,
+        "row_found": True,
+        "issuer": issuer,
+        "subject": subject,
+        "active": bool(active),
+        "roles": list(roles),
+        "tenant_ids": members,
+        "authorization_version": str(version),
+        "updated_at": updated_at.isoformat(),
+        "age_seconds": round((datetime.now(UTC) - updated_at).total_seconds(), 1),
+        "requested_tenant": str(tenant),
+        "requested_tenant_is_member": str(tenant) in members,
+    }
+
+
 async def check_authentication(report: Readiness, *, full: bool) -> None:
     api = _env("ITSM_API_BASE_URL", "http://127.0.0.1:8001")
     try:
@@ -330,6 +387,17 @@ async def check_authentication(report: Readiness, *, full: bool) -> None:
         "PASS" if status == 200 else "FAIL",
         f"GET /v1/findings as {REVIEWER_A}: HTTP {status} {body[:120]}",
     )
+    if status != 200:
+        # Attach what the directory actually holds, so the artifact explains
+        # the refusal instead of leaving a bare status code. A 403 here means
+        # the API found the principal but not for this tenant; the stored row
+        # says whether that is true or whether the API read stale state.
+        report.diagnostics["auth_failure"] = {
+            "requested_tenant": str(DEMO_TENANT),
+            "http_status": status,
+            "detail": body[:300],
+            "directory": directory_probe(REVIEWER_A),
+        }
 
     status, body = await _findings_status("not-a-jwt")
     report.add(
@@ -541,13 +609,29 @@ async def main_async(args: argparse.Namespace) -> int:
     print("-" * 110)
     print(f"{report.gate}: {report.verdict}   (commit {report.commit[:12]}, mode {report.mode})")
 
-    if args.out:
-        target = Path(args.out)
+    target = evidence_target(args.out, report.verdict, report.started_at)
+    if target is not None:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(report.evidence(), indent=2) + "\n", encoding="utf-8")
-        print(f"evidence: {target}")
+        label = "failure evidence" if report.verdict != "PASS" else "evidence"
+        print(f"{label}: {target}")
 
     return 0 if report.verdict == "PASS" else 1
+
+
+def evidence_target(out: str, verdict: Verdict, started_at: str) -> Path | None:
+    """Where this run's report belongs.
+
+    A failure always gets a file, even when the caller asked for none, because
+    a gate that can fail without leaving evidence cannot be investigated. It
+    is routed under ``failures/`` so that a directory of passing artifacts is
+    never mistaken for a system that has never failed. A pass is written only
+    where the caller asked for it.
+    """
+    if verdict != "PASS":
+        stem = started_at.replace(":", "").replace("-", "").split(".")[0]
+        return Path("evals/reports/staging/failures") / f"readiness-{stem}Z.json"
+    return Path(out) if out else None
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -112,3 +112,67 @@ def test_http_success_predicate_is_not_any_2xx_parsing_quirk(
     assert not readiness_module._is_ok(301)
     assert not readiness_module._is_ok(401)
     assert not readiness_module._is_ok(500)
+
+
+def test_a_failing_gate_writes_evidence_even_when_none_was_requested(
+    readiness_module: ModuleType,
+) -> None:
+    """A gate that can fail without leaving a file cannot be investigated.
+
+    The unexplained transient that motivated this rule printed a FAIL to the
+    terminal and wrote nothing, so there was no artifact to explain it with.
+    """
+    target = readiness_module.evidence_target("", "FAIL", "2026-11-18T12:16:38.123456+00:00")
+    assert target is not None
+    assert target.parent.name == "failures"
+    assert target.name == "readiness-20261118T121638Z.json"
+
+
+def test_failure_evidence_never_lands_beside_passing_evidence(
+    readiness_module: ModuleType,
+) -> None:
+    """Passes and failures must not share a directory.
+
+    A record that mixes them lets a stray failure read as a qualification
+    artifact, and lets a directory of passes hide that the gate ever failed.
+    """
+    passing = readiness_module.evidence_target(
+        "evals/reports/staging/readiness-x.json", "PASS", "2026-11-18T12:26:19+00:00"
+    )
+    failing = readiness_module.evidence_target(
+        "evals/reports/staging/readiness-x.json", "FAIL", "2026-11-18T12:26:19+00:00"
+    )
+    assert passing is not None and failing is not None
+    assert passing.parent != failing.parent
+    assert failing.parent.name == "failures"
+
+
+def test_not_run_writes_failure_evidence_too(readiness_module: ModuleType) -> None:
+    """NOT RUN is not a pass, so it is not filed with the passes either."""
+    target = readiness_module.evidence_target("", "NOT RUN", "2026-11-18T12:26:19+00:00")
+    assert target is not None and target.parent.name == "failures"
+
+
+def test_a_passing_gate_writes_nothing_unless_asked(
+    readiness_module: ModuleType,
+) -> None:
+    assert readiness_module.evidence_target("", "PASS", "2026-11-18T12:26:19+00:00") is None
+
+
+def test_evidence_carries_diagnostics_slot(readiness_module: ModuleType) -> None:
+    """The artifact must be able to explain a refusal, not only date it."""
+    report = _report(readiness_module)
+    report.add("oidc token accepted", "FAIL", "HTTP 403")
+    report.diagnostics["auth_failure"] = {"requested_tenant": "1111...", "directory": {}}
+    assert report.evidence()["diagnostics"]["auth_failure"]["requested_tenant"] == "1111..."
+
+
+def test_directory_probe_never_raises_when_it_cannot_look(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A diagnostic that fails must not replace the failure it explains."""
+    monkeypatch.delenv("ITSM_POSTGRES_DSN", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    probe = readiness_module.directory_probe("reviewer-a")
+    assert probe["available"] is False
+    assert isinstance(probe["reason"], str) and probe["reason"]
