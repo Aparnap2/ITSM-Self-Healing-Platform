@@ -139,7 +139,8 @@ jobs:
             -p 8222:8222 \
             -v "$PWD/ci/nats.conf:/etc/nats/nats-server.conf:ro" \
             nats:2.12.10-alpine \
-            -c /etc/nats/nats-server.conf
+            -c /etc/nats/nats-server.conf \
+            -js
       - name: Start Mockoon simulator
         run: |
           docker run -d --name itsm-mockoon-release \
@@ -149,12 +150,16 @@ jobs:
             --data /home/mockoon/data/mockoon.json \
             --port 3001 \
             --disable-admin-api
+      # The readiness probe is /jsz, not /healthz: a NATS server with
+      # JetStream disabled answers /healthz happily and then fails the
+      # fault-injection suite with ServiceUnavailableError. Asserting
+      # /jsz makes that a startup failure with an obvious cause.
       - name: Wait for services (bounded, 30s)
         run: |
           set -e
           for i in $(seq 1 30); do
             if pg_isready -h localhost -U itsm -d itsm_test >/dev/null 2>&1 \
-              && wget -q -O - http://127.0.0.1:8222/healthz >/dev/null 2>&1 \
+              && curl -fsS http://127.0.0.1:8222/jsz >/dev/null 2>&1 \
               && curl -sf http://127.0.0.1:3001/health >/dev/null 2>&1; then
               echo "All services ready after ${i}s."
               exit 0
