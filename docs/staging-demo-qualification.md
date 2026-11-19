@@ -335,6 +335,22 @@ are green" and "the thing runs".
   re-provision-then-probe sequence. The cause was not identified; it is
   recorded in `failures/README.md` rather than smoothed away. A gate that can
   fail once for unknown reasons is a known weakness of this record.
+  The first attempt to investigate it failed for a bad reason: the fast path
+  printed a FAIL and wrote no artifact, so there was nothing to inspect. That
+  is now fixed — any non-PASS gate writes a report, routed to
+  `evals/reports/staging/failures/` so it is never filed beside a passing
+  one, and a membership refusal now carries the reviewer-authorization row
+  that explains it (`tenant_ids`, whether the requested tenant is in that
+  list, the authorization version, and the age of `updated_at`). The
+  instrumentation was checked by injecting the failure deliberately:
+  provisioning `reviewer-a` for an unrelated tenant and running the gate
+  produced the 403 and an artifact stating
+  `requested_tenant_is_member: false`, `age_seconds: 0.5`,
+  `authorization_version: 12`. That injection also showed the two causes are
+  now distinguishable — a stored row that genuinely lacks the tenant reads
+  differently from a row that has it and was read stale. It does not explain
+  the transient; it makes the next occurrence explainable instead of
+  merely observable.
 - **The rehearsal drives the consumer in-process, not in its container.** The
   durable consumer `itsm-workflow` can only have one binding, so `demo-run`
   stops the `worker` container and runs the same `AuditConsumer` code inside

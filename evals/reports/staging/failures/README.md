@@ -36,3 +36,11 @@ exact re-provision / probe sequence. The cause of that one transient was not
 identified. The full gate passed immediately afterwards and has passed since.
 It is recorded here because a flaky gate is itself a defect, even when it is
 not reproducible on demand.
+
+The first attempt to investigate it was defeated by the tool itself: the fast
+path printed a FAIL and wrote no artifact. That is now fixed — every non-PASS
+run writes a report into this directory, and a membership refusal carries the
+reviewer-authorization row that explains it. The instrumentation was verified
+by injecting the failure deliberately; the injected artifact was discarded
+after inspection because a fabricated failure does not belong next to real
+ones.
