@@ -55,7 +55,7 @@ docker compose ps        # all services healthy/running
 | nats | 4222 | JetStream; monitor port 8222 |
 | mockoon | 3001 | ITSM + identity + infra simulators |
 | api | 8000 | application API (`python -m itsm_agent.api`); `/healthz` |
-| worker | — | detection consumer (`python -m itsm_agent.workers.consumer`) |
+| worker | — | remediation workflow consumer (`python -m itsm_agent.workers.consumer`); detection runs in `itsm_agent.workers.audit_consumer`, which the rehearsal drives in-process because both bind the same durable consumer |
 | relay | — | outbox → NATS relay (`python -m itsm_agent.workers.relay`) |
 | retention | — | erasure scheduler (`python -m itsm_agent.workers.retention`) |
 | prometheus | 9090 | metrics UI |

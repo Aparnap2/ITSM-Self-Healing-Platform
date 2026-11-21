@@ -118,8 +118,10 @@ Record, per-criterion verdicts and captured evidence:
   (`python -m itsm_agent.api`), the consumer
   (`python -m itsm_agent.workers.consumer`, the image CMD), and the outbox
   relay (`python -m itsm_agent.workers.relay`). The compose stack wires all
-  three against the constrained `itsm_app` role; the security-audit detection
-  consumer is still composed programmatically in tests.
+  three against the constrained `itsm_app` role. The security-audit detection
+  consumer (`python -m itsm_agent.workers.audit_consumer`) is not a compose
+  service: it binds the same durable consumer as `worker`, so the rehearsal
+  drives it in-process (`make demo-run`) and stops `worker` first.
 - The Jira Service Management adapter is not implemented; Mockoon remains
   the audited acceptance connector for ITSM.
 - No production deployment has been validated. Nothing here is "production
