@@ -1,0 +1,79 @@
+{
+  "phase": "a",
+  "run_id": null,
+  "commit": "a6e76a064a4201507c6e224a9a0c6f2b7ba64cac",
+  "captured_at": "2026-11-21T12:01:59.928135+00:00",
+  "screenshots_ignore_certificate_errors": true,
+  "raw_captures": [
+    {
+      "file": "compose-ps.json",
+      "source": "docker compose ps",
+      "bytes": 12302
+    },
+    {
+      "file": "prometheus-targets.json",
+      "source": "http://127.0.0.1:9091/api/v1/targets",
+      "bytes": 3939
+    },
+    {
+      "file": "oidc-discovery.json",
+      "source": "https://127.0.0.1:8444/.well-known/openid-configuration",
+      "bytes": 512
+    },
+    {
+      "file": "oidc-jwks.json",
+      "source": "https://127.0.0.1:8444/jwks",
+      "bytes": 518
+    },
+    {
+      "file": "auth-matrix.json",
+      "source": "GET /v1/findings",
+      "bytes": 904
+    },
+    {
+      "file": "api-metrics.txt",
+      "source": "http://127.0.0.1:8001/metrics",
+      "bytes": 14297
+    }
+  ],
+  "database": {
+    "status": "PASS",
+    "migrations": 16,
+    "reviewers": 2
+  },
+  "screenshots": [
+    {
+      "file": "01-prometheus-targets.png",
+      "url": "http://127.0.0.1:9091/targets",
+      "status": "PASS",
+      "bytes": 93951,
+      "note": "live Prometheus scrape targets",
+      "stderr": ""
+    },
+    {
+      "file": "02-prometheus-query-ingestion.png",
+      "url": "http://127.0.0.1:9091/api/v1/query?query=itsm_ingestion_events_total",
+      "status": "PASS",
+      "bytes": 12858,
+      "note": "live Prometheus query response for the platform's own metric",
+      "stderr": ""
+    },
+    {
+      "file": "03-api-metrics.png",
+      "url": "http://127.0.0.1:8001/metrics",
+      "status": "PASS",
+      "bytes": 286105,
+      "note": "live API /metrics",
+      "stderr": ""
+    },
+    {
+      "file": "04-oidc-discovery.png",
+      "url": "https://127.0.0.1:8444/.well-known/openid-configuration",
+      "status": "PASS",
+      "bytes": 30602,
+      "note": "live OIDC discovery document over TLS (browser ignores the throwaway CA; the platform pins it)",
+      "stderr": ""
+    }
+  ],
+  "not_captured": []
+}

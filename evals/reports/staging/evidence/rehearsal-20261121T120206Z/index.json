@@ -1,0 +1,62 @@
+{
+  "phase": "b",
+  "run_id": "staging-run-eff4e010-4045-481f-89e0-aa16a7058c45-20261121T120153Z",
+  "commit": "a6e76a064a4201507c6e224a9a0c6f2b7ba64cac",
+  "captured_at": "2026-11-21T12:02:06.516848+00:00",
+  "screenshots_ignore_certificate_errors": true,
+  "raw_captures": [
+    {
+      "file": "compose-ps.json",
+      "source": "docker compose ps",
+      "bytes": 12302
+    },
+    {
+      "file": "prometheus-targets.json",
+      "source": "http://127.0.0.1:9091/api/v1/targets",
+      "bytes": 3939
+    },
+    {
+      "file": "oidc-discovery.json",
+      "source": "https://127.0.0.1:8444/.well-known/openid-configuration",
+      "bytes": 512
+    },
+    {
+      "file": "oidc-jwks.json",
+      "source": "https://127.0.0.1:8444/jwks",
+      "bytes": 518
+    },
+    {
+      "file": "auth-matrix.json",
+      "source": "GET /v1/findings",
+      "bytes": 904
+    },
+    {
+      "file": "api-metrics.txt",
+      "source": "http://127.0.0.1:8001/metrics",
+      "bytes": 14300
+    }
+  ],
+  "database": {
+    "status": "NOT RUN",
+    "reason": "ITSM_POSTGRES_DSN unset"
+  },
+  "screenshots": [
+    {
+      "file": "10-prometheus-ingestion-after-run.png",
+      "url": "http://127.0.0.1:9091/api/v1/query?query=itsm_ingestion_events_total",
+      "status": "PASS",
+      "bytes": 19338,
+      "note": "ingestion counter after the event was processed",
+      "stderr": ""
+    },
+    {
+      "file": "11-api-metrics-after-run.png",
+      "url": "http://127.0.0.1:8001/metrics",
+      "status": "PASS",
+      "bytes": 285306,
+      "note": "live API /metrics after the run",
+      "stderr": ""
+    }
+  ],
+  "not_captured": []
+}

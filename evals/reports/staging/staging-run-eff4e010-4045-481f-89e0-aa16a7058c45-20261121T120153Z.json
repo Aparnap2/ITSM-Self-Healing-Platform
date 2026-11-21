@@ -1,0 +1,241 @@
+{
+  "run": {
+    "started_at": "2026-11-21T12:01:54.017025+00:00",
+    "finished_at": "2026-11-21T12:01:55.872385+00:00",
+    "mode": "in-process",
+    "tenant_id": "eff4e010-4045-481f-89e0-aa16a7058c45",
+    "api_base_url": "http://127.0.0.1:8001",
+    "model": "openai/gpt-oss-120b",
+    "llm_budget_calls": 3
+  },
+  "steps": [
+    {
+      "step": "tenant",
+      "outcome": "registered",
+      "detail": "eff4e010-4045-481f-89e0-aa16a7058c45"
+    },
+    {
+      "step": "source_event_ingest",
+      "outcome": "ACCEPTED",
+      "detail": "cloudtrail:staging-4dea5467439f45d58a9de9ca18d3884c"
+    },
+    {
+      "step": "signed_webhook_ingest",
+      "outcome": "accepted",
+      "detail": "HTTP 202"
+    },
+    {
+      "step": "outbox_relay",
+      "outcome": "published",
+      "detail": "1 message(s)"
+    },
+    {
+      "step": "detection",
+      "outcome": "processed",
+      "detail": "audit consumer driven in-process"
+    },
+    {
+      "step": "finding",
+      "outcome": "detected",
+      "detail": "MISSING_APPROVAL severity=P2 outcome=SUSPICIOUS"
+    },
+    {
+      "step": "investigation",
+      "outcome": "COMPLETED",
+      "detail": "1 model call(s) used"
+    },
+    {
+      "step": "credentials",
+      "outcome": "oidc",
+      "detail": "two reviewer credentials acquired"
+    },
+    {
+      "step": "evidence_bundle",
+      "outcome": "fetched",
+      "detail": "bundle_hash=b76e09422532f2ae0c0780c18074b26532897eef27fd0b8ac17239b1dac91d90"
+    },
+    {
+      "step": "transition",
+      "outcome": "ACKNOWLEDGED:200",
+      "detail": "reviewer reviewer-a (accepted)"
+    },
+    {
+      "step": "transition",
+      "outcome": "RESOLVED:200",
+      "detail": "reviewer reviewer-a (accepted)"
+    },
+    {
+      "step": "transition",
+      "outcome": "VERIFIED:200",
+      "detail": "reviewer reviewer-b (accepted)"
+    },
+    {
+      "step": "audit_trail",
+      "outcome": "verified",
+      "detail": "status=VERIFIED transitions=3 independent_verifier=True"
+    },
+    {
+      "step": "evidence_grounding",
+      "outcome": "checked",
+      "detail": "in_snapshot=True resolves=True"
+    }
+  ],
+  "source_event": {
+    "event_id": "a3ec1a2c-212f-4163-b0ac-5a1e6b810acc",
+    "source": "cloudtrail",
+    "event_type": "AssumeRole",
+    "ingest_outcome": "ACCEPTED"
+  },
+  "webhook_ingest": {
+    "status_code": 202,
+    "body": "{\"status\": \"accepted\", \"correlation_id\": \"1619e4bf-d467-481f-bacd-eaf32fa80ff5\", \"idempotency_key\": \"aws-cloudtrail:staging-4dea5467439f45d58a9de9ca18d3884c\"}"
+  },
+  "detection": {
+    "finding_id": "c88648c6-3b37-4fb1-b726-76e8513d6dee",
+    "finding_type": "MISSING_APPROVAL",
+    "severity": "P2",
+    "outcome": "SUSPICIOUS",
+    "risk_score": 60,
+    "status_before_investigation": "OPEN",
+    "status_after_investigation": "OPEN",
+    "status_final": "VERIFIED"
+  },
+  "investigation": {
+    "status": "COMPLETED",
+    "model_calls_used": 1,
+    "llm_budget_calls": 3,
+    "proposal": {
+      "hypothesis": "The CloudTrail event shows that the IAM user alice (arn:aws:iam::123:user/alice) successfully performed an AssumeRole action to assume the Admin role (arn:aws:iam::123:role/Admin). This indicates a potential privilege escalation if alice was not authorized to assume that role.",
+      "supporting_evidence": [
+        "a3ec1a2c-212f-4163-b0ac-5a1e6b810acc"
+      ],
+      "contradicting_evidence": [],
+      "missing_evidence": [
+        "IAM policy attached to alice that permits or denies AssumeRole",
+        "Trust policy of the Admin role",
+        "Permission boundaries for alice",
+        "Evidence of justification for role assumption",
+        "Logs of actions performed after assuming the role",
+        "Evidence of MFA usage during the AssumeRole",
+        "Change history of the Admin role trust relationship",
+        "Organizational policy on role assumptions",
+        "Audit logs from other sources confirming the event"
+      ],
+      "uncertainty": "Based solely on a single successful AssumeRole event, it is unclear whether the action was authorized according to internal policies or if it represents a misuse. Additional context such as policies, approvals, and subsequent activity is required to determine intent and compliance.",
+      "recommended_disposition": "NEEDS_MORE_EVIDENCE"
+    },
+    "model_failure": null,
+    "debug_dump": null
+  },
+  "evidence_bundle": {
+    "finding": {
+      "id": "c88648c6-3b37-4fb1-b726-76e8513d6dee",
+      "tenant_id": "eff4e010-4045-481f-89e0-aa16a7058c45",
+      "finding_type": "MISSING_APPROVAL",
+      "severity": "P2",
+      "status": "OPEN",
+      "title": "Privileged action without approval: AssumeRole",
+      "description": "Privileged action AssumeRole by arn:aws:iam::123:user/alice on arn:aws:iam::123:role/Admin has no approval evidence",
+      "detected_at": "2026-11-21T12:01:54.090268+00:00",
+      "rule_version": "detection-rules-v2",
+      "outcome": "SUSPICIOUS"
+    },
+    "evidence": [
+      {
+        "id": "13e0a601-0ea1-4b4c-bdbe-1258dad76bb8",
+        "source_event_id": "a3ec1a2c-212f-4163-b0ac-5a1e6b810acc",
+        "access_fact_id": null,
+        "content_hash": "13c1ddf1dfef9169b2dda2653124c5150f65d6359b914e9a18b3c7fd7e66f25e",
+        "excerpt": "source=cloudtrail; type=AssumeRole; actor=arn:aws:iam::123:user/alice; resource=arn:aws:iam::123:role/Admin; outcome=success; hash=13c1ddf1dfef9169b2dda2653124c5150f65d6359b914e9a18b3c7fd7e66f25e",
+        "trust_level": "SIMULATOR_OBSERVATION",
+        "collected_at": "2026-01-01T12:00:00+00:00"
+      }
+    ],
+    "review_decisions": [],
+    "limitations": [
+      "Evidence is limited to configured sources and retention windows.",
+      "Report is evidence, not certification."
+    ],
+    "bundle_hash": "b76e09422532f2ae0c0780c18074b26532897eef27fd0b8ac17239b1dac91d90"
+  },
+  "evidence_bundle_error": "",
+  "audit_trail": {
+    "verified": true,
+    "reasons": [],
+    "final_status": "VERIFIED",
+    "transition_count": 3,
+    "transitions": [
+      {
+        "to_status": "VERIFIED",
+        "actor_id": "reviewer-b",
+        "verifier_id": "reviewer-b"
+      },
+      {
+        "to_status": "RESOLVED",
+        "actor_id": "reviewer-a",
+        "verifier_id": "reviewer-a"
+      },
+      {
+        "to_status": "ACKNOWLEDGED",
+        "actor_id": "reviewer-a",
+        "verifier_id": "reviewer-a"
+      }
+    ],
+    "verifier_is_distinct": true,
+    "bundle_hash": "7655d7d892ac84eaa76a4bf3fd1abc7cad136de09166073fcf134e8e07fccc42"
+  },
+  "credential_mode": "oidc",
+  "reviewer_transitions": [
+    {
+      "reviewer": "reviewer-a",
+      "to_status": "ACKNOWLEDGED",
+      "http_status": 200,
+      "code": "",
+      "accepted": true
+    },
+    {
+      "reviewer": "reviewer-a",
+      "to_status": "RESOLVED",
+      "http_status": 200,
+      "code": "",
+      "accepted": true
+    },
+    {
+      "reviewer": "reviewer-b",
+      "to_status": "VERIFIED",
+      "http_status": 200,
+      "code": "",
+      "accepted": true
+    }
+  ],
+  "evidence_grounding": {
+    "checked": true,
+    "cited_evidence_ids": [
+      "a3ec1a2c-212f-4163-b0ac-5a1e6b810acc"
+    ],
+    "in_snapshot": true,
+    "resolves_to_persisted_evidence": true
+  },
+  "persisted_evidence_count": 1,
+  "git_sha": "a6e76a064a4201507c6e224a9a0c6f2b7ba64cac",
+  "notes": [],
+  "statements": {
+    "proposal_is_advisory": "The model's proposal is ADVISORY. It is stored verbatim in the investigation ledger and is never applied to the finding lifecycle; deterministic policy and a human reviewer remain authoritative.",
+    "finding_status_unchanged_by_investigation": true,
+    "finding_status_before": "OPEN",
+    "finding_status_after_investigation": "OPEN",
+    "finding_status_final": "VERIFIED",
+    "model_calls_used": 1,
+    "what_this_run_does_not_prove": [
+      "The source event is a simulated CloudTrail record, not a real AWS API call; no cloud account was involved.",
+      "The model PROPOSES. It cannot authorize an action, cannot change a finding status, and cannot run a command.",
+      "3 lifecycle transition(s) were accepted by the API. The reviewers are simulator-issued identities: a real identity provider was not exercised, and the policy engine authorizes every transition independently of who signed the token.",
+      "No production credentials were used; every secret came from the operator's environment.",
+      "The proposal cited 1 evidence id(s); every one resolves to a persisted, redacted reference among the 1 available, and every one was rendered into the prompt the model saw. Resolvability and presence are not evidential sufficiency: nothing here judges whether the evidence is adequate to justify the outcome.",
+      "The LLM budget bounds the number of real, billed model calls; it is not a quality or accuracy guarantee.",
+      "Nothing was sent to a real ITSM system: Mockoon stands in for Jira Service Management and ServiceNow."
+    ]
+  },
+  "report_path": "evals/reports/staging/staging-run-eff4e010-4045-481f-89e0-aa16a7058c45-20261121T120153Z.json",
+  "commit": "a6e76a064a4201507c6e224a9a0c6f2b7ba64cac"
+}

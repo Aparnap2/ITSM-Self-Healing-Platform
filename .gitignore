@@ -36,3 +36,6 @@ evals/reports/*
 .idea/
 .vscode/
 .DS_Store
+
+# Local demo stack state (generated CA/certs; never committed)
+demo-state/

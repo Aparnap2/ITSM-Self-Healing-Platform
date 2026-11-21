@@ -1,0 +1,197 @@
+# HELP itsm_queue_depth Depth of a bounded work queue (outbox rows pending, JetStream messages pending)
+# TYPE itsm_queue_depth gauge
+# HELP itsm_outbox_backlog Outbox rows that are still pending publication to the broker
+# TYPE itsm_outbox_backlog gauge
+itsm_outbox_backlog 0.0
+# HELP itsm_outbox_published_total Outbox rows published to the broker, by outcome
+# TYPE itsm_outbox_published_total counter
+# HELP itsm_consumer_messages_total Broker messages handled by a consumer, by bounded outcome
+# TYPE itsm_consumer_messages_total counter
+# HELP itsm_event_age_seconds Age of a broker message at the moment it was delivered to the consumer
+# TYPE itsm_event_age_seconds histogram
+itsm_event_age_seconds_bucket{le="1.0"} 0.0
+itsm_event_age_seconds_bucket{le="5.0"} 0.0
+itsm_event_age_seconds_bucket{le="15.0"} 0.0
+itsm_event_age_seconds_bucket{le="60.0"} 0.0
+itsm_event_age_seconds_bucket{le="300.0"} 0.0
+itsm_event_age_seconds_bucket{le="900.0"} 0.0
+itsm_event_age_seconds_bucket{le="3600.0"} 0.0
+itsm_event_age_seconds_bucket{le="+Inf"} 0.0
+itsm_event_age_seconds_count 0.0
+itsm_event_age_seconds_sum 0.0
+# HELP itsm_event_age_seconds_created Age of a broker message at the moment it was delivered to the consumer
+# TYPE itsm_event_age_seconds_created gauge
+itsm_event_age_seconds_created 1.795261233976112e+09
+# HELP itsm_consumer_lag_seconds Delivery lag of the most recently delivered broker message
+# TYPE itsm_consumer_lag_seconds gauge
+itsm_consumer_lag_seconds 0.0
+# HELP itsm_batch_size Number of messages in the most recent broker fetch
+# TYPE itsm_batch_size gauge
+itsm_batch_size 0.0
+# HELP itsm_adapter_retries_total Bounded adapter retry attempts
+# TYPE itsm_adapter_retries_total counter
+# HELP itsm_retry_total Bounded redelivery or republish retries
+# TYPE itsm_retry_total counter
+# HELP itsm_dlq_total Messages dead-lettered after bounded redelivery was exhausted
+# TYPE itsm_dlq_total counter
+# HELP itsm_tool_errors_total Tool and adapter errors by bounded result code
+# TYPE itsm_tool_errors_total counter
+# HELP itsm_ingestion_events_total Ingestion webhook outcomes
+# TYPE itsm_ingestion_events_total counter
+itsm_ingestion_events_total{outcome="accepted"} 1.0
+# HELP itsm_ingestion_events_created Ingestion webhook outcomes
+# TYPE itsm_ingestion_events_created gauge
+itsm_ingestion_events_created{outcome="accepted"} 1.795262514070885e+09
+# HELP itsm_api_requests_total API requests handled, by route template, method and status class
+# TYPE itsm_api_requests_total counter
+itsm_api_requests_total{method="GET",route="healthz",status_class="2xx"} 400.0
+itsm_api_requests_total{method="GET",route="metrics",status_class="2xx"} 90.0
+itsm_api_requests_total{method="GET",route="findings_list",status_class="2xx"} 4.0
+itsm_api_requests_total{method="GET",route="findings_list",status_class="4xx"} 10.0
+itsm_api_requests_total{method="POST",route="ingestion_webhook",status_class="2xx"} 1.0
+itsm_api_requests_total{method="GET",route="finding_bundle",status_class="2xx"} 2.0
+itsm_api_requests_total{method="POST",route="finding_transition",status_class="2xx"} 3.0
+itsm_api_requests_total{method="GET",route="finding_transitions",status_class="2xx"} 1.0
+# HELP itsm_api_requests_created API requests handled, by route template, method and status class
+# TYPE itsm_api_requests_created gauge
+itsm_api_requests_created{method="GET",route="healthz",status_class="2xx"} 1.7952612339763038e+09
+itsm_api_requests_created{method="GET",route="metrics",status_class="2xx"} 1.7952612474190872e+09
+itsm_api_requests_created{method="GET",route="findings_list",status_class="2xx"} 1.7952623028499906e+09
+itsm_api_requests_created{method="GET",route="findings_list",status_class="4xx"} 1.795262302860149e+09
+itsm_api_requests_created{method="POST",route="ingestion_webhook",status_class="2xx"} 1.795262514070827e+09
+itsm_api_requests_created{method="GET",route="finding_bundle",status_class="2xx"} 1.7952625158435793e+09
+itsm_api_requests_created{method="POST",route="finding_transition",status_class="2xx"} 1.7952625158508205e+09
+itsm_api_requests_created{method="GET",route="finding_transitions",status_class="2xx"} 1.7952625158640413e+09
+# HELP itsm_api_request_duration_seconds API request handling duration
+# TYPE itsm_api_request_duration_seconds histogram
+itsm_api_request_duration_seconds_bucket{le="0.005",route="healthz"} 399.0
+itsm_api_request_duration_seconds_bucket{le="0.01",route="healthz"} 400.0
+itsm_api_request_duration_seconds_bucket{le="0.025",route="healthz"} 400.0
+itsm_api_request_duration_seconds_bucket{le="0.05",route="healthz"} 400.0
+itsm_api_request_duration_seconds_bucket{le="0.1",route="healthz"} 400.0
+itsm_api_request_duration_seconds_bucket{le="0.25",route="healthz"} 400.0
+itsm_api_request_duration_seconds_bucket{le="0.5",route="healthz"} 400.0
+itsm_api_request_duration_seconds_bucket{le="1.0",route="healthz"} 400.0
+itsm_api_request_duration_seconds_bucket{le="2.5",route="healthz"} 400.0
+itsm_api_request_duration_seconds_bucket{le="5.0",route="healthz"} 400.0
+itsm_api_request_duration_seconds_bucket{le="10.0",route="healthz"} 400.0
+itsm_api_request_duration_seconds_bucket{le="+Inf",route="healthz"} 400.0
+itsm_api_request_duration_seconds_count{route="healthz"} 400.0
+itsm_api_request_duration_seconds_sum{route="healthz"} 0.21270324799759166
+itsm_api_request_duration_seconds_bucket{le="0.005",route="metrics"} 90.0
+itsm_api_request_duration_seconds_bucket{le="0.01",route="metrics"} 90.0
+itsm_api_request_duration_seconds_bucket{le="0.025",route="metrics"} 90.0
+itsm_api_request_duration_seconds_bucket{le="0.05",route="metrics"} 90.0
+itsm_api_request_duration_seconds_bucket{le="0.1",route="metrics"} 90.0
+itsm_api_request_duration_seconds_bucket{le="0.25",route="metrics"} 90.0
+itsm_api_request_duration_seconds_bucket{le="0.5",route="metrics"} 90.0
+itsm_api_request_duration_seconds_bucket{le="1.0",route="metrics"} 90.0
+itsm_api_request_duration_seconds_bucket{le="2.5",route="metrics"} 90.0
+itsm_api_request_duration_seconds_bucket{le="5.0",route="metrics"} 90.0
+itsm_api_request_duration_seconds_bucket{le="10.0",route="metrics"} 90.0
+itsm_api_request_duration_seconds_bucket{le="+Inf",route="metrics"} 90.0
+itsm_api_request_duration_seconds_count{route="metrics"} 90.0
+itsm_api_request_duration_seconds_sum{route="metrics"} 0.10027936099973189
+itsm_api_request_duration_seconds_bucket{le="0.005",route="findings_list"} 13.0
+itsm_api_request_duration_seconds_bucket{le="0.01",route="findings_list"} 13.0
+itsm_api_request_duration_seconds_bucket{le="0.025",route="findings_list"} 14.0
+itsm_api_request_duration_seconds_bucket{le="0.05",route="findings_list"} 14.0
+itsm_api_request_duration_seconds_bucket{le="0.1",route="findings_list"} 14.0
+itsm_api_request_duration_seconds_bucket{le="0.25",route="findings_list"} 14.0
+itsm_api_request_duration_seconds_bucket{le="0.5",route="findings_list"} 14.0
+itsm_api_request_duration_seconds_bucket{le="1.0",route="findings_list"} 14.0
+itsm_api_request_duration_seconds_bucket{le="2.5",route="findings_list"} 14.0
+itsm_api_request_duration_seconds_bucket{le="5.0",route="findings_list"} 14.0
+itsm_api_request_duration_seconds_bucket{le="10.0",route="findings_list"} 14.0
+itsm_api_request_duration_seconds_bucket{le="+Inf",route="findings_list"} 14.0
+itsm_api_request_duration_seconds_count{route="findings_list"} 14.0
+itsm_api_request_duration_seconds_sum{route="findings_list"} 0.033774586000163254
+itsm_api_request_duration_seconds_bucket{le="0.005",route="ingestion_webhook"} 1.0
+itsm_api_request_duration_seconds_bucket{le="0.01",route="ingestion_webhook"} 1.0
+itsm_api_request_duration_seconds_bucket{le="0.025",route="ingestion_webhook"} 1.0
+itsm_api_request_duration_seconds_bucket{le="0.05",route="ingestion_webhook"} 1.0
+itsm_api_request_duration_seconds_bucket{le="0.1",route="ingestion_webhook"} 1.0
+itsm_api_request_duration_seconds_bucket{le="0.25",route="ingestion_webhook"} 1.0
+itsm_api_request_duration_seconds_bucket{le="0.5",route="ingestion_webhook"} 1.0
+itsm_api_request_duration_seconds_bucket{le="1.0",route="ingestion_webhook"} 1.0
+itsm_api_request_duration_seconds_bucket{le="2.5",route="ingestion_webhook"} 1.0
+itsm_api_request_duration_seconds_bucket{le="5.0",route="ingestion_webhook"} 1.0
+itsm_api_request_duration_seconds_bucket{le="10.0",route="ingestion_webhook"} 1.0
+itsm_api_request_duration_seconds_bucket{le="+Inf",route="ingestion_webhook"} 1.0
+itsm_api_request_duration_seconds_count{route="ingestion_webhook"} 1.0
+itsm_api_request_duration_seconds_sum{route="ingestion_webhook"} 0.004362787999980355
+itsm_api_request_duration_seconds_bucket{le="0.005",route="finding_bundle"} 1.0
+itsm_api_request_duration_seconds_bucket{le="0.01",route="finding_bundle"} 2.0
+itsm_api_request_duration_seconds_bucket{le="0.025",route="finding_bundle"} 2.0
+itsm_api_request_duration_seconds_bucket{le="0.05",route="finding_bundle"} 2.0
+itsm_api_request_duration_seconds_bucket{le="0.1",route="finding_bundle"} 2.0
+itsm_api_request_duration_seconds_bucket{le="0.25",route="finding_bundle"} 2.0
+itsm_api_request_duration_seconds_bucket{le="0.5",route="finding_bundle"} 2.0
+itsm_api_request_duration_seconds_bucket{le="1.0",route="finding_bundle"} 2.0
+itsm_api_request_duration_seconds_bucket{le="2.5",route="finding_bundle"} 2.0
+itsm_api_request_duration_seconds_bucket{le="5.0",route="finding_bundle"} 2.0
+itsm_api_request_duration_seconds_bucket{le="10.0",route="finding_bundle"} 2.0
+itsm_api_request_duration_seconds_bucket{le="+Inf",route="finding_bundle"} 2.0
+itsm_api_request_duration_seconds_count{route="finding_bundle"} 2.0
+itsm_api_request_duration_seconds_sum{route="finding_bundle"} 0.008643885999845224
+itsm_api_request_duration_seconds_bucket{le="0.005",route="finding_transition"} 2.0
+itsm_api_request_duration_seconds_bucket{le="0.01",route="finding_transition"} 3.0
+itsm_api_request_duration_seconds_bucket{le="0.025",route="finding_transition"} 3.0
+itsm_api_request_duration_seconds_bucket{le="0.05",route="finding_transition"} 3.0
+itsm_api_request_duration_seconds_bucket{le="0.1",route="finding_transition"} 3.0
+itsm_api_request_duration_seconds_bucket{le="0.25",route="finding_transition"} 3.0
+itsm_api_request_duration_seconds_bucket{le="0.5",route="finding_transition"} 3.0
+itsm_api_request_duration_seconds_bucket{le="1.0",route="finding_transition"} 3.0
+itsm_api_request_duration_seconds_bucket{le="2.5",route="finding_transition"} 3.0
+itsm_api_request_duration_seconds_bucket{le="5.0",route="finding_transition"} 3.0
+itsm_api_request_duration_seconds_bucket{le="10.0",route="finding_transition"} 3.0
+itsm_api_request_duration_seconds_bucket{le="+Inf",route="finding_transition"} 3.0
+itsm_api_request_duration_seconds_count{route="finding_transition"} 3.0
+itsm_api_request_duration_seconds_sum{route="finding_transition"} 0.011990357999820844
+itsm_api_request_duration_seconds_bucket{le="0.005",route="finding_transitions"} 1.0
+itsm_api_request_duration_seconds_bucket{le="0.01",route="finding_transitions"} 1.0
+itsm_api_request_duration_seconds_bucket{le="0.025",route="finding_transitions"} 1.0
+itsm_api_request_duration_seconds_bucket{le="0.05",route="finding_transitions"} 1.0
+itsm_api_request_duration_seconds_bucket{le="0.1",route="finding_transitions"} 1.0
+itsm_api_request_duration_seconds_bucket{le="0.25",route="finding_transitions"} 1.0
+itsm_api_request_duration_seconds_bucket{le="0.5",route="finding_transitions"} 1.0
+itsm_api_request_duration_seconds_bucket{le="1.0",route="finding_transitions"} 1.0
+itsm_api_request_duration_seconds_bucket{le="2.5",route="finding_transitions"} 1.0
+itsm_api_request_duration_seconds_bucket{le="5.0",route="finding_transitions"} 1.0
+itsm_api_request_duration_seconds_bucket{le="10.0",route="finding_transitions"} 1.0
+itsm_api_request_duration_seconds_bucket{le="+Inf",route="finding_transitions"} 1.0
+itsm_api_request_duration_seconds_count{route="finding_transitions"} 1.0
+itsm_api_request_duration_seconds_sum{route="finding_transitions"} 0.002511443000003055
+# HELP itsm_api_request_duration_seconds_created API request handling duration
+# TYPE itsm_api_request_duration_seconds_created gauge
+itsm_api_request_duration_seconds_created{route="healthz"} 1.7952612339763203e+09
+itsm_api_request_duration_seconds_created{route="metrics"} 1.7952612474191031e+09
+itsm_api_request_duration_seconds_created{route="findings_list"} 1.7952623028500118e+09
+itsm_api_request_duration_seconds_created{route="ingestion_webhook"} 1.7952625140708463e+09
+itsm_api_request_duration_seconds_created{route="finding_bundle"} 1.795262515843598e+09
+itsm_api_request_duration_seconds_created{route="finding_transition"} 1.7952625158508377e+09
+itsm_api_request_duration_seconds_created{route="finding_transitions"} 1.7952625158640578e+09
+# HELP itsm_batch_processing_seconds Duration of one consume-and-process cycle
+# TYPE itsm_batch_processing_seconds histogram
+# HELP itsm_workflow_duration_seconds End-to-end remediation workflow duration
+# TYPE itsm_workflow_duration_seconds histogram
+# HELP itsm_audit_events_total Source audit events handled by the detection consumer
+# TYPE itsm_audit_events_total counter
+# HELP itsm_detection_findings_total Findings produced by deterministic detection
+# TYPE itsm_detection_findings_total counter
+# HELP itsm_reviewer_transitions_total Reviewer lifecycle transitions applied or refused
+# TYPE itsm_reviewer_transitions_total counter
+itsm_reviewer_transitions_total{outcome="applied"} 3.0
+# HELP itsm_reviewer_transitions_created Reviewer lifecycle transitions applied or refused
+# TYPE itsm_reviewer_transitions_created gauge
+itsm_reviewer_transitions_created{outcome="applied"} 1.7952625158508744e+09
+# HELP itsm_investigation_total Bounded agentic investigations by stage outcome
+# TYPE itsm_investigation_total counter
+# HELP itsm_investigation_latency_seconds Duration of a bounded agentic investigation
+# TYPE itsm_investigation_latency_seconds histogram
+# HELP itsm_investigation_model_calls_total Model invocations made by the bounded agentic investigation stage
+# TYPE itsm_investigation_model_calls_total counter
+itsm_investigation_model_calls_total 0.0
+# HELP itsm_investigation_model_calls_created Model invocations made by the bounded agentic investigation stage
+# TYPE itsm_investigation_model_calls_created gauge
+itsm_investigation_model_calls_created 1.795261233976282e+09

@@ -1,0 +1,215 @@
+name: LocalStack Explainable IAM spike
+
+# Optional and dispatch-only, by design.
+#
+# This workflow is NOT a required check and must never become one. The feature
+# under test requires a paid LocalStack plan (Base or Ultimate) and an auth
+# token, so making it a gate would make the repository's qualification
+# dependent on a commercial subscription. See docs/adr/0015 for the reasoning.
+#
+# It exists so that the experiment described in that ADR is reproducible
+# instead of a claim in a document: reproduce an unauthorised iam:PassRole
+# attempt, capture the denial explanation, and check that the explanation is
+# specific enough to be worth feeding an investigation.
+#
+# It has NOT been executed: no plan token was available when it was written.
+# Treat it as an unrun experiment, not as evidence.
+
+on:
+  workflow_dispatch:
+    inputs:
+      soft_mode:
+        description: "Record would-be denials without blocking (IAM_SOFT_MODE=1)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: localstack-iam-spike
+  cancel-in-progress: true
+
+jobs:
+  spike:
+    name: Explainable IAM denial probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LS_CONTAINER: itsm-localstack-spike
+      LS_ENDPOINT: http://127.0.0.1:4566
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Preflight — is a paid LocalStack plan available?
+        id: plan
+        env:
+          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LOCALSTACK_AUTH_TOKEN:-}" ]; then
+            echo "have_token=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### LocalStack spike: NOT RUN"
+              echo ""
+              echo "No \`LOCALSTACK_AUTH_TOKEN\` secret is configured."
+              echo "Explainable IAM is listed under the Base and Ultimate plans"
+              echo "(the policy engine ships in a \`pro\` module), so this"
+              echo "workflow cannot run on the community edition."
+              echo ""
+              echo "This is **NOT RUN**, not a pass. No criterion was evaluated."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "have_token=true" >> "$GITHUB_OUTPUT"
+
+      - name: Start LocalStack with IAM enforcement
+        if: steps.plan.outputs.have_token == 'true'
+        env:
+          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+          SOFT_MODE: ${{ inputs.soft_mode && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          docker run -d --name "$LS_CONTAINER" \
+            -p 4566:4566 \
+            -e "LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN}" \
+            -e "ENFORCE_IAM=1" \
+            -e "DEBUG=1" \
+            -e "IAM_SOFT_MODE=${SOFT_MODE}" \
+            localstack/localstack-pro:latest
+
+      - name: Wait for LocalStack (bounded)
+        if: steps.plan.outputs.have_token == 'true'
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 90); do
+            if curl -fsS "${LS_ENDPOINT}/_localstack/health" >/dev/null 2>&1; then
+              echo "LocalStack ready after ${i}s."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "LocalStack did not become ready within 180s."
+          docker logs --tail 100 "$LS_CONTAINER" || true
+          exit 1
+
+      - name: Create a principal that may create functions but not pass roles
+        if: steps.plan.outputs.have_token == 'true'
+        run: |
+          set -euo pipefail
+          docker exec "$LS_CONTAINER" awslocal iam create-user --user-name probe-user >/dev/null
+          cat > /tmp/probe-policy.json <<'JSON'
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              { "Sid": "CreateOnly", "Effect": "Allow",
+                "Action": "lambda:CreateFunction", "Resource": "*" }
+            ]
+          }
+          JSON
+          docker cp /tmp/probe-policy.json "$LS_CONTAINER:/tmp/probe-policy.json"
+          docker exec "$LS_CONTAINER" awslocal iam put-user-policy \
+            --user-name probe-user --policy-name probe-policy \
+            --policy-document file:///tmp/probe-policy.json
+          docker exec "$LS_CONTAINER" awslocal iam create-access-key \
+            --user-name probe-user \
+            --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text \
+            > /tmp/probe-credentials.txt
+          if [ ! -s /tmp/probe-credentials.txt ]; then
+            echo "Failed to mint access keys for the probe principal."
+            exit 1
+          fi
+          echo "Probe principal created."
+
+      - name: Attempt the unauthorised iam:PassRole call
+        if: steps.plan.outputs.have_token == 'true'
+        run: |
+          set -euo pipefail
+          # The call needs a role to pass. Create one as the admin identity.
+          docker exec "$LS_CONTAINER" awslocal iam create-role \
+            --role-name probe-role --assume-role-policy-document \
+            '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
+            --query 'Role.Arn' --output text > /tmp/role-arn.txt
+          mkdir -p reports/localstack-spike
+          cp /tmp/role-arn.txt reports/localstack-spike/role-arn.txt
+
+          read -r ACCESS_KEY SECRET_KEY < /tmp/probe-credentials.txt
+          export AWS_ENDPOINT_URL="${LS_ENDPOINT}"
+          export AWS_DEFAULT_REGION=us-east-1
+          export AWS_ACCESS_KEY_ID="$ACCESS_KEY"
+          export AWS_SECRET_ACCESS_KEY="$SECRET_KEY"
+
+          # A refusal is the expected outcome; an allowed call means the probe
+          # proved nothing about denials, and must fail the job rather than
+          # quietly record a success.
+          python3 -m pip install --quiet boto3
+          python3 - <<'PY' | tee reports/localstack-spike/denial-response.json
+          import json, sys
+          import boto3
+          from botocore.exceptions import ClientError
+
+          role_arn = open("/tmp/role-arn.txt").read().strip()
+          client = boto3.client("lambda")
+          try:
+              client.create_function(
+                  FunctionName="probe-function",
+                  Runtime="python3.12",
+                  Role=role_arn,
+                  Handler="handler.handler",
+                  Code={"ZipFile": b"PK\x05\x06" + b"\x00" * 18},
+              )
+          except ClientError as exc:
+              payload = {
+                  "denied": True,
+                  "error_code": exc.response.get("Error", {}).get("Code"),
+                  "message": exc.response.get("Error", {}).get("Message", ""),
+              }
+              print(json.dumps(payload, indent=2))
+              sys.exit(0)
+          print(json.dumps({"denied": False, "message": "the call succeeded"}, indent=2))
+          sys.exit(1)
+          PY
+
+      - name: Capture the policy-engine explanation from the logs
+        if: steps.plan.outputs.have_token == 'true'
+        run: |
+          set -euo pipefail
+          docker logs "$LS_CONTAINER" > reports/localstack-spike/localstack.log 2>&1
+          # The whole point is the explanation, so its absence fails the job.
+          if ! grep -qi "iam:PassRole" reports/localstack-spike/localstack.log; then
+            echo "No iam:PassRole denial in the localstack log: the explanation"
+            echo "this spike exists to obtain was not produced."
+            exit 1
+          fi
+          grep -i "not authorized to perform" reports/localstack-spike/localstack.log \
+            > reports/localstack-spike/denial-explanation.txt || true
+          if [ ! -s reports/localstack-spike/denial-explanation.txt ]; then
+            echo "Denial mentioned iam:PassRole but no readable explanation line"
+            echo "matched. Inspect localstack.log."
+            exit 1
+          fi
+          {
+            echo "### LocalStack spike: RAN"
+            echo ""
+            echo "Captured denial explanation:"
+            echo ""
+            echo '```'
+            head -5 reports/localstack-spike/denial-explanation.txt
+            echo '```'
+            echo ""
+            echo "This is a simulator observation, not an AWS audit event. It is"
+            echo "not CloudTrail and must not be ingested as one."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload captures
+        if: always() && steps.plan.outputs.have_token == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: localstack-iam-spike
+          path: reports/localstack-spike/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f "$LS_CONTAINER" || true

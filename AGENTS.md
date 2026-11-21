@@ -1,8 +1,12 @@
-# Coding Agent Instructions --- Headless ITSM Self-Healing Platform
+# Coding Agent Instructions --- Event-Driven, Evidence-First Agentic Security Audit System
 
 ## Role
 
-Implement a portfolio-grade, headless ITSM self-healing platform.
+Implement a portfolio-grade, headless security audit platform. The product
+is not a self-healing system and must not be described as one: the model
+proposes, deterministic policy authorizes, allowlisted adapters execute, and
+an independent verifier establishes success. There is no automated
+remediation path in the baseline.
 Inspect the existing repository before changing anything. Build small,
 testable vertical slices and report evidence, not assumptions.
 

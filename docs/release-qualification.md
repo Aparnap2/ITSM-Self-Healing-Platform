@@ -10,7 +10,7 @@ prove. It is a companion to `docs/security-ci.md` and
 - Portfolio baseline: simulators only (Mockoon, Moto, the in-process
   infrastructure simulator). No real production data, credentials, or
   external SaaS mutations.
-- **Current CI record (observed 2026-11-17).** The vehicle is PR #26
+- **CI record for `f4b5640` (observed 2026-11-17).** The vehicle is PR #26
   (`fix/release-workflow-yaml` into `main`), squash-merged on 2026-11-17 as
   `f4b5640fba7294f18f8a4e14fd440f9809626ecb`. The `push` run `44016524854`
   on `main` has `headSha`
@@ -23,9 +23,11 @@ prove. It is a companion to `docs/security-ci.md` and
   `success`, no owner-marked optional job. Per-suite counts: unit 513,
   contract 55, security 45, integration 161, fault injection 20, scenarios
   24, e2e 12. Artifacts are unexpired and listed in the evidence table.
-  **This record qualifies CI only.** It does not confer staging readiness
-  or demo qualification; those are separate states with separate evidence,
-  defined below and currently **not achieved**.
+  **This record qualifies CI for `f4b5640` only.** It does not confer
+  staging readiness or demo qualification on that commit, and it is not
+  inherited by later commits. A later commit (`a6e76a0`) does hold both;
+  see `docs/staging-demo-qualification.md`. Its CI evidence is a separate
+  run (849 executions) and is not a re-use of the numbers above.
 - **Superseded record (observed 2026-11-15).** The vehicle is PR #16
   (`feat/detection-precision` into `main`), squash-merged on 2026-11-15 as
   `2ebd7ef3ba426c6021bacc5054a74eb798edb510`. The `push` run `43672858417`
@@ -674,6 +676,14 @@ qualification is evidence about one CI run on one commit under simulators.
   are each a single instance in CI. No failover, leader election, partition
   behaviour, or broker-cluster recovery is tested. `docs/nats-stream-config.md`
   states the single-node scope.
-- **Nothing here is a production-readiness claim.** No staging stack has been
-  brought up from this commit, no rehearsal has run with a real model, and no
-  independent human review has occurred.
+- **Nothing here is a production-readiness claim.** This record covers
+  `f4b5640`. A later, separate record
+  (`docs/staging-demo-qualification.md`) does bring up a local
+  staging-equivalent stack from a later commit and run one rehearsal with a
+  real model; it is explicitly *not* a cloud staging environment, and it
+  still makes no production-readiness claim. Read that document for the
+  demo verdicts; read this one for what the CI suite itself establishes.
+- **No independent human review has occurred.** Every approval in this
+  repository's history is the author's. GitHub forbids self-approval, so the
+  "two-reviewer" workflow is exercised only by the *application's* simulated
+  identities, never by two independent humans on the PR.

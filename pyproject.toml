@@ -17,6 +17,12 @@ dependencies = [
     "cryptography>=42,<51",
     "structlog>=24.1,<26",
     "tenacity>=8.3,<10",
+    # Runtime imports in src/itsm_agent/observability (metrics + tracing).
+    # These were previously declared only in the dev extra, so the application
+    # image installed with --no-dev could not start api/worker/relay/retention.
+    "prometheus-client>=0.20,<1",
+    "opentelemetry-sdk>=1.25,<2",
+    "opentelemetry-exporter-otlp>=1.25,<2",
 ]
 
 [project.optional-dependencies]
@@ -28,9 +34,6 @@ dev = [
     "mypy>=1.10,<2",
     "respx>=0.21,<1",
     "moto[s3,sts]>=5,<6",
-    "opentelemetry-sdk>=1.25,<2",
-    "opentelemetry-exporter-otlp>=1.25,<2",
-    "prometheus-client>=0.20,<1",
     # CI-0 supply-chain gates (release-qualification requirement):
     # pip-audit = known-vulnerability audit of the locked environment,
     # bandit = SAST scan of src/ before any push to the review PR.

@@ -190,8 +190,111 @@ def generate_tls_material(
     )
 
 
+def load_tls_material(
+    directory: str,
+    hostnames: tuple[str, ...] = (),
+    *,
+    now: datetime | None = None,
+) -> TlsMaterial | None:
+    """Return previously written material, or ``None`` when it is unusable.
+
+    The relying party builds its TLS context once, from the CA file it pins.
+    HTTPX does not re-read that file per request, so regenerating the CA on an
+    identity restart leaves a running API trusting a CA that no longer signs
+    the JWKS endpoint — reviewer authentication then fails until the API is
+    restarted too, with no obvious cause.
+
+    Reuse is deliberately conservative: material is reused only when the CA
+    still signs the server certificate, every requested hostname is covered by
+    the certificate's SANs, and the certificate is valid for at least another
+    hour. Anything short of that regenerates, and the regeneration is honest
+    because the consumer of the CA has genuinely changed.
+    """
+    from pathlib import Path
+
+    base = Path(directory)
+    files = {
+        "ca": base / "simulator-ca.pem",
+        "cert": base / "simulator-cert.pem",
+        "key": base / "simulator-key.pem",
+    }
+    try:
+        ca_pem = files["ca"].read_bytes()
+        cert_pem = files["cert"].read_bytes()
+        key_pem = files["key"].read_bytes()
+    except OSError:
+        return None
+
+    try:
+        ca_cert = x509.load_pem_x509_certificate(ca_pem)
+        server_cert = x509.load_pem_x509_certificate(cert_pem)
+        server_key = serialization.load_pem_private_key(key_pem, password=None)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(server_key, rsa.RSAPrivateKey):
+        return None
+
+    reference = now or datetime.now(UTC)
+    try:
+        not_after = server_cert.not_valid_after_utc
+    except AttributeError:  # pragma: no cover - cryptography < 42
+        not_after = server_cert.not_valid_after.replace(tzinfo=UTC)
+    if not_after - reference < timedelta(hours=1):
+        return None
+
+    ca_public = ca_cert.public_key()
+    if not isinstance(ca_public, rsa.RSAPublicKey):
+        return None
+    signature_hash = server_cert.signature_hash_algorithm
+    if signature_hash is None:
+        return None
+    try:
+        ca_public.verify(
+            server_cert.signature,
+            server_cert.tbs_certificate_bytes,
+            padding.PKCS1v15(),
+            signature_hash,
+        )
+    except Exception:  # noqa: BLE001 - any verification failure means "regenerate"
+        return None
+
+    def _spki(public: Any) -> bytes:
+        raw: bytes = public.public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        return raw
+
+    if _spki(server_key.public_key()) != _spki(server_cert.public_key()):
+        return None
+
+    if hostnames:
+        try:
+            san = server_cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+        except x509.ExtensionNotFound:
+            return None
+        covered = {
+            str(name.value)
+            for name in san.value
+            if isinstance(name, (x509.DNSName, x509.IPAddress))
+        }
+        if not set(hostnames) <= covered:
+            return None
+
+    return TlsMaterial(
+        ca_cert_pem=ca_pem,
+        server_cert_pem=cert_pem,
+        server_key_pem=key_pem,
+    )
+
+
 def write_tls_material(material: TlsMaterial, directory: str) -> dict[str, str]:
-    """Write the CA, certificate and key to a directory; return the paths."""
+    """Write the CA, certificate and key to a directory; return the paths.
+
+    The private key is written ``0600``: the CA and certificate are public
+    material the host-side runner must read, but nothing outside the simulator
+    process has any business reading the key that signs tokens.
+    """
     from pathlib import Path
 
     base = Path(directory)
@@ -204,6 +307,9 @@ def write_tls_material(material: TlsMaterial, directory: str) -> dict[str, str]:
     paths["ca"].write_bytes(material.ca_cert_pem)
     paths["cert"].write_bytes(material.server_cert_pem)
     paths["key"].write_bytes(material.server_key_pem)
+    paths["ca"].chmod(0o644)
+    paths["cert"].chmod(0o644)
+    paths["key"].chmod(0o600)
     return {name: str(path) for name, path in paths.items()}
 
 
@@ -215,6 +321,7 @@ __all__ = [
     "encode_jwt",
     "generate_signing_key",
     "generate_tls_material",
+    "load_tls_material",
     "mint_claims",
     "write_tls_material",
 ]

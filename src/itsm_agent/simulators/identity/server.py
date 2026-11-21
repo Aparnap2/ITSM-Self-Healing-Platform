@@ -31,13 +31,23 @@ from itsm_agent.simulators.identity.keys import (
     encode_jwt,
     generate_signing_key,
     generate_tls_material,
+    load_tls_material,
     mint_claims,
     write_tls_material,
 )
 
-#: Hosts the simulator is allowed to bind to. Anything else is refused: a
-#: simulator reachable from the network would be a credential oracle.
+#: Hosts the simulator is allowed to bind to by default. Anything else is
+#: refused: a simulator reachable from the network would be a credential
+#: oracle.
 ALLOWED_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+#: Wildcard binds, permitted ONLY with the explicit container opt-in. Inside
+#: an isolated compose network the service must listen on a routable address
+#: for its peers; the host's published port stays bound to 127.0.0.1 and the
+#: environment guard in ``__main__`` still refuses anything but
+#: local/test/staging. This is a bind-address concession for a private
+#: container network, never an authentication concession.
+ALLOWED_CONTAINER_HOSTS = frozenset({"0.0.0.0", "::"})
 
 
 class TokenRequest(BaseModel):
@@ -57,6 +67,13 @@ class SimulatorConfig:
     audience: str
     key: SigningKey
     subjects: tuple[str, ...]
+    #: Public base URL the simulator advertises in its discovery document.
+    #: ``None`` falls back to the loopback default used by the test suite.
+    base_url: str | None = None
+
+    @property
+    def resolved_base_url(self) -> str:
+        return self.base_url or "https://127.0.0.1:8443"
 
 
 def create_app(config: SimulatorConfig) -> FastAPI:
@@ -73,6 +90,34 @@ def create_app(config: SimulatorConfig) -> FastAPI:
     async def jwks() -> JSONResponse:
         return JSONResponse(
             {"keys": [config.key.jwk()]},
+            headers={"X-Simulator": "itsm-identity-simulator"},
+        )
+
+    @app.get("/.well-known/openid-configuration")
+    async def discovery() -> JSONResponse:
+        """Discovery metadata for operators and readiness probes.
+
+        The relying party does NOT use this document: it is configured with an
+        explicit ``ITSM_OIDC_JWKS_URL`` and pins the CA. Discovery is here so a
+        readiness probe can assert the simulator's advertised surface matches
+        the one the platform is wired to, instead of guessing it.
+        """
+        base = config.resolved_base_url.rstrip("/")
+        return JSONResponse(
+            {
+                "issuer": config.issuer,
+                "jwks_uri": f"{base}/jwks",
+                "token_endpoint": f"{base}/token",
+                "id_token_signing_alg_values_supported": ["RS256"],
+                "subject_types_supported": ["public"],
+                # Stated plainly: the token endpoint performs no client
+                # authentication. Authorization is the relying party's job and
+                # rests on the application directory, never on these claims.
+                "token_endpoint_auth_methods_supported": ["none"],
+                "scopes_supported": ["simulator"],
+                "x-simulator": True,
+                "x-simulator-notice": __simulator_notice__,
+            },
             headers={"X-Simulator": "itsm-identity-simulator"},
         )
 
@@ -106,13 +151,21 @@ def create_app(config: SimulatorConfig) -> FastAPI:
     return app
 
 
-def assert_loopback(host: str) -> None:
-    """Refuse to serve anything but the loopback interface."""
-    if host not in ALLOWED_HOSTS:
-        raise ValueError(
-            "the identity simulator may only bind to loopback "
-            f"({sorted(ALLOWED_HOSTS)}), not {host!r}"
-        )
+def assert_loopback(host: str, *, allow_container_bind: bool = False) -> None:
+    """Refuse to serve beyond loopback unless the container opt-in is given.
+
+    The default is unchanged and remains the safe one. ``allow_container_bind``
+    admits only the wildcard addresses and only because a compose service must
+    be reachable by its peers on the private network.
+    """
+    if host in ALLOWED_HOSTS:
+        return
+    if allow_container_bind and host in ALLOWED_CONTAINER_HOSTS:
+        return
+    raise ValueError(
+        "the identity simulator may only bind to loopback "
+        f"({sorted(ALLOWED_HOSTS)}) outside a container, not {host!r}"
+    )
 
 
 async def run(
@@ -125,6 +178,8 @@ async def run(
     state_dir: str | None = None,
     key: SigningKey | None = None,
     material: TlsMaterial | None = None,
+    allow_container_bind: bool = False,
+    base_url: str | None = None,
 ) -> None:
     """Serve the simulator over TLS until cancelled.
 
@@ -133,10 +188,13 @@ async def run(
     """
     import uvicorn
 
-    assert_loopback(host)
+    assert_loopback(host, allow_container_bind=allow_container_bind)
     signing_key = key or generate_signing_key()
-    tls = material or generate_tls_material()
     directory = state_dir or os.path.join(os.path.expanduser("~"), ".itsm-simulator")
+    # Same reasoning as the CLI: reuse material a running relying party may
+    # already trust rather than invalidating it on every restart.
+    hostnames = tuple(dict.fromkeys((host, "localhost", "127.0.0.1")))
+    tls = material or load_tls_material(directory, hostnames) or generate_tls_material(hostnames)
     paths = write_tls_material(tls, directory)
 
     app = create_app(
@@ -145,6 +203,7 @@ async def run(
             audience=audience,
             key=signing_key,
             subjects=subjects,
+            base_url=base_url,
         )
     )
     config = uvicorn.Config(

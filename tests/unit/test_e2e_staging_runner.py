@@ -317,6 +317,7 @@ def test_report_states_that_the_proposal_is_advisory() -> None:
         finding=finding,
         status_before_investigation="OPEN",
         status_after_investigation="OPEN",
+        status_final="VERIFIED",
         investigation_status="COMPLETED",
         proposal=None,
         model_calls_used=1,
@@ -329,7 +330,14 @@ def test_report_states_that_the_proposal_is_advisory() -> None:
 
     statements = report["statements"]
     assert "ADVISORY" in statements["proposal_is_advisory"]
-    assert statements["finding_status_unchanged_by_model"] is True
+    # The investigation stage left the finding alone...
+    assert statements["finding_status_unchanged_by_investigation"] is True
+    assert statements["finding_status_after_investigation"] == "OPEN"
+    # ...and the reviewers, not the model, moved it to a terminal state. These
+    # two facts must be distinguishable: reading the status once at the end of
+    # the run would report "changed" and blame the model for it.
+    assert statements["finding_status_final"] == "VERIFIED"
+    assert report["detection"]["status_final"] == "VERIFIED"
     assert statements["model_calls_used"] == 1
     assert statements["what_this_run_does_not_prove"]
     assert any("simulated" in item for item in statements["what_this_run_does_not_prove"])
@@ -458,6 +466,30 @@ def test_grounding_rejects_a_fabricated_evidence_reference() -> None:
     assert result["resolves_to_persisted_evidence"] is False
 
 
+def test_grounding_rejects_a_real_id_that_was_never_in_the_prompt() -> None:
+    """Resolving to a persisted row is not the same as having been shown it.
+
+    An evidence-reference row has its own id, distinct from the source event
+    id that the prompt actually renders as the evidence key. A model that
+    cites the reference id has cited something real that it was never given,
+    so `resolves` can be True while `in_snapshot` is False. Both must be
+    checked; accepting either one alone would let an unsupported claim
+    through.
+    """
+    source_event_id = uuid.uuid4()
+    reference_id = uuid.uuid4()
+    persisted = SimpleNamespace(id=reference_id, source_event_id=source_event_id)
+
+    result = runner._evidence_grounding(  # noqa: SLF001 - unit assertion
+        proposal=_proposal(str(reference_id)),
+        snapshot_ids=(source_event_id,),
+        persisted=[persisted],
+    )
+
+    assert result["resolves_to_persisted_evidence"] is True
+    assert result["in_snapshot"] is False
+
+
 def test_grounding_without_a_proposal_is_not_checked() -> None:
     result = runner._evidence_grounding(  # noqa: SLF001 - unit assertion
         proposal=None,
@@ -486,3 +518,253 @@ def test_the_report_path_lives_in_the_committed_staging_directory() -> None:
     path = runner.default_report_path("2026-11-16T101500Z")
     assert path.parent == runner.DEFAULT_REPORT_DIR
     assert "staging" in path.parts
+
+
+def test_oidc_mode_report_redaction_never_reads_a_reviewer_token(
+    tmp_path: Path,
+) -> None:
+    """Regression: the OIDC path must not require ITSM_REVIEWER_TOKEN.
+
+    `sanitize_report` used to evaluate `options.reviewer_token` unconditionally,
+    so an OIDC run crashed *after* doing all the work — the mode the staging
+    deployment actually uses could never produce a report.
+    """
+    env = _env(
+        ITSM_IDENTITY_BASE_URL="https://127.0.0.1:8444",
+        ITSM_IDENTITY_CA_FILE="/tmp/simulator-ca.pem",
+        ITSM_REVIEWER_SUBJECT_A="reviewer-a",
+        ITSM_REVIEWER_SUBJECT_B="reviewer-b",
+    )
+    env.pop("ITSM_AUTH_HMAC_SECRET", None)
+    env.pop("ITSM_REVIEWER_TOKEN", None)
+
+    options = runner.StagingOptions(
+        env=env,
+        api_base_url="http://127.0.0.1:8001",
+        report_path=tmp_path / "report.json",
+    )
+
+    assert options.credential_mode == runner.CREDENTIAL_MODE_OIDC
+    # Must not raise, and must redact only what was actually used.
+    assert runner.redaction_secrets(options) == ["gsk-not-a-real-key"]
+
+
+def test_token_mode_redacts_the_supplied_token(tmp_path: Path) -> None:
+    env = _env(ITSM_REVIEWER_TOKEN="header.payload.signature")
+    env.pop("ITSM_AUTH_HMAC_SECRET", None)
+    options = runner.StagingOptions(
+        env=env,
+        api_base_url="http://127.0.0.1:8001",
+        report_path=tmp_path / "report.json",
+    )
+    assert runner.redaction_secrets(options) == [
+        "gsk-not-a-real-key",
+        "header.payload.signature",
+    ]
+
+
+def test_hmac_mode_redacts_the_signing_secret_not_a_token(tmp_path: Path) -> None:
+    options = runner.StagingOptions(
+        env=_env(),
+        api_base_url="http://127.0.0.1:8001",
+        report_path=tmp_path / "report.json",
+    )
+    assert runner.redaction_secrets(options) == [
+        "gsk-not-a-real-key",
+        "reviewer-secret-value-0123456789",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# The recorded outcome is verified, not inferred from HTTP 200s.
+# ---------------------------------------------------------------------------
+
+
+def _ledger(*entries: tuple[str, str, str]) -> list[dict[str, str]]:
+    return [
+        {"to_status": to_status, "actor_id": actor, "verifier_id": verifier}
+        for to_status, actor, verifier in entries
+    ]
+
+
+def test_audit_trail_accepts_a_terminal_outcome_with_a_distinct_verifier() -> None:
+    trail = runner._audit_trail_check(  # noqa: SLF001
+        finding_id=uuid.uuid4(),
+        ledger=_ledger(
+            ("VERIFIED", "reviewer-b", "reviewer-b"),
+            ("RESOLVED", "reviewer-a", "reviewer-a"),
+            ("ACKNOWLEDGED", "reviewer-a", "reviewer-a"),
+        ),
+        bundle_after={"finding": {"status": "VERIFIED"}, "bundle_hash": "abc"},
+        expected_status="VERIFIED",
+        resolver="reviewer-a",
+        verifier="reviewer-b",
+    )
+    assert trail["verified"] is True
+    assert trail["reasons"] == []
+    assert trail["transition_count"] == 3
+    assert trail["verifier_is_distinct"] is True
+
+
+def test_audit_trail_rejects_the_resolver_verifying_its_own_close_out() -> None:
+    trail = runner._audit_trail_check(  # noqa: SLF001
+        finding_id=uuid.uuid4(),
+        ledger=_ledger(
+            ("VERIFIED", "reviewer-a", "reviewer-a"), ("RESOLVED", "reviewer-a", "reviewer-a")
+        ),
+        bundle_after={"finding": {"status": "VERIFIED"}},
+        expected_status="VERIFIED",
+        resolver="reviewer-a",
+        verifier="reviewer-b",
+    )
+    assert trail["verified"] is False
+    assert any("distinct principal" in reason for reason in trail["reasons"])
+    assert any("not recorded for reviewer-b" in reason for reason in trail["reasons"])
+
+
+def test_audit_trail_rejects_a_bundle_that_still_reports_open() -> None:
+    """A 200 from the transition endpoint is not proof the bundle moved."""
+    trail = runner._audit_trail_check(  # noqa: SLF001
+        finding_id=uuid.uuid4(),
+        ledger=_ledger(
+            ("VERIFIED", "reviewer-b", "reviewer-b"), ("RESOLVED", "reviewer-a", "reviewer-a")
+        ),
+        bundle_after={"finding": {"status": "OPEN"}},
+        expected_status="VERIFIED",
+        resolver="reviewer-a",
+        verifier="reviewer-b",
+    )
+    assert trail["verified"] is False
+    assert any("instead of VERIFIED" in reason for reason in trail["reasons"])
+
+
+def test_audit_trail_rejects_an_empty_ledger() -> None:
+    trail = runner._audit_trail_check(  # noqa: SLF001
+        finding_id=uuid.uuid4(),
+        ledger=[],
+        bundle_after={},
+        expected_status="VERIFIED",
+        resolver="reviewer-a",
+        verifier="reviewer-b",
+    )
+    assert trail["verified"] is False
+    assert any("no lifecycle transitions" in reason for reason in trail["reasons"])
+
+
+def test_audit_trail_requires_the_verifier_to_be_the_expected_principal() -> None:
+    trail = runner._audit_trail_check(  # noqa: SLF001
+        finding_id=uuid.uuid4(),
+        ledger=_ledger(
+            ("VERIFIED", "reviewer-c", "reviewer-c"), ("RESOLVED", "reviewer-a", "reviewer-a")
+        ),
+        bundle_after={"finding": {"status": "VERIFIED"}},
+        expected_status="VERIFIED",
+        resolver="reviewer-a",
+        verifier="reviewer-b",
+    )
+    assert trail["verified"] is False
+    assert any("not recorded for reviewer-b" in reason for reason in trail["reasons"])
+
+
+# ---------------------------------------------------------------------------
+# The evidence statement describes what was cited, not what was available.
+# ---------------------------------------------------------------------------
+
+
+def test_no_citations_are_reported_as_not_evidence_grounded() -> None:
+    statements = runner._not_proven_statements(  # noqa: SLF001
+        persisted_evidence_count=3,
+        transitions_accepted=3,
+        cited_evidence_ids=[],
+        grounding={
+            "checked": True,
+            "cited_evidence_ids": [],
+            "in_snapshot": True,
+            "resolves_to_persisted_evidence": True,
+        },
+    )
+    evidence = [s for s in statements if "evidence" in s.lower()][0]
+    assert "cited none" in evidence
+    assert "was not evidence-grounded" in evidence
+    assert "3" in evidence
+
+
+def test_available_references_are_not_reported_as_cited() -> None:
+    """Three stored references and zero citations must not read as grounding."""
+    statements = runner._not_proven_statements(  # noqa: SLF001
+        persisted_evidence_count=3, transitions_accepted=3
+    )
+    assert any("cited none" in s for s in statements)
+    assert not any("The model cited evidence ids that resolve" in s for s in statements)
+
+
+def test_a_failed_grounding_check_is_reported_as_failed() -> None:
+    statements = runner._not_proven_statements(  # noqa: SLF001
+        persisted_evidence_count=1,
+        transitions_accepted=3,
+        cited_evidence_ids=["e1"],
+        grounding={"checked": True, "in_snapshot": False, "resolves_to_persisted_evidence": True},
+    )
+    assert any("did NOT pass" in s for s in statements)
+
+
+def test_a_passing_check_states_both_of_its_facts() -> None:
+    statements = runner._not_proven_statements(  # noqa: SLF001
+        persisted_evidence_count=2,
+        transitions_accepted=3,
+        cited_evidence_ids=["e1"],
+        grounding={"checked": True, "in_snapshot": True, "resolves_to_persisted_evidence": True},
+    )
+    evidence = [s for s in statements if "cited" in s][0]
+    assert "every one resolves" in evidence
+    assert "rendered into the prompt" in evidence
+    assert "not evidential sufficiency" in evidence
+
+
+# ---------------------------------------------------------------------------
+# The finding belongs to this event, not merely to this tenant.
+# ---------------------------------------------------------------------------
+
+
+async def test_wait_for_finding_picks_the_finding_for_this_event() -> None:
+    tenant = uuid.uuid4()
+    event_id = uuid.uuid4()
+    other_event = uuid.uuid4()
+    older = SimpleNamespace(id=uuid.uuid4())
+    current = SimpleNamespace(id=uuid.uuid4())
+
+    class _Findings:
+        async def list_for_tenant(self, _tenant: Any) -> list[Any]:
+            # Newest first would be tempting; the older finding is deliberately
+            # first so a "take findings[0]" implementation fails this test.
+            return [older, current]
+
+    class _Evidence:
+        async def list_for_tenant_finding(self, _tenant: Any, finding_id: Any) -> list[Any]:
+            anchor = other_event if finding_id == older.id else event_id
+            return [SimpleNamespace(source_event_id=anchor)]
+
+    repositories = SimpleNamespace(findings=_Findings(), evidence_references=_Evidence())
+    found = await runner._wait_for_finding(  # noqa: SLF001
+        repositories, tenant, source_event_id=event_id, timeout_seconds=1.0
+    )
+    assert found is current
+
+
+async def test_wait_for_finding_refuses_an_unrelated_finding() -> None:
+    """A tenant full of findings from earlier runs is not evidence of this run."""
+    tenant = uuid.uuid4()
+
+    class _Findings:
+        async def list_for_tenant(self, _tenant: Any) -> list[Any]:
+            return [SimpleNamespace(id=uuid.uuid4())]
+
+    class _Evidence:
+        async def list_for_tenant_finding(self, _tenant: Any, _finding_id: Any) -> list[Any]:
+            return [SimpleNamespace(source_event_id=uuid.uuid4())]
+
+    repositories = SimpleNamespace(findings=_Findings(), evidence_references=_Evidence())
+    found = await runner._wait_for_finding(  # noqa: SLF001
+        repositories, tenant, source_event_id=uuid.uuid4(), timeout_seconds=0.1
+    )
+    assert found is None

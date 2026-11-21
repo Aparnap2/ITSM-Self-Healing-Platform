@@ -231,22 +231,27 @@ CI run `44016524854`, 15/15 jobs `success`, 777 unique tests):
 | WP | State | Evidence | What is NOT proven |
 | --- | --- | --- | --- |
 | A — reviewer provisioning | ✅ merged (#19) | 13 unit + 11 integration tests; runtime role still cannot write the directory; every change versioned and audited per tenant | — |
-| B — RS256 identity simulator | ✅ merged (#24) | 15 contract tests drive the production `OIDCAuthenticator` + `HttpJwksProvider` over TLS with a pinned CA; a self-granted `admin` claim is ignored in favour of the directory | not wired into `compose.yaml`; no staging stack serves it |
+| B — RS256 identity simulator | ✅ merged (#24), wired into compose in WP-I | 17 contract tests drive the production `OIDCAuthenticator` + `HttpJwksProvider` over TLS with a pinned CA; a self-granted `admin` claim is ignored in favour of the directory; the compose `identity` service serves it with the CA pinned by every client | the tokens are simulator-issued; no real IdP was exercised |
 | C — evidence producer | ✅ merged (#21) | 4 integration tests; the reference is written in the finding's own tenant transaction | — |
 | D — observability | ✅ merged (#20) | 23 declared metrics with a doc/code parity guard; API scrape enabled | no assertion that spans reach a real OTLP collector |
-| E — rehearsal runner | ✅ merged (#25) | OIDC/token/HMAC credential modes, two-reviewer lifecycle, mandatory bundle, grounding checks, redacted committed report; unit-tested | **never executed against a live stack with a real model** |
+| E — rehearsal runner | ✅ merged (#25), executed in WP-I | OIDC/token/HMAC credential modes, two-reviewer lifecycle, mandatory bundle, grounding checks, redacted committed report; **executed live at `a6e76a0`**: 1 real Groq call of 3, 3 accepted transitions, grounding `in_snapshot=True` and `resolves=True` | one run on one tenant; not a statistical sample of model quality |
 | F — failure scenarios | ✅ merged (#22) | 2 new fault-injection tests (mid-stream broker interruption, real httpx read timeout) | — |
 | G — artifact split | ✅ merged (#22) | `pilot-metrics.json` byte-stable and asserted; `pilot-performance.json` machine-dependent and never asserted | — |
-| H — qualification record | ✅ this change | `docs/release-qualification.md`: two qualification states, per-criterion status for `f4b5640`, rehearsal disqualifier set | — |
-| I — demo workflow | ⬜ NOT STARTED | — | `make demo-up` / `demo-run` / `demo-down` and the storyboard do not exist in the required form |
+| H — qualification record | ✅ merged (#27, #28) | `docs/release-qualification.md`: two qualification states, per-criterion status for `f4b5640`, rehearsal disqualifier set; superseded for demo purposes by `docs/staging-demo-qualification.md` | the `f4b5640` CI numbers are that SHA's; WP-I evidence is bound to `a6e76a0` |
+| I — demo workflow | ✅ implemented, executed and recorded at `a6e76a0`; CI 15/15 at the same SHA | `docs/staging-demo-qualification.md`: runnable staging stack (compose + OIDC + migration gate), `make demo-up/demo-verify/demo-evidence/demo-run/demo-down`, live `STAGING_READY: PASS` (14 emitted checks, 16 criteria) and `DEMO_QUALIFIED: PASS` with screenshots and raw captures under `evals/reports/staging/`; CI run `44464855386` = 856 executions, 0 failures, 0 skipped; one earlier failure is kept under `evals/reports/staging/failures/` | local staging-equivalent only; no cloud staging; system outbox rows not drained (pre-existing); the rehearsal is one run on one tenant |
 | J — independent review | ⛔ BLOCKED | `main` requires 0 approving reviews; solo-maintained | no independent human review exists |
 
-**Qualification states for `f4b5640`** (see `docs/release-qualification.md`):
-`CI_QUALIFIED` **PASS**; `STAGING_READY` **FAIL** (criterion 6: the
-documented stack runs `ITSM_ENV=local` with `ITSM_AUTH_MODE=hmac` and no
-compose service provides an OIDC provider, so the staging-compatible
-authentication row fails); `DEMO_QUALIFIED` **NOT RUN** (no rehearsal
-artifact exists). Do not restate this as "staging ready" or "demo qualified".
+**Qualification states for `f4b5640`** (historical, see
+`docs/release-qualification.md`): `CI_QUALIFIED` **PASS**; `STAGING_READY`
+**FAIL** (criterion 6: the documented stack ran `ITSM_ENV=local` with
+`ITSM_AUTH_MODE=hmac` and no compose service provided an OIDC provider, so
+the staging-compatible authentication row failed); `DEMO_QUALIFIED`
+**NOT RUN** (no rehearsal artifact existed).
+
+**Qualification states for `a6e76a0`** (see
+`docs/staging-demo-qualification.md`): `CI_QUALIFIED` **PASS**; `STAGING_READY`
+**PASS**; `DEMO_QUALIFIED` **PASS**. The PASS does not retroactively upgrade
+`f4b5640`, which remains the FAIL/NOT RUN above.
 
 
 ## Remaining work — 2026-11-14 (todo list for delegated execution)

@@ -1,0 +1,29 @@
+{
+  "tenant": "11111111-1111-1111-1111-111111111111",
+  "probes": [
+    {
+      "case": "no authorization header",
+      "http_status": 401,
+      "detail": "{\"detail\":\"invalid or missing credentials\"}",
+      "expected": "401/403"
+    },
+    {
+      "case": "malformed bearer token",
+      "http_status": 401,
+      "detail": "{\"detail\":\"invalid or missing credentials\"}",
+      "expected": "401/403"
+    },
+    {
+      "case": "valid reviewer token",
+      "http_status": 200,
+      "detail": "[{\"id\":\"3df90d14-3e5e-4592-81d3-b6cbf3424586\",\"tenant_id\":\"11111111-1111-1111-1111-111111111111\",\"finding_type\":\"MISSING_APPROVAL\",\"severity\":\"P2\",\"status\":\"VER",
+      "expected": "200"
+    },
+    {
+      "case": "signed token, no directory row",
+      "http_status": 401,
+      "detail": "{\"detail\":\"invalid or missing credentials\"}",
+      "expected": "401/403"
+    }
+  ]
+}

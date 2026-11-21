@@ -1,11 +1,12 @@
 """CLI for the LOCAL identity simulator — development and staging only.
 
-    python -m itsm_agent.simulators.identity serve \\
+    python -m itsm_agent.simulators.identity \\
         --issuer https://issuer.simulator.test --audience itsm-audience \\
         --subject reviewer-a --subject reviewer-b
 
-prints the JWKS URL, the token URL and the CA path, then serves until
-interrupted. ``--token`` mints a token for a subject instead.
+serves until interrupted (serving is the default mode) and prints the JWKS
+URL, the token URL and the CA path. ``--token --mint-subject ...`` mints a
+token for a subject instead.
 
 Every output is labelled as simulator output: this is not an identity
 provider and it holds no application authorization.
@@ -24,6 +25,7 @@ from itsm_agent.simulators.identity.client import fetch_token
 from itsm_agent.simulators.identity.keys import (
     generate_signing_key,
     generate_tls_material,
+    load_tls_material,
     write_tls_material,
 )
 from itsm_agent.simulators.identity.server import assert_loopback, run
@@ -44,6 +46,24 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8443)
+    parser.add_argument(
+        "--public-url",
+        default="",
+        help="base URL advertised in discovery (default: https://<host>:<port>)",
+    )
+    parser.add_argument(
+        "--tls-hostname",
+        action="append",
+        default=[],
+        help="hostname/IP the served certificate must cover; repeat for several "
+        "(default: localhost and 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--allow-container-bind",
+        action="store_true",
+        help="permit a wildcard bind inside an isolated container network; "
+        "loopback remains the default and the only option without this flag",
+    )
     parser.add_argument(
         "--state-dir",
         default="/tmp/itsm-identity-simulator",
@@ -84,9 +104,16 @@ async def _serve(args: argparse.Namespace) -> int:
     key = generate_signing_key()
     # One material for both the served certificate and the published CA
     # path: the client pins exactly the CA that signed the certificate.
-    material = generate_tls_material()
+    hostnames = tuple(dict.fromkeys(args.tls_hostname)) or ("localhost", "127.0.0.1")
+    # A restart must not replace a CA that a running API already trusts: HTTPX
+    # builds its TLS context once and will not re-read the file. Reuse valid
+    # material and regenerate only when it can no longer serve these hostnames.
+    material = load_tls_material(args.state_dir, hostnames)
+    reused = material is not None
+    if material is None:
+        material = generate_tls_material(hostnames)
     material_paths = write_tls_material(material, args.state_dir)
-    base_url = f"https://{args.host}:{args.port}"
+    base_url = args.public_url or f"https://{args.host}:{args.port}"
     print(
         json.dumps(
             {
@@ -96,9 +123,12 @@ async def _serve(args: argparse.Namespace) -> int:
                 "audience": args.audience,
                 "jwks_url": f"{base_url}/jwks",
                 "token_url": f"{base_url}/token",
+                "discovery_url": f"{base_url}/.well-known/openid-configuration",
                 "ca_file": material_paths["ca"],
                 "subjects": list(subjects),
                 "kid": key.kid,
+                "tls_hostnames": list(hostnames),
+                "tls_material_reused": reused,
             },
             indent=2,
         ),
@@ -113,6 +143,8 @@ async def _serve(args: argparse.Namespace) -> int:
         state_dir=args.state_dir,
         key=key,
         material=material,
+        allow_container_bind=args.allow_container_bind,
+        base_url=base_url,
     )
     return 0
 
@@ -125,7 +157,7 @@ ALLOWED_ENVIRONMENTS = ("local", "test", "staging")
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        assert_loopback(args.host)
+        assert_loopback(args.host, allow_container_bind=args.allow_container_bind)
     except ValueError as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2

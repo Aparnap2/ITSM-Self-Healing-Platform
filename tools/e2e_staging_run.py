@@ -452,6 +452,22 @@ async def _acquire_credentials(options: StagingOptions) -> tuple[str, str, str]:
     return token_a, token_b, mode
 
 
+def redaction_secrets(options: StagingOptions) -> list[str]:
+    """Credentials that must never appear in a report, for this run's mode.
+
+    Only the credential actually in use is resolved: in OIDC mode the runner
+    holds no reviewer token at all, and asking for one used to raise here —
+    after the run had already done its work.
+    """
+    secrets = [options.groq_api_key]
+    mode = options.credential_mode
+    if mode == CREDENTIAL_MODE_HMAC:
+        secrets.append(options.reviewer_secret)
+    elif mode == CREDENTIAL_MODE_TOKEN:
+        secrets.append(options.reviewer_token)
+    return [secret for secret in secrets if secret]
+
+
 async def _apply_transition(
     client: httpx.AsyncClient,
     *,
@@ -473,6 +489,62 @@ async def _apply_transition(
     except ValueError:
         body = {}
     return response.status_code, body if isinstance(body, dict) else {}
+
+
+def _audit_trail_check(
+    *,
+    finding_id: UUID,
+    ledger: Sequence[dict[str, Any]],
+    bundle_after: dict[str, Any],
+    expected_status: str,
+    resolver: str,
+    verifier: str,
+) -> dict[str, Any]:
+    """Check the recorded outcome, not the requests that asked for it.
+
+    Three HTTP 200 responses prove that three transitions were accepted. They
+    do not prove that the ledger says so, that the bundle reports the terminal
+    status, or that the principal who verified is different from the one who
+    resolved. This reads the outcome back and fails closed on any mismatch.
+    """
+    entries = [
+        {
+            "to_status": str(entry.get("to_status", "")),
+            "actor_id": str(entry.get("actor_id", "")),
+            "verifier_id": str(entry.get("verifier_id") or entry.get("actor_id") or ""),
+        }
+        for entry in ledger
+    ]
+    final_status = str(((bundle_after or {}).get("finding") or {}).get("status", ""))
+    resolver_actors = {e["actor_id"] for e in entries if e["to_status"] == "RESOLVED"}
+    verifiers = {e["verifier_id"] for e in entries if e["to_status"] == expected_status}
+    verifier_is_distinct = bool(verifiers) and not (verifiers & resolver_actors)
+
+    reasons: list[str] = []
+    if not entries:
+        reasons.append("no lifecycle transitions are recorded")
+    if expected_status not in {e["to_status"] for e in entries}:
+        reasons.append(f"no {expected_status} transition is recorded")
+    if final_status != expected_status:
+        reasons.append(
+            f"the bundle reports status {final_status or 'MISSING'} instead of {expected_status}"
+        )
+    if not verifier_is_distinct:
+        reasons.append("the verifier is not a distinct principal from the resolver")
+    if verifier and verifier not in verifiers:
+        reasons.append(f"the {expected_status} transition was not recorded for {verifier}")
+    if resolver and resolver not in resolver_actors:
+        reasons.append(f"the RESOLVED transition was not recorded for {resolver}")
+
+    return {
+        "verified": not reasons,
+        "reasons": reasons,
+        "final_status": final_status,
+        "transition_count": len(entries),
+        "transitions": entries,
+        "verifier_is_distinct": verifier_is_distinct,
+        "bundle_hash": str((bundle_after or {}).get("bundle_hash", "")),
+    }
 
 
 def _evidence_grounding(
@@ -548,14 +620,29 @@ async def _wait_for_finding(
     repositories: RepositoryBundle,
     tenant_id: UUID,
     *,
+    source_event_id: UUID,
     timeout_seconds: float,
 ) -> Finding | None:
-    """Poll for the finding produced by detection (bounded)."""
+    """Poll for the finding produced by *this* event (bounded).
+
+    Taking the first finding in the tenant is wrong as soon as the tenant has
+    one: a repeated run against a fixed tenant would investigate and transition
+    the earlier finding while the new event's finding sat unexamined, and the
+    report would describe the wrong row with no sign of the mix-up.
+
+    The correlation goes through the evidence reference, which is the only
+    durable link between an event and the finding it produced. A finding with
+    no reference to this event is not this run's finding, however recently it
+    was created.
+    """
     deadline = datetime.now(tz=UTC).timestamp() + timeout_seconds
     while datetime.now(tz=UTC).timestamp() < deadline:
-        findings = await repositories.findings.list_for_tenant(tenant_id)
-        if findings:
-            return findings[0]
+        for candidate in await repositories.findings.list_for_tenant(tenant_id):
+            references = await repositories.evidence_references.list_for_tenant_finding(
+                tenant_id, candidate.id
+            )
+            if any(ref.source_event_id == source_event_id for ref in references):
+                return candidate
         await asyncio.sleep(0.5)
     return None
 
@@ -646,7 +733,10 @@ async def run_staging(options: StagingOptions) -> tuple[dict[str, Any], int]:
             )
 
         finding = await _wait_for_finding(
-            repositories, options.tenant_id, timeout_seconds=options.poll_seconds
+            repositories,
+            options.tenant_id,
+            source_event_id=source_event.event_id,
+            timeout_seconds=options.poll_seconds,
         )
         if finding is None:
             raise StagingRunError(
@@ -715,6 +805,19 @@ async def run_staging(options: StagingOptions) -> tuple[dict[str, Any], int]:
             f"{budgeted.calls_used} model call(s) used",
         )
 
+        # Read the status the moment the investigation stage is done, before any
+        # reviewer touches the finding. This is what makes "the model did not
+        # mutate the finding" a real observation instead of a restatement of the
+        # final state: reviewers change the status later in the run, so a probe
+        # taken at the end would always report a change and attribute it to the
+        # model.
+        stored_after_investigation = await repositories.findings.get(options.tenant_id, finding.id)
+        status_after_investigation = (
+            stored_after_investigation.status
+            if stored_after_investigation is not None
+            else "UNKNOWN"
+        )
+
         # --- 6. reviewer credentials ----------------------------------------
         # The rehearsal authenticates the way the deployment does: through the
         # configured identity provider. The HMAC bearer is a labelled local
@@ -779,6 +882,66 @@ async def run_staging(options: StagingOptions) -> tuple[dict[str, Any], int]:
                     f"reviewer {reviewer} ({str(body.get('code', '')) or 'accepted'})",
                 )
 
+            # --- 8b. read the outcome back ----------------------------------
+            # The pre-transition bundle cannot support a claim about the final
+            # audit trail: it was captured while the finding was still OPEN.
+            # Read the ledger and the bundle again, after the lifecycle, so the
+            # report describes the state that was actually reached.
+            ledger: list[dict[str, Any]] = []
+            bundle_after: dict[str, Any] = {}
+            audit_error = ""
+            try:
+                ledger_response = await client.get(
+                    f"{options.api_base_url.rstrip('/')}/v1/findings/{finding.id}/transitions",
+                    params={"tenant_id": str(options.tenant_id)},
+                    headers={"authorization": f"Bearer {token_b}"},
+                )
+                if ledger_response.status_code == 200:
+                    ledger = ledger_response.json()
+                else:
+                    audit_error = f"transitions HTTP {ledger_response.status_code}"
+
+                bundle_response = await client.get(
+                    f"{options.api_base_url.rstrip('/')}/v1/findings/{finding.id}/bundle",
+                    params={"tenant_id": str(options.tenant_id)},
+                    headers={"authorization": f"Bearer {token_b}"},
+                )
+                if bundle_response.status_code == 200:
+                    bundle_after = bundle_response.json()
+                else:
+                    audit_error = (
+                        f"{audit_error + '; ' if audit_error else ''}"
+                        f"bundle HTTP {bundle_response.status_code}"
+                    )
+            except httpx.HTTPError as exc:
+                audit_error = f"re-reading the outcome failed: {type(exc).__name__}"
+            if audit_error:
+                log.add("audit_trail", "failed", audit_error)
+
+        # --- 8c. independent postcondition check ----------------------------
+        # A tool response saying 200 is not proof that the ledger reflects the
+        # intended outcome. Verify the recorded state, not the request.
+        audit_trail = _audit_trail_check(
+            finding_id=finding.id,
+            ledger=ledger,
+            bundle_after=bundle_after,
+            expected_status="VERIFIED",
+            resolver="reviewer-a",
+            verifier="reviewer-b",
+        )
+        log.add(
+            "audit_trail",
+            "verified" if audit_trail["verified"] else "unverified",
+            f"status={audit_trail['final_status']} "
+            f"transitions={audit_trail['transition_count']} "
+            f"independent_verifier={audit_trail['verifier_is_distinct']}",
+        )
+        if not audit_trail["verified"]:
+            raise StagingRunError(
+                "the recorded outcome does not match what the rehearsal claims: "
+                f"{audit_trail['reasons']}"
+            )
+
         # --- 9. evidence grounding ------------------------------------------
         persisted_evidence = await repositories.evidence_references.list_for_tenant_finding(
             options.tenant_id, finding.id
@@ -796,7 +959,7 @@ async def run_staging(options: StagingOptions) -> tuple[dict[str, Any], int]:
         )
 
         stored = await repositories.findings.get(options.tenant_id, finding.id)
-        status_after_investigation = stored.status if stored is not None else "UNKNOWN"
+        status_final = stored.status if stored is not None else "UNKNOWN"
 
         report = _build_report(
             options=options,
@@ -809,12 +972,14 @@ async def run_staging(options: StagingOptions) -> tuple[dict[str, Any], int]:
             finding=finding,
             status_before_investigation=status_before_investigation,
             status_after_investigation=status_after_investigation,
+            status_final=status_final,
             investigation_status=investigation_status,
             proposal=proposal,
             model_calls_used=budgeted.calls_used,
             llm_budget_calls=options.llm_budget_calls,
             bundle=bundle,
             bundle_error=bundle_error,
+            audit_trail=audit_trail,
             model_failure=budgeted.failure,
             debug_path=budgeted.debug_path,
             credential_mode=credential_mode_used,
@@ -854,6 +1019,70 @@ async def run_staging(options: StagingOptions) -> tuple[dict[str, Any], int]:
         await pool.close()
 
 
+def _not_proven_statements(
+    *,
+    persisted_evidence_count: int,
+    transitions_accepted: int,
+    cited_evidence_ids: Sequence[str] = (),
+    grounding: dict[str, Any] | None = None,
+) -> list[str]:
+    """Limits that are true for *this* run, not boilerplate.
+
+    The earlier version hard-coded "the rehearsal stops at the proposal", which
+    was false as soon as the two-reviewer lifecycle was added — a report that
+    understates the run is as misleading as one that overstates it.
+    """
+    # A count of available references says nothing about whether the model
+    # cited any of them. Reporting "the model cited evidence" because rows
+    # exist, or "resolved" because the check was never run, is the exact
+    # overclaim this report exists to avoid.
+    cited = list(cited_evidence_ids)
+    grounding_passed = bool((grounding or {}).get("in_snapshot")) and bool(
+        (grounding or {}).get("resolves_to_persisted_evidence")
+    )
+    if not persisted_evidence_count:
+        evidence_statement = (
+            "The finding carries no evidence references, so the model was given "
+            "the question only and no evidence ids to reference."
+        )
+    elif not cited:
+        evidence_statement = (
+            f"The finding carries {persisted_evidence_count} persisted, redacted "
+            "evidence reference(s), but the proposal cited none of them: in this "
+            "run the investigation was not evidence-grounded."
+        )
+    elif grounding_passed:
+        evidence_statement = (
+            f"The proposal cited {len(cited)} evidence id(s); every one resolves to "
+            f"a persisted, redacted reference among the {persisted_evidence_count} "
+            "available, and every one was rendered into the prompt the model saw. "
+            "Resolvability and presence are not evidential sufficiency: nothing "
+            "here judges whether the evidence is adequate to justify the outcome."
+        )
+    else:
+        evidence_statement = (
+            f"The proposal cited {len(cited)} evidence id(s) of {persisted_evidence_count} "
+            "available, but the grounding check did NOT pass, so this run does not "
+            "establish that the citations were real and in-prompt."
+        )
+    return [
+        "The source event is a simulated CloudTrail record, not a real AWS API "
+        "call; no cloud account was involved.",
+        "The model PROPOSES. It cannot authorize an action, cannot change a "
+        "finding status, and cannot run a command.",
+        f"{transitions_accepted} lifecycle transition(s) were accepted by the API. "
+        "The reviewers are simulator-issued identities: a real identity provider "
+        "was not exercised, and the policy engine authorizes every transition "
+        "independently of who signed the token.",
+        "No production credentials were used; every secret came from the operator's environment.",
+        evidence_statement,
+        "The LLM budget bounds the number of real, billed model calls; it is not "
+        "a quality or accuracy guarantee.",
+        "Nothing was sent to a real ITSM system: Mockoon stands in for Jira "
+        "Service Management and ServiceNow.",
+    ]
+
+
 def _build_report(
     *,
     options: StagingOptions,
@@ -866,12 +1095,14 @@ def _build_report(
     finding: Finding,
     status_before_investigation: str,
     status_after_investigation: str,
+    status_final: str,
     investigation_status: str,
     proposal: InvestigationProposal | None,
     model_calls_used: int,
     llm_budget_calls: int,
     bundle: dict[str, Any],
     bundle_error: str,
+    audit_trail: dict[str, Any] | None = None,
     credential_mode: str = "",
     transitions: list[dict[str, Any]] | None = None,
     grounding: dict[str, Any] | None = None,
@@ -932,6 +1163,7 @@ def _build_report(
             "risk_score": finding.risk_score,
             "status_before_investigation": status_before_investigation,
             "status_after_investigation": status_after_investigation,
+            "status_final": status_final,
         },
         "investigation": {
             "status": investigation_status,
@@ -943,6 +1175,7 @@ def _build_report(
         },
         "evidence_bundle": bundle,
         "evidence_bundle_error": bundle_error,
+        "audit_trail": audit_trail or {},
         "credential_mode": credential_mode,
         "reviewer_transitions": transitions or [],
         "evidence_grounding": grounding or {},
@@ -955,26 +1188,19 @@ def _build_report(
                 "investigation ledger and is never applied to the finding lifecycle; "
                 "deterministic policy and a human reviewer remain authoritative."
             ),
-            "finding_status_unchanged_by_model": (
+            "finding_status_unchanged_by_investigation": (
                 status_before_investigation == status_after_investigation
             ),
             "finding_status_before": status_before_investigation,
-            "finding_status_after": status_after_investigation,
+            "finding_status_after_investigation": status_after_investigation,
+            "finding_status_final": status_final,
             "model_calls_used": model_calls_used,
-            "what_this_run_does_not_prove": [
-                "The source event is a simulated CloudTrail record, not a real "
-                "AWS API call; no cloud account was involved.",
-                "The model PROPOSES. It cannot authorize an action, cannot change "
-                "a finding status, and cannot run a command.",
-                "No independent verification of a real finding was performed: the "
-                "rehearsal stops at the proposal and the evidence bundle.",
-                "No production credentials were used; every secret came from the "
-                "operator's environment.",
-                "The finding carries no evidence references yet, so the model was "
-                "given the question only and no evidence ids to reference.",
-                "The LLM budget bounds the number of real, billed model calls; it "
-                "is not a quality or accuracy guarantee.",
-            ],
+            "what_this_run_does_not_prove": _not_proven_statements(
+                persisted_evidence_count=persisted_evidence,
+                transitions_accepted=sum(1 for item in (transitions or []) if item["accepted"]),
+                cited_evidence_ids=(grounding or {}).get("cited_evidence_ids", []),
+                grounding=grounding,
+            ),
         },
     }
 
@@ -991,7 +1217,8 @@ def _print_summary(report: dict[str, Any]) -> None:
     print(f"finding           : {detection['finding_id']} ({detection['finding_type']})")
     print(
         f"finding status    : {detection['status_before_investigation']} -> "
-        f"{detection['status_after_investigation']}"
+        f"{detection['status_after_investigation']} (after investigation) -> "
+        f"{detection['status_final']} (after review)"
     )
     print(f"investigation     : {investigation['status']}")
     print(
@@ -1005,7 +1232,15 @@ def _print_summary(report: dict[str, Any]) -> None:
     if report.get("evidence_bundle_error"):
         print(f"evidence bundle   : NOT FETCHED -- {report['evidence_bundle_error']}")
     else:
-        print("evidence bundle   : fetched")
+        print("evidence bundle   : fetched (before the lifecycle; status OPEN)")
+    trail = report.get("audit_trail") or {}
+    if trail:
+        print(
+            f"audit trail       : {'VERIFIED' if trail.get('verified') else 'NOT VERIFIED'} "
+            f"-- {trail.get('transition_count', 0)} transition(s), "
+            f"final status {trail.get('final_status', 'UNKNOWN')}, "
+            f"distinct verifier={trail.get('verifier_is_distinct')}"
+        )
     if investigation.get("debug_dump"):
         print(f"model debug dump  : {investigation['debug_dump']}")
     print("")
@@ -1035,6 +1270,15 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         type=float,
         default=DEFAULT_POLL_SECONDS,
         help="How long to wait for the finding to appear (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--tenant-id",
+        default="",
+        help=(
+            "Tenant to run the rehearsal in (default: a fresh random UUID). "
+            "Pass a fixed value when the reviewer authorizations were provisioned "
+            "for a known tenant — repeatability requires the two to agree."
+        ),
     )
     parser.add_argument(
         "--llm-budget-calls",
@@ -1093,7 +1337,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         api_base_url=args.api_base_url,
         report_path=Path(args.report_path),
         in_process=args.in_process,
-        tenant_id=uuid.uuid4(),
+        tenant_id=uuid.UUID(args.tenant_id) if args.tenant_id else uuid.uuid4(),
         poll_seconds=args.poll_seconds,
         llm_budget_calls=budget,
     )
@@ -1108,14 +1352,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     report["report_path"] = str(options.report_path)
-    report = sanitize_report(
-        report,
-        [
-            options.groq_api_key,
-            options.reviewer_secret if options.credential_mode == CREDENTIAL_MODE_HMAC else "",
-            options.reviewer_token,
-        ],
-    )
+    report = sanitize_report(report, redaction_secrets(options))
     options.report_path.parent.mkdir(parents=True, exist_ok=True)
     options.report_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     _print_summary(report)
