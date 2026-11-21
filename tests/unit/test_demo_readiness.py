@@ -195,6 +195,24 @@ async def test_a_findings_request_failure_is_recorded_and_does_not_abort(
     async def times_out(_token: str | None) -> tuple[int, str]:
         raise httpx.ReadTimeout("findings request timed out")
 
+    class _FakeResponse:
+        status_code = 200
+        text = ""
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
     monkeypatch.setattr(readiness_module, "_token", token)
     monkeypatch.setattr(readiness_module, "_findings_status", times_out)
     monkeypatch.setattr(readiness_module, "directory_probe", lambda _subject: {"member": False})
