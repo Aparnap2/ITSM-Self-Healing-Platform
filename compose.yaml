@@ -372,20 +372,14 @@ services:
       ITSM_API_BASE_URL: http://mockoon:3001
       IDENTITY_API_BASE_URL: http://mockoon:3001
       INFRA_API_BASE_URL: http://mockoon:3001
-      # The investigation stage is what the demo proves, so it is ON here —
-      # deliberately, and bounded. The hard budget is enforced by the runner
-      # and by the domain policy, not by this switch.
-      ITSM_INVESTIGATION_ENABLED: ${ITSM_INVESTIGATION_ENABLED:-true}
-      ITSM_INVESTIGATION_MAX_MODEL_CALLS: ${ITSM_INVESTIGATION_MAX_MODEL_CALLS:-2}
-      ITSM_INVESTIGATION_MAX_TOOL_CALLS: ${ITSM_INVESTIGATION_MAX_TOOL_CALLS:-5}
-      ITSM_INVESTIGATION_LLM_BUDGET_CALLS: ${ITSM_INVESTIGATION_LLM_BUDGET_CALLS:-3}
-      # NOT required at interpolation time: `docker compose config` must stay
-      # valid in CI without secrets. The consumer itself fails closed at
-      # startup when the investigation stage is enabled and this is empty
-      # (audit_consumer.py exits 2), which is the enforcement that matters.
-      ITSM_GROQ_API_KEY: ${ITSM_GROQ_API_KEY:-}
-      ITSM_GROQ_MODEL: ${ITSM_GROQ_MODEL:-openai/gpt-oss-120b}
-      ITSM_GROQ_BASE_URL: ${ITSM_GROQ_BASE_URL:-https://api.groq.com/openai/v1}
+      # Deliberately NO ITSM_INVESTIGATION_* / ITSM_GROQ_* settings here.
+      # This service runs `itsm_agent.workers.consumer`, the remediation
+      # workflow consumer; it never reads them, so declaring them here would
+      # describe an investigation stage that this process does not run.
+      # Detection + the advisory investigation stage live in the packaged
+      # `itsm_agent.workers.audit_consumer`, which the rehearsal drives
+      # in-process (`make demo-run`) because it binds the same durable
+      # consumer (`itsm-workflow`) and two processes cannot share it.
       ITSM_OTEL_EXPORTER_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
