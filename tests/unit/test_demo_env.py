@@ -49,13 +49,16 @@ def test_ensure_creates_static_keys_ports_and_secrets(demo_env: ModuleType, tmp_
         assert len(values[key]) >= 32
     assert values["ITSM_GROQ_API_KEY"] == "gsk-test"
     assert "ITSM_POSTGRES_DSN" in values
-    assert set(added) == {
-        *demo_env.STATIC_VALUES,
-        *demo_env.DEMO_PORTS,
-        *demo_env.SECRET_KEYS,
-        "ITSM_GROQ_API_KEY",
-        "ITSM_POSTGRES_DSN",
-    }
+    # Host URLs are derived from the ports rather than frozen, so they are not
+    # in STATIC_VALUES; what must hold is that every key written was reported.
+    for key in (
+        "ITSM_API_BASE_URL",
+        "ITSM_IDENTITY_BASE_URL",
+        "ITSM_NATS_URL",
+        "ITSM_PROMETHEUS_URL",
+    ):
+        assert values.get(key), f"{key} missing"
+    assert set(added) == set(values)
 
 
 def test_ensure_is_idempotent_and_never_duplicates_keys(
@@ -129,3 +132,60 @@ def test_generated_secrets_are_distinct_per_file(demo_env: ModuleType, tmp_path:
     b = demo_env.read_env(second)
     for key in demo_env.SECRET_KEYS:
         assert a[key] != b[key]
+
+
+def test_a_password_from_the_environment_reaches_the_file_and_the_dsn(
+    demo_env: ModuleType, tmp_path: Path
+) -> None:
+    """An env-only password must not yield an empty --admin-dsn.
+
+    `have()` used to see the process environment and skip the key, while the
+    DSN was built from the file only. The next command then received an empty
+    DSN and `ensure` still reported success.
+    """
+    env_file = tmp_path / ".env"
+    added, problems = demo_env.ensure(
+        env_file,
+        environ={"GROQ_API_KEY": "gsk-test", "POSTGRES_PASSWORD": "from-environment"},
+    )
+    assert problems == []
+    values = demo_env.read_env(env_file)
+    assert values["POSTGRES_PASSWORD"] == "from-environment"
+    assert "from-environment" in values["ITSM_POSTGRES_DSN"]
+    assert "POSTGRES_PASSWORD" in added
+    assert "ITSM_POSTGRES_DSN" in added
+
+
+def test_overridden_ports_move_the_urls_and_the_dsn(demo_env: ModuleType, tmp_path: Path) -> None:
+    """A preserved port must not be contradicted by a derived URL."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "API_HOST_PORT=8011\nPOSTGRES_HOST_PORT=5540\nIDENTITY_HOST_PORT=8445\n",
+        encoding="utf-8",
+    )
+    demo_env.ensure(env_file, environ={"GROQ_API_KEY": "gsk-test"})
+    values = demo_env.read_env(env_file)
+    assert values["API_HOST_PORT"] == "8011"
+    assert values["ITSM_API_BASE_URL"] == "http://127.0.0.1:8011"
+    assert values["ITSM_IDENTITY_BASE_URL"] == "https://127.0.0.1:8445"
+    assert ":5540/" in values["ITSM_POSTGRES_DSN"]
+
+
+def test_a_quoted_empty_credential_counts_as_missing(demo_env: ModuleType, tmp_path: Path) -> None:
+    """`KEY=''` is empty to a shell, so it must be empty here too."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("ITSM_GROQ_API_KEY=''\n", encoding="utf-8")
+    _, problems = demo_env.ensure(env_file, environ={})
+    assert problems, "a quoted empty key must still be reported as missing"
+    assert demo_env.read_env(env_file)["ITSM_GROQ_API_KEY"] == ""
+
+
+def test_preserved_database_identity_is_used_for_the_dsn(
+    demo_env: ModuleType, tmp_path: Path
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("POSTGRES_USER=auditor\nPOSTGRES_DB=evidence\n", encoding="utf-8")
+    demo_env.ensure(env_file, environ={"GROQ_API_KEY": "gsk-test"})
+    dsn = demo_env.read_env(env_file)["ITSM_POSTGRES_DSN"]
+    assert "//auditor:" in dsn
+    assert dsn.endswith("/evidence")

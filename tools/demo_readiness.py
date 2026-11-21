@@ -381,7 +381,24 @@ async def check_authentication(report: Readiness, *, full: bool) -> None:
         report.add("oidc token accepted", "FAIL", f"token mint failed: {exc}"[:300])
         return
 
-    status, body = await _findings_status(token)
+    try:
+        status, body = await _findings_status(token)
+    except (httpx.HTTPError, ValueError) as exc:
+        # `/healthz` answering is not the same service answering `/v1/findings`.
+        # A timeout here used to escape the check and abort the run before the
+        # report was written, leaving no artifact to explain the failure.
+        report.add(
+            "oidc token accepted",
+            "FAIL",
+            f"GET /v1/findings as {REVIEWER_A}: request failed ({type(exc).__name__})",
+        )
+        report.diagnostics["auth_failure"] = {
+            "requested_tenant": str(DEMO_TENANT),
+            "http_status": None,
+            "detail": f"{type(exc).__name__}: {exc}"[:300],
+            "directory": directory_probe(REVIEWER_A),
+        }
+        return
     report.add(
         "oidc token accepted",
         "PASS" if status == 200 else "FAIL",

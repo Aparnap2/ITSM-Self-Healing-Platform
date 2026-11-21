@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -75,20 +77,29 @@ def _screenshot(url: str, target: Path, note: str) -> dict[str, Any]:
     chrome = _chrome()
     if chrome is None:
         return {"file": target.name, "url": url, "status": "NOT RUN", "note": "no browser"}
+
+    # A leftover file from an earlier capture must not be able to pass as this
+    # one: Chrome can fail without replacing the target, and an existence check
+    # alone would then report PASS for a screenshot taken before the run.
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(FileNotFoundError):
+        target.unlink()
+    started_at = time.time()
     result = subprocess.run(
         [chrome, *CHROME_FLAGS, f"--screenshot={target}", url],
         capture_output=True,
         text=True,
         timeout=120,
     )
-    ok = target.exists() and target.stat().st_size > 0
+    exists = target.exists()
+    fresh = exists and target.stat().st_mtime >= started_at and target.stat().st_size > 0
     return {
         "file": target.name,
         "url": url,
-        "status": "PASS" if ok else "FAIL",
-        "bytes": target.stat().st_size if target.exists() else 0,
+        "status": "PASS" if fresh else "FAIL",
+        "bytes": target.stat().st_size if exists else 0,
         "note": note,
-        "stderr": "" if ok else result.stderr.strip()[:300],
+        "stderr": "" if fresh else result.stderr.strip()[:300],
     }
 
 
@@ -264,6 +275,9 @@ async def main_async(args: argparse.Namespace) -> int:
 
     index = {
         "phase": args.phase,
+        # Recorded so a phase-B capture is bound to the rehearsal it belongs
+        # to; an accepted but unused option silently loses that binding.
+        "run_id": args.run_id or None,
         "commit": _git_commit(),
         "captured_at": stamp,
         "screenshots_ignore_certificate_errors": True,

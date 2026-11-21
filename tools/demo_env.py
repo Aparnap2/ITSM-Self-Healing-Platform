@@ -50,11 +50,10 @@ STATIC_VALUES: dict[str, str] = {
     "ITSM_OIDC_AUDIENCE": "itsm-audience",
     "ITSM_OIDC_JWKS_URL": "https://identity:8443/jwks",
     "ITSM_OIDC_ALGORITHMS": "RS256",
-    # Host-side surfaces (published loopback ports).
-    "ITSM_API_BASE_URL": "http://127.0.0.1:8001",
-    "ITSM_IDENTITY_BASE_URL": "https://127.0.0.1:8444",
+    # ITEM: host-side surfaces are derived from the effective ports in
+    # `_host_urls`; they are not listed here, because a frozen default would
+    # silently disagree with any port a human overrode.
     "ITSM_IDENTITY_CA_FILE": "./demo-state/identity/simulator-ca.pem",
-    "ITSM_NATS_URL": "nats://127.0.0.1:4223",
     "ITSM_REVIEWER_SUBJECT_A": "reviewer-a",
     "ITSM_REVIEWER_SUBJECT_B": "reviewer-b",
     "ITSM_INVESTIGATION_ENABLED": "true",
@@ -72,6 +71,20 @@ SECRET_KEYS: tuple[str, ...] = (
 )
 
 
+def _unquote(value: str) -> str:
+    """Interpret the quoting the shell will apply, without rewriting the file.
+
+    ``ITSM_GROQ_API_KEY=''`` is an empty value to a shell. Treating the quote
+    characters as content would report the key as present and then let the
+    Makefile source an empty string, which is how a missing credential becomes
+    a mysterious failure later instead of a clear one now.
+    """
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
 def read_env(path: Path) -> dict[str, str]:
     """Parse a dotenv file into a dict (last assignment wins)."""
     values: dict[str, str] = {}
@@ -82,7 +95,7 @@ def read_env(path: Path) -> dict[str, str]:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        values[key.strip()] = value.strip()
+        values[key.strip()] = _unquote(value)
     return values
 
 
@@ -102,21 +115,43 @@ def _append(path: Path, additions: list[tuple[str, str]]) -> None:
             handle.write(f"{key}={value}\n")
 
 
+def _host_urls(ports: dict[str, str]) -> dict[str, str]:
+    """Host-side URLs for the ports that were actually resolved."""
+    return {
+        "ITSM_API_BASE_URL": f"http://127.0.0.1:{ports['API_HOST_PORT']}",
+        "ITSM_IDENTITY_BASE_URL": "https://127.0.0.1:" + ports["IDENTITY_HOST_PORT"],
+        "ITSM_NATS_URL": "nats://127.0.0.1:" + ports["NATS_HOST_PORT"],
+        "ITSM_PROMETHEUS_URL": "http://127.0.0.1:" + ports["PROMETHEUS_HOST_PORT"],
+    }
+
+
 def ensure(path: Path, environ: dict[str, str] | None = None) -> tuple[list[str], list[str]]:
-    """Ensure required keys exist. Returns (added_keys, problems)."""
+    """Ensure required keys exist. Returns (added_keys, problems).
+
+    Values are resolved against an *effective* configuration: the file first,
+    then the process environment. Everything derived (host URLs, the DSN) is
+    derived from that same effective view, so a password or port supplied only
+    through the environment cannot produce a file that disagrees with itself.
+    """
     env = dict(environ if environ is not None else os.environ)
     current = read_env(path)
     additions: list[tuple[str, str]] = []
     problems: list[str] = []
 
-    def have(key: str) -> bool:
-        return bool(current.get(key) or env.get(key))
+    def effective(key: str) -> str:
+        return current.get(key) or env.get(key) or ""
 
-    for key, value in STATIC_VALUES.items():
+    def have(key: str) -> bool:
+        return bool(effective(key))
+
+    # Ports first: every derived URL depends on them.
+    for key, value in DEMO_PORTS.items():
         if not have(key):
             additions.append((key, value))
+    ports = {key: effective(key) for key in DEMO_PORTS}
 
-    for key, value in DEMO_PORTS.items():
+    derived = {**STATIC_VALUES, **_host_urls(ports)}
+    for key, value in derived.items():
         if not have(key):
             additions.append((key, value))
 
@@ -124,10 +159,18 @@ def ensure(path: Path, environ: dict[str, str] | None = None) -> tuple[list[str]
         if not have(key):
             additions.append((key, secrets.token_urlsafe(32)))
 
+    # Inherited values must exist in the file, not only in the shell that ran
+    # this tool: `make` sources `.env` and would otherwise pass an empty value
+    # to the next command while `ensure` reported success.
+    for key in (*SECRET_KEYS, "POSTGRES_USER", "POSTGRES_DB"):
+        inherited = env.get(key, "")
+        if inherited and not current.get(key):
+            additions.append((key, inherited))
+
     if not have("ITSM_GROQ_API_KEY"):
-        inherited = env.get("GROQ_API_KEY") or current.get("GROQ_API_KEY") or ""
-        if inherited:
-            additions.append(("ITSM_GROQ_API_KEY", inherited))
+        inherited_key = env.get("GROQ_API_KEY") or current.get("GROQ_API_KEY") or ""
+        if inherited_key:
+            additions.append(("ITSM_GROQ_API_KEY", inherited_key))
         else:
             problems.append(
                 "ITSM_GROQ_API_KEY is not set and no GROQ_API_KEY was found to "
@@ -135,20 +178,39 @@ def ensure(path: Path, environ: dict[str, str] | None = None) -> tuple[list[str]
                 "so it is not silently disabled — export ITSM_GROQ_API_KEY first."
             )
 
+    # The DSN is derived from the effective database settings, never from the
+    # defaults: overriding the port or the password in one place must move the
+    # DSN with it.
     if not have("ITSM_POSTGRES_DSN"):
-        password = (
-            dict(additions).get("POSTGRES_PASSWORD") or current.get("POSTGRES_PASSWORD") or ""
-        )
+        password = dict(additions).get("POSTGRES_PASSWORD") or effective("POSTGRES_PASSWORD")
         if password:
             additions.append(
                 (
                     "ITSM_POSTGRES_DSN",
-                    "postgresql://itsm:" + password + "@127.0.0.1:5532/itsm",
+                    "postgresql://"
+                    + effective_or(additions, current, env, "POSTGRES_USER", "itsm")
+                    + ":"
+                    + password
+                    + "@127.0.0.1:"
+                    + ports["POSTGRES_HOST_PORT"]
+                    + "/"
+                    + effective_or(additions, current, env, "POSTGRES_DB", "itsm"),
                 )
             )
 
     _append(path, additions)
     return [key for key, _ in additions], problems
+
+
+def effective_or(
+    additions: list[tuple[str, str]],
+    current: dict[str, str],
+    env: dict[str, str],
+    key: str,
+    fallback: str,
+) -> str:
+    """Resolve a key against additions, then the file, then the environment."""
+    return dict(additions).get(key) or current.get(key) or env.get(key) or fallback
 
 
 def status(path: Path) -> int:

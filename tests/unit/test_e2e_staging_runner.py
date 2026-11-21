@@ -573,3 +573,198 @@ def test_hmac_mode_redacts_the_signing_secret_not_a_token(tmp_path: Path) -> Non
         "gsk-not-a-real-key",
         "reviewer-secret-value-0123456789",
     ]
+
+
+# ---------------------------------------------------------------------------
+# The recorded outcome is verified, not inferred from HTTP 200s.
+# ---------------------------------------------------------------------------
+
+
+def _ledger(*entries: tuple[str, str, str]) -> list[dict[str, str]]:
+    return [
+        {"to_status": to_status, "actor_id": actor, "verifier_id": verifier}
+        for to_status, actor, verifier in entries
+    ]
+
+
+def test_audit_trail_accepts_a_terminal_outcome_with_a_distinct_verifier() -> None:
+    trail = runner._audit_trail_check(  # noqa: SLF001
+        finding_id=uuid.uuid4(),
+        ledger=_ledger(
+            ("VERIFIED", "reviewer-b", "reviewer-b"),
+            ("RESOLVED", "reviewer-a", "reviewer-a"),
+            ("ACKNOWLEDGED", "reviewer-a", "reviewer-a"),
+        ),
+        bundle_after={"finding": {"status": "VERIFIED"}, "bundle_hash": "abc"},
+        expected_status="VERIFIED",
+        resolver="reviewer-a",
+        verifier="reviewer-b",
+    )
+    assert trail["verified"] is True
+    assert trail["reasons"] == []
+    assert trail["transition_count"] == 3
+    assert trail["verifier_is_distinct"] is True
+
+
+def test_audit_trail_rejects_the_resolver_verifying_its_own_close_out() -> None:
+    trail = runner._audit_trail_check(  # noqa: SLF001
+        finding_id=uuid.uuid4(),
+        ledger=_ledger(
+            ("VERIFIED", "reviewer-a", "reviewer-a"), ("RESOLVED", "reviewer-a", "reviewer-a")
+        ),
+        bundle_after={"finding": {"status": "VERIFIED"}},
+        expected_status="VERIFIED",
+        resolver="reviewer-a",
+        verifier="reviewer-b",
+    )
+    assert trail["verified"] is False
+    assert any("distinct principal" in reason for reason in trail["reasons"])
+    assert any("not recorded for reviewer-b" in reason for reason in trail["reasons"])
+
+
+def test_audit_trail_rejects_a_bundle_that_still_reports_open() -> None:
+    """A 200 from the transition endpoint is not proof the bundle moved."""
+    trail = runner._audit_trail_check(  # noqa: SLF001
+        finding_id=uuid.uuid4(),
+        ledger=_ledger(
+            ("VERIFIED", "reviewer-b", "reviewer-b"), ("RESOLVED", "reviewer-a", "reviewer-a")
+        ),
+        bundle_after={"finding": {"status": "OPEN"}},
+        expected_status="VERIFIED",
+        resolver="reviewer-a",
+        verifier="reviewer-b",
+    )
+    assert trail["verified"] is False
+    assert any("instead of VERIFIED" in reason for reason in trail["reasons"])
+
+
+def test_audit_trail_rejects_an_empty_ledger() -> None:
+    trail = runner._audit_trail_check(  # noqa: SLF001
+        finding_id=uuid.uuid4(),
+        ledger=[],
+        bundle_after={},
+        expected_status="VERIFIED",
+        resolver="reviewer-a",
+        verifier="reviewer-b",
+    )
+    assert trail["verified"] is False
+    assert any("no lifecycle transitions" in reason for reason in trail["reasons"])
+
+
+def test_audit_trail_requires_the_verifier_to_be_the_expected_principal() -> None:
+    trail = runner._audit_trail_check(  # noqa: SLF001
+        finding_id=uuid.uuid4(),
+        ledger=_ledger(
+            ("VERIFIED", "reviewer-c", "reviewer-c"), ("RESOLVED", "reviewer-a", "reviewer-a")
+        ),
+        bundle_after={"finding": {"status": "VERIFIED"}},
+        expected_status="VERIFIED",
+        resolver="reviewer-a",
+        verifier="reviewer-b",
+    )
+    assert trail["verified"] is False
+    assert any("not recorded for reviewer-b" in reason for reason in trail["reasons"])
+
+
+# ---------------------------------------------------------------------------
+# The evidence statement describes what was cited, not what was available.
+# ---------------------------------------------------------------------------
+
+
+def test_no_citations_are_reported_as_not_evidence_grounded() -> None:
+    statements = runner._not_proven_statements(  # noqa: SLF001
+        persisted_evidence_count=3,
+        transitions_accepted=3,
+        cited_evidence_ids=[],
+        grounding={
+            "checked": True,
+            "cited_evidence_ids": [],
+            "in_snapshot": True,
+            "resolves_to_persisted_evidence": True,
+        },
+    )
+    evidence = [s for s in statements if "evidence" in s.lower()][0]
+    assert "cited none" in evidence
+    assert "was not evidence-grounded" in evidence
+    assert "3" in evidence
+
+
+def test_available_references_are_not_reported_as_cited() -> None:
+    """Three stored references and zero citations must not read as grounding."""
+    statements = runner._not_proven_statements(  # noqa: SLF001
+        persisted_evidence_count=3, transitions_accepted=3
+    )
+    assert any("cited none" in s for s in statements)
+    assert not any("The model cited evidence ids that resolve" in s for s in statements)
+
+
+def test_a_failed_grounding_check_is_reported_as_failed() -> None:
+    statements = runner._not_proven_statements(  # noqa: SLF001
+        persisted_evidence_count=1,
+        transitions_accepted=3,
+        cited_evidence_ids=["e1"],
+        grounding={"checked": True, "in_snapshot": False, "resolves_to_persisted_evidence": True},
+    )
+    assert any("did NOT pass" in s for s in statements)
+
+
+def test_a_passing_check_states_both_of_its_facts() -> None:
+    statements = runner._not_proven_statements(  # noqa: SLF001
+        persisted_evidence_count=2,
+        transitions_accepted=3,
+        cited_evidence_ids=["e1"],
+        grounding={"checked": True, "in_snapshot": True, "resolves_to_persisted_evidence": True},
+    )
+    evidence = [s for s in statements if "cited" in s][0]
+    assert "every one resolves" in evidence
+    assert "rendered into the prompt" in evidence
+    assert "not evidential sufficiency" in evidence
+
+
+# ---------------------------------------------------------------------------
+# The finding belongs to this event, not merely to this tenant.
+# ---------------------------------------------------------------------------
+
+
+async def test_wait_for_finding_picks_the_finding_for_this_event() -> None:
+    tenant = uuid.uuid4()
+    event_id = uuid.uuid4()
+    other_event = uuid.uuid4()
+    older = SimpleNamespace(id=uuid.uuid4())
+    current = SimpleNamespace(id=uuid.uuid4())
+
+    class _Findings:
+        async def list_for_tenant(self, _tenant: Any) -> list[Any]:
+            # Newest first would be tempting; the older finding is deliberately
+            # first so a "take findings[0]" implementation fails this test.
+            return [older, current]
+
+    class _Evidence:
+        async def list_for_tenant_finding(self, _tenant: Any, finding_id: Any) -> list[Any]:
+            anchor = other_event if finding_id == older.id else event_id
+            return [SimpleNamespace(source_event_id=anchor)]
+
+    repositories = SimpleNamespace(findings=_Findings(), evidence_references=_Evidence())
+    found = await runner._wait_for_finding(  # noqa: SLF001
+        repositories, tenant, source_event_id=event_id, timeout_seconds=1.0
+    )
+    assert found is current
+
+
+async def test_wait_for_finding_refuses_an_unrelated_finding() -> None:
+    """A tenant full of findings from earlier runs is not evidence of this run."""
+    tenant = uuid.uuid4()
+
+    class _Findings:
+        async def list_for_tenant(self, _tenant: Any) -> list[Any]:
+            return [SimpleNamespace(id=uuid.uuid4())]
+
+    class _Evidence:
+        async def list_for_tenant_finding(self, _tenant: Any, _finding_id: Any) -> list[Any]:
+            return [SimpleNamespace(source_event_id=uuid.uuid4())]
+
+    repositories = SimpleNamespace(findings=_Findings(), evidence_references=_Evidence())
+    found = await runner._wait_for_finding(  # noqa: SLF001
+        repositories, tenant, source_event_id=uuid.uuid4(), timeout_seconds=0.1
+    )
+    assert found is None

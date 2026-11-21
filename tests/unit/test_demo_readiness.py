@@ -176,3 +176,35 @@ def test_directory_probe_never_raises_when_it_cannot_look(
     probe = readiness_module.directory_probe("reviewer-a")
     assert probe["available"] is False
     assert isinstance(probe["reason"], str) and probe["reason"]
+
+
+async def test_a_findings_request_failure_is_recorded_and_does_not_abort(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`/healthz` answering is not the same endpoint answering `/v1/findings`.
+
+    A timeout in the findings request used to escape as an unhandled exception,
+    so the run died before the report was written and left no artifact saying
+    what failed.
+    """
+    import httpx
+
+    async def token(_subject: str) -> str:
+        return "token"
+
+    async def times_out(_token: str | None) -> tuple[int, str]:
+        raise httpx.ReadTimeout("findings request timed out")
+
+    monkeypatch.setattr(readiness_module, "_token", token)
+    monkeypatch.setattr(readiness_module, "_findings_status", times_out)
+    monkeypatch.setattr(readiness_module, "directory_probe", lambda _subject: {"member": False})
+
+    report = _report(readiness_module)
+    await readiness_module.check_authentication(report, full=True)
+
+    rows = [c for c in report.checks if c.name == "oidc token accepted"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+    assert "request failed" in rows[0].detail
+    assert report.diagnostics["auth_failure"]["http_status"] is None
+    assert report.verdict == "FAIL"
