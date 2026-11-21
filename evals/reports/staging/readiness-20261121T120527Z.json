@@ -1,10 +1,10 @@
 {
   "gate": "STAGING_READY",
   "verdict": "PASS",
-  "commit": "b9644e41e3b102a996a9a42b3bdf6f9da5f36a1b",
-  "started_at": "2026-11-19T05:23:45.344279+00:00",
+  "commit": "a6e76a064a4201507c6e224a9a0c6f2b7ba64cac",
+  "started_at": "2026-11-21T12:05:27.826511+00:00",
   "mode": "full",
-  "generated_at": "2026-11-19T05:25:25.703659+00:00",
+  "generated_at": "2026-11-21T12:07:08.178931+00:00",
   "checks": [
     {
       "name": "compose services",
@@ -64,7 +64,7 @@
     {
       "name": "api metrics endpoint",
       "verdict": "PASS",
-      "detail": "http://127.0.0.1:8001/metrics: HTTP 200, 121 lines, names present=['itsm_ingestion_events_total', 'itsm_consumer_messages_total', 'itsm_outbox_backlog']"
+      "detail": "http://127.0.0.1:8001/metrics: HTTP 200, 197 lines, names present=['itsm_ingestion_events_total', 'itsm_consumer_messages_total', 'itsm_outbox_backlog']"
     },
     {
       "name": "prometheus targets",
@@ -74,7 +74,7 @@
     {
       "name": "outbox backlog",
       "verdict": "PASS",
-      "detail": "0 tenant-scoped row(s) pending, oldest 0s; 7 system row(s) with tenant_id NULL are NOT drained by the tenant-scoped relay (known limitation, documented in the qualification record)"
+      "detail": "0 tenant-scoped row(s) pending, oldest 0s; 9 system row(s) with tenant_id NULL are NOT drained by the tenant-scoped relay (known limitation, documented in the qualification record)"
     }
   ],
   "diagnostics": {},

@@ -73,9 +73,9 @@
       ],
       "tenants": [
         "11111111-1111-1111-1111-111111111111",
-        "72a99034-604c-4328-aff7-313f798ed136"
+        "eff4e010-4045-481f-89e0-aa16a7058c45"
       ],
-      "version": "14"
+      "version": "15"
     },
     {
       "subject": "reviewer-b",
@@ -84,15 +84,15 @@
       ],
       "tenants": [
         "11111111-1111-1111-1111-111111111111",
-        "72a99034-604c-4328-aff7-313f798ed136"
+        "eff4e010-4045-481f-89e0-aa16a7058c45"
       ],
-      "version": "14"
+      "version": "15"
     }
   ],
-  "source_events": 8,
-  "findings": 7,
+  "source_events": 9,
+  "findings": 8,
   "outbox": {
-    "published": 8,
-    "pending": 8
+    "published": 9,
+    "pending": 9
   }
 }

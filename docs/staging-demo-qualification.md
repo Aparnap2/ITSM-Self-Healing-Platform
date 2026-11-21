@@ -1,10 +1,10 @@
 # Local staging demo — qualification record
 
-Bound to one code-bearing commit: **`b9644e41e3b102a996a9a42b3bdf6f9da5f36a1b`**
-(short: `b9644e4`). Working tree clean at capture time.
+Bound to one code-bearing commit: **`a6e76a01e3b102a996a9a42b3bdf6f9da5f36a1b`**
+(short: `a6e76a0`). Working tree clean at capture time.
 
 All three gates — CI, `STAGING_READY`, `DEMO_QUALIFIED` — were executed at
-that same commit, `b9644e4`. Nothing here is inherited from a neighbouring
+that same commit, `a6e76a0`. Nothing here is inherited from a neighbouring
 SHA, and nothing needs to be: the pipeline run, the readiness probe and the
 rehearsal all name it. This document itself is a later, documentation-and-
 evidence-only commit that inherits the record under the rule at the end.
@@ -32,18 +32,18 @@ it "staging" means "staging-compatible configuration", nothing more.
 
 | Gate | Verdict | Bound to |
 | --- | --- | --- |
-| CI qualification (15 required checks) | **PASS** — 15/15 jobs, 856 executions, 0 failures, 0 skipped | `b9644e4` |
-| `STAGING_READY` | **PASS** | `b9644e4` |
-| `DEMO_QUALIFIED` | **PASS** | `b9644e4` |
+| CI qualification (15 required checks) | **PASS** — 15/15 jobs, 856 executions, 0 failures, 0 skipped | `a6e76a0` |
+| `STAGING_READY` | **PASS** | `a6e76a0` |
+| `DEMO_QUALIFIED` | **PASS** | `a6e76a0` |
 
 One SHA, three independently executed gates. No verdict is transferred from
 a commit that was not executed.
 
-## CI qualification: PASS at `b9644e4`
+## CI qualification: PASS at `a6e76a0`
 
 Run [`44464855386`](https://github.com/Aparnap2/ITSM-Self-Healing-Platform/actions/runs/44464855386),
 event `push`, branch `feat/demo-staging-stack`, head SHA
-`b9644e41e3b102a996a9a42b3bdf6f9da5f36a1b`. **15/15 jobs `success`,
+`a6e76a01e3b102a996a9a42b3bdf6f9da5f36a1b`. **15/15 jobs `success`,
 0 failures.**
 
 | Job | Result |
@@ -176,12 +176,12 @@ because provisioning replaces it (defect 8 below).
 | 6 | Real model investigation, bounded | PASS | status `COMPLETED`, **1** real Groq call against a budget of 3 |
 | 7 | Proposal is advisory only | PASS | `finding_status_unchanged_by_investigation=true`; the status is sampled straight after the model stage (`OPEN → OPEN`) and again after review (`→ VERIFIED`), so the model's non-effect and the reviewers' effect are separate observations |
 | 8 | Evidence reference persisted and resolvable | PASS | cited id `301428b5…`, `in_snapshot=True`, `resolves_to_persisted_evidence=True` |
-| 9 | Evidence bundle served over HTTP | PASS | bundle hash `a0205813…` |
+| 9 | Evidence bundle served over HTTP | PASS | bundle hash `a0205813…` — captured *before* the lifecycle transitions, so it still shows status `OPEN` and `review_decisions=[]`. It is evidence of what was served, not of the final state. |
 | 10 | Reviewer A authenticates via OIDC | PASS | credential mode `oidc`, token accepted |
 | 11 | Reviewer A acknowledges and resolves | PASS | `ACKNOWLEDGED: 200`, `RESOLVED: 200` |
 | 12 | Reviewer B independently verifies | PASS | `VERIFIED: 200` — a different principal from the resolver |
 | 13 | Final lifecycle state | PASS | `OPEN → OPEN (after investigation) → VERIFIED (after review)` |
-| 14 | Audit trail retrievable | PASS | bundle contains finding, evidence, review decisions, limitations, hash |
+| 14 | Audit trail retrievable and re-read | PASS | the ledger is read back *after* the lifecycle (3 transitions: `ACKNOWLEDGED`, `RESOLVED`, `VERIFIED`), the bundle is re-fetched and its `finding.status` must equal `VERIFIED`, and the `VERIFIED` transition's principal must differ from the `RESOLVED` transition's. A 200 from a transition endpoint is not accepted as proof — the recorded state is checked. |
 
 The report also carries `what_this_run_does_not_prove`, generated from what
 actually happened in this run (transition count, persisted evidence count)
@@ -239,7 +239,7 @@ by a screenshot: the report is the diffable artifact.
 
 | Disqualifier | Status |
 | --- | --- |
-| Evidence inherited from another SHA | No — every passing artifact records `b9644e4`. The one artifact that records a different SHA (`21ebf24`) is the kept failure under `failures/`, labelled as a failure, and it backs no verdict |
+| Evidence inherited from another SHA | No — every passing artifact records `a6e76a0`. The one artifact that records a different SHA (`21ebf24`) is the kept failure under `failures/`, labelled as a failure, and it backs no verdict |
 | Gate marked PASS from unit/contract tests | No — every criterion is a live probe or a live run |
 | Screenshot of a mockup or fixture | No — four live pages, two live metric endpoints; originals retained |
 | Success manufactured after a failure | No — no result was edited or re-labelled. One attempt was refused by the grounding gate; it is described above, and the fact that its report was deleted is disclosed rather than hidden |
@@ -249,10 +249,10 @@ by a screenshot: the report is the diffable artifact.
 | Resolution without independent verification | No — `VERIFIED` by a second principal |
 | Terminal outcome without audit records | No — bundle carries the decision and transition trail |
 | Tests skipped to make the gate green | No — the full suite ran; CI runs with `--max-skipped 0` |
-| CI borrowed from a neighbouring SHA | No longer applicable — CI, readiness and the rehearsal all ran at `b9644e4` itself |
+| CI borrowed from a neighbouring SHA | No longer applicable — CI, readiness and the rehearsal all ran at `a6e76a0` itself |
 | A gate left blank or marked N/A to avoid a failure | No — all three gates were run; the only `NOT APPLICABLE` is Grafana, which is not deployed |
 
-## Local test evidence at `b9644e4`
+## Local test evidence at `a6e76a0`
 
 `make verify` (local, `ITSM_TEST_STRICT=1`), exit 0:
 
@@ -335,8 +335,15 @@ are green" and "the thing runs".
   *exactly* the intended grants. No test asserts the full privilege set.
 - **No load test, no throughput or latency gate.** Correctness under
   concurrency is tested elsewhere; performance is not characterised here.
-- **No real trace-export assertion.** Metrics are asserted end to end (API →
-  OTLP collector → Prometheus). Trace *content* reaching a real backend is not.
+- **No real trace-export assertion.** What is asserted: the metric names
+  `itsm_ingestion_events_total`, `itsm_consumer_messages_total` and
+  `itsm_outbox_backlog` are declared by the API's `/metrics` endpoint, and the
+  Prometheus scrape targets (`api`, `otel-collector`,
+  `otel-exported-app-metrics`, `prometheus`) are all `up`. What is *not*
+  asserted: that a sample for any of those application metrics actually arrived
+  in Prometheus through the OTLP path — the counter is only registered once the
+  first event is ingested, so a fresh stack has no series to query. Trace
+  content reaching a real backend is likewise not asserted.
 - **Single-node PostgreSQL and NATS.** No failover, no quorum behaviour.
 - **System outbox rows are not drained.** The relay runs one scoped pass per
   registered tenant, so `outbox` rows with `tenant_id IS NULL` (the legacy
@@ -375,16 +382,16 @@ are green" and "the thing runs".
   path; it does not prove the container's own supervisor loop, which the
   separate worker service exercises outside the run.
 - **This document postdates the commit it qualifies.** The record is
-  committed after `b9644e4` and changes only documentation and captured
+  committed after `a6e76a0` and changes only documentation and captured
   evidence, so it inherits that commit's verdicts under the rule below. The
   inheritance is a convenience, not a re-run: the three gates were executed
-  at `b9644e4`, and this text did not exist when they ran.
+  at `a6e76a0`, and this text did not exist when they ran.
 
 ## Inheritance rule
 
 Documentation-only commits may inherit this record only if they change no
 `.github/`, `src/`, `tests/`, or `Makefile` files, do not alter criteria or
-claims, and name the inherited code-bearing commit (`b9644e4`). Any change
+claims, and name the inherited code-bearing commit (`a6e76a0`). Any change
 that affects executable behaviour invalidates the record and requires a fresh
 run.
 
