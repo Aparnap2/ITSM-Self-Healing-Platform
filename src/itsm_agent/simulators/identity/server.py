@@ -31,6 +31,7 @@ from itsm_agent.simulators.identity.keys import (
     encode_jwt,
     generate_signing_key,
     generate_tls_material,
+    load_tls_material,
     mint_claims,
     write_tls_material,
 )
@@ -189,8 +190,11 @@ async def run(
 
     assert_loopback(host, allow_container_bind=allow_container_bind)
     signing_key = key or generate_signing_key()
-    tls = material or generate_tls_material()
     directory = state_dir or os.path.join(os.path.expanduser("~"), ".itsm-simulator")
+    # Same reasoning as the CLI: reuse material a running relying party may
+    # already trust rather than invalidating it on every restart.
+    hostnames = tuple(dict.fromkeys((host, "localhost", "127.0.0.1")))
+    tls = material or load_tls_material(directory, hostnames) or generate_tls_material(hostnames)
     paths = write_tls_material(tls, directory)
 
     app = create_app(

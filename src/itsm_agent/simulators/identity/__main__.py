@@ -25,6 +25,7 @@ from itsm_agent.simulators.identity.client import fetch_token
 from itsm_agent.simulators.identity.keys import (
     generate_signing_key,
     generate_tls_material,
+    load_tls_material,
     write_tls_material,
 )
 from itsm_agent.simulators.identity.server import assert_loopback, run
@@ -104,7 +105,13 @@ async def _serve(args: argparse.Namespace) -> int:
     # One material for both the served certificate and the published CA
     # path: the client pins exactly the CA that signed the certificate.
     hostnames = tuple(dict.fromkeys(args.tls_hostname)) or ("localhost", "127.0.0.1")
-    material = generate_tls_material(hostnames)
+    # A restart must not replace a CA that a running API already trusts: HTTPX
+    # builds its TLS context once and will not re-read the file. Reuse valid
+    # material and regenerate only when it can no longer serve these hostnames.
+    material = load_tls_material(args.state_dir, hostnames)
+    reused = material is not None
+    if material is None:
+        material = generate_tls_material(hostnames)
     material_paths = write_tls_material(material, args.state_dir)
     base_url = args.public_url or f"https://{args.host}:{args.port}"
     print(
@@ -121,6 +128,7 @@ async def _serve(args: argparse.Namespace) -> int:
                 "subjects": list(subjects),
                 "kid": key.kid,
                 "tls_hostnames": list(hostnames),
+                "tls_material_reused": reused,
             },
             indent=2,
         ),
