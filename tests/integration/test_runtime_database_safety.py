@@ -83,6 +83,7 @@ APPEND_ONLY_TABLES: tuple[str, ...] = (
     "finding_transitions",
     "investigation_requests",
     "investigation_proposals",
+    "review_decisions",
 )
 READ_ONLY_TABLES: tuple[str, ...] = ("reviewer_authorizations",)
 
@@ -310,6 +311,126 @@ async def test_append_only_write_grant_is_rejected(
         with pytest.raises(DatabaseSafetyError, match="UPDATE append-only"):
             await _as_role_assert(dsn)
     finally:
+        await admin.close()
+
+
+async def test_review_decisions_append_only_grant_is_rejected(
+    role_factory: RuntimeRoleFactory, pg_dsn: str
+) -> None:
+    """review_decisions must be in the append-only set: an UPDATE grant fails closed."""
+    dsn = await role_factory(tables=DML_TABLES)
+    admin = await _admin(pg_dsn)
+    try:
+        await admin.execute(
+            sql.SQL("GRANT UPDATE ON {} TO {}").format(
+                sql.Identifier("review_decisions"), sql.Identifier(_user_of(dsn))
+            )
+        )
+        with pytest.raises(DatabaseSafetyError, match="review_decisions"):
+            await _as_role_assert(dsn)
+    finally:
+        await admin.close()
+
+
+async def _restore_review_decisions_trigger(admin: AsyncConnection) -> None:
+    await admin.execute(
+        """
+        CREATE OR REPLACE FUNCTION review_decisions_append_only() RETURNS trigger AS $$
+        BEGIN
+            RAISE EXCEPTION 'review_decisions is append-only: % not permitted (decision %)',
+                TG_OP, COALESCE(OLD.id::text, 'unknown');
+        END;
+        $$ LANGUAGE plpgsql;
+        """
+    )
+    await admin.execute(
+        "DROP TRIGGER IF EXISTS trg_review_decisions_append_only ON review_decisions"
+    )
+    await admin.execute(
+        "CREATE TRIGGER trg_review_decisions_append_only "
+        "BEFORE UPDATE OR DELETE ON review_decisions "
+        "FOR EACH ROW EXECUTE FUNCTION review_decisions_append_only()"
+    )
+
+
+async def test_append_only_trigger_missing_fails_closed(
+    role_factory: RuntimeRoleFactory, pg_dsn: str
+) -> None:
+    """Verifier fails when the append-only trigger is absent."""
+    dsn = await role_factory(tables=DML_TABLES)
+    admin = await _admin(pg_dsn)
+    try:
+        await admin.execute(
+            "DROP TRIGGER IF EXISTS trg_review_decisions_append_only ON review_decisions"
+        )
+        with pytest.raises(DatabaseSafetyError, match="append-only trigger"):
+            await _as_role_assert(dsn)
+    finally:
+        await _restore_review_decisions_trigger(admin)
+        await admin.close()
+
+
+async def test_append_only_trigger_disabled_fails_closed(
+    role_factory: RuntimeRoleFactory, pg_dsn: str
+) -> None:
+    """Verifier fails when the append-only trigger is disabled."""
+    dsn = await role_factory(tables=DML_TABLES)
+    admin = await _admin(pg_dsn)
+    try:
+        await admin.execute(
+            "ALTER TABLE review_decisions DISABLE TRIGGER trg_review_decisions_append_only"
+        )
+        with pytest.raises(DatabaseSafetyError, match="append-only trigger"):
+            await _as_role_assert(dsn)
+    finally:
+        await admin.execute(
+            "ALTER TABLE review_decisions ENABLE TRIGGER trg_review_decisions_append_only"
+        )
+        await admin.close()
+
+
+async def test_append_only_trigger_incomplete_fails_closed(
+    role_factory: RuntimeRoleFactory, pg_dsn: str
+) -> None:
+    """Verifier fails when the trigger covers only UPDATE, not DELETE."""
+    dsn = await role_factory(tables=DML_TABLES)
+    admin = await _admin(pg_dsn)
+    try:
+        await admin.execute(
+            "DROP TRIGGER IF EXISTS trg_review_decisions_append_only ON review_decisions"
+        )
+        await admin.execute(
+            "CREATE TRIGGER trg_review_decisions_append_only "
+            "BEFORE UPDATE ON review_decisions "
+            "FOR EACH ROW EXECUTE FUNCTION review_decisions_append_only()"
+        )
+        with pytest.raises(DatabaseSafetyError, match="append-only trigger"):
+            await _as_role_assert(dsn)
+    finally:
+        await _restore_review_decisions_trigger(admin)
+        await admin.close()
+
+
+async def test_append_only_trigger_replica_mode_fails_closed(
+    role_factory: RuntimeRoleFactory, pg_dsn: str
+) -> None:
+    """Verifier fails when the trigger is enabled only in REPLICA mode.
+
+    A replica-only trigger does not fire during ordinary application sessions
+    using the default replication role, so it cannot enforce append-only.
+    """
+    dsn = await role_factory(tables=DML_TABLES)
+    admin = await _admin(pg_dsn)
+    try:
+        await admin.execute(
+            "ALTER TABLE review_decisions ENABLE REPLICA TRIGGER trg_review_decisions_append_only"
+        )
+        with pytest.raises(DatabaseSafetyError, match="append-only trigger"):
+            await _as_role_assert(dsn)
+    finally:
+        await admin.execute(
+            "ALTER TABLE review_decisions ENABLE TRIGGER trg_review_decisions_append_only"
+        )
         await admin.close()
 
 
