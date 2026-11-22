@@ -1,0 +1,432 @@
+# Acceptance Matrix v1.0
+# Production-Parity Baseline
+# Starting SHA: 3e3a2a014bd4aabee2d03a35e3e03f101ff382f5
+# Status: H0 inventory
+
+version: "1.0"
+baseline_sha: "3e3a2a014bd4aabee2d03a35e3e03f101ff382f5"
+
+gates:
+  - id: BUILD_QUALIFIED
+    required: true
+    description: "Reproducible build and security checks pass"
+    verification:
+      type: ci_job
+      workflow: ci.yml
+      jobs: [lint, typecheck, secret-scan, supply-chain, workflow-security, build]
+  - id: DATABASE_QUALIFIED
+    required: true
+    description: "Migrations, RLS, role privileges and integrity checks pass"
+    verification:
+      type: integration_test
+      tests: [test_migration_safety, test_runtime_database_safety, test_rls_tenant_isolation]
+  - id: MESSAGING_QUALIFIED
+    required: true
+    description: "Correct durable topology, idempotency, retry and DLQ verified"
+    verification:
+      type: integration_test
+      tests: [test_nats_consumer, test_nats_replay, test_consumer_redelivery, test_dlq]
+  - id: PIPELINE_QUALIFIED
+    required: true
+    description: "Full ingestion-to-finding lifecycle verified"
+    verification:
+      type: integration_test
+      tests: [test_audit_pipeline, test_audit_pipeline_durable, test_source_event_ingestion]
+  - id: INVESTIGATION_QUALIFIED
+    required: true
+    description: "Evidence-grounded investigation and safe fallback verified"
+    verification:
+      type: unit_test
+      tests: [test_investigation, test_investigation_service, test_groq_investigation_model]
+  - id: REVIEW_QUALIFIED
+    required: true
+    description: "Authenticated reviewer lifecycle and immutable history verified"
+    verification:
+      type: integration_test
+      tests: [test_review_decisions, test_findings_transition_api, test_findings_api]
+  - id: OBSERVABILITY_QUALIFIED
+    required: true
+    description: "Metrics, logs, traces and failure signals verified"
+    verification:
+      type: integration_test
+      tests: [test_telemetry_surface]
+  - id: RESILIENCE_QUALIFIED
+    required: true
+    description: "Required injected failures recover as specified"
+    verification:
+      type: fault_injection_test
+      tests: [test_interruption_and_timeout, test_uncertain_outcomes, test_atomic_terminal_state, test_worker_process]
+  - id: STAGING_READY
+    required: true
+    description: "All required infrastructure and runtime checks pass"
+    verification:
+      type: readiness_gate
+      command: "make demo-verify"
+  - id: DEMO_QUALIFIED
+    required: true
+    description: "Full demo lifecycle and evidence report pass"
+    verification:
+      type: e2e_rehearsal
+      command: "make demo-run"
+  - id: RELEASE_CANDIDATE_QUALIFIED
+    required: true
+    description: "All required gates pass on exact candidate SHA and human review satisfied"
+    verification:
+      type: manual
+      requires: [BUILD_QUALIFIED, DATABASE_QUALIFIED, MESSAGING_QUALIFIED, PIPELINE_QUALIFIED, INVESTIGATION_QUALIFIED, REVIEW_QUALIFIED, OBSERVABILITY_QUALIFIED, RESILIENCE_QUALIFIED, STAGING_READY, DEMO_QUALIFIED, H7]
+
+criteria:
+  # --- Database immutability ---
+  - id: DB-IMM-001
+    description: "review_decisions cannot be updated by itsm_app"
+    workstream: H1
+    verification:
+      type: postgres_integration
+      expected: permission_denied
+    code: src/itsm_agent/adapters/persistence/privileges.py
+    database: migrations/017_review_decisions_append_only.sql
+    test: tests/integration/test_review_decisions.py::test_review_decisions_runtime_role_cannot_mutate
+
+  - id: DB-IMM-002
+    description: "review_decisions cannot be deleted by itsm_app"
+    workstream: H1
+    verification:
+      type: postgres_integration
+      expected: permission_denied
+
+  - id: DB-IMM-003
+    description: "review_decisions cannot be truncated by itsm_app"
+    workstream: H1
+    verification:
+      type: postgres_integration
+      expected: permission_denied
+
+  - id: DB-IMM-004
+    description: "Append-only trigger rejects UPDATE/DELETE (defense in depth)"
+    workstream: H1
+    verification:
+      type: postgres_integration
+      expected: trigger_exception
+
+  - id: DB-IMM-005
+    description: "Safety verifier detects UPDATE grant on append-only table"
+    workstream: H1
+    verification:
+      type: postgres_integration
+      expected: DatabaseSafetyError
+
+  # --- Tenant integrity ---
+  - id: TENANT-001
+    description: "Cross-tenant finding reference rejected by DB constraint"
+    workstream: H3
+    verification:
+      type: postgres_integration
+      expected: foreign_key_violation
+    status: DEFECT
+
+  - id: TENANT-002
+    description: "RLS enabled and forced on all tenant-owned tables"
+    workstream: H1
+    verification:
+      type: postgres_integration
+      expected: rls_enabled_and_forced
+
+  - id: TENANT-003
+    description: "evidence_references.access_fact_id tenant-bound"
+    workstream: H3
+    verification:
+      type: postgres_integration
+      expected: foreign_key_violation
+    status: DEFECT
+
+  - id: TENANT-004
+    description: "evidence_references.source_event_id FK to source_events"
+    workstream: H3
+    verification:
+      type: postgres_integration
+      expected: foreign_key_violation
+    status: DEFECT
+
+  # --- NATS lifecycle ---
+  - id: NATS-DUR-001
+    description: "Durable consumer survives worker restart"
+    workstream: H2
+    verification:
+      type: fault_injection
+      expected: delivery_state_preserved
+    status: DEFECT
+
+  - id: NATS-DUR-002
+    description: "Readiness fails if durable consumer absent"
+    workstream: H2
+    verification:
+      type: unit_test
+      expected: fail_closed
+
+  - id: NATS-DUR-003
+    description: "Readiness fails if ephemeral consumer instead of durable"
+    workstream: H2
+    verification:
+      type: unit_test
+      expected: fail_closed
+
+  - id: NATS-POISON-001
+    description: "Poison message reaches DLQ within bounded attempts"
+    workstream: H2
+    verification:
+      type: fault_injection
+      expected: dlq_escalation
+
+  - id: NATS-RESTART-001
+    description: "Consumer restart does not reset delivery attempts"
+    workstream: H2
+    verification:
+      type: fault_injection
+      expected: delivery_state_preserved
+
+  # --- Pipeline ---
+  - id: PIPE-001
+    description: "Event persistence and outbox insertion atomic"
+    workstream: H1
+    verification:
+      type: integration_test
+      expected: rollback_on_failure
+
+  - id: PIPE-002
+    description: "Outbox relay publishes committed records"
+    workstream: H1
+    verification:
+      type: integration_test
+      expected: message_published
+
+  - id: PIPE-003
+    description: "Duplicate delivery is idempotent"
+    workstream: H1
+    verification:
+      type: integration_test
+      expected: no_duplicate_processing
+
+  # --- Detection ---
+  - id: DET-001
+    description: "Detection creates findings from source events"
+    workstream: H1
+    verification:
+      type: unit_test
+      expected: finding_created
+
+  - id: DET-002
+    description: "Unknown identity yields uncertain, not confirmed violation"
+    workstream: H1
+    verification:
+      type: unit_test
+      expected: inconclusive_outcome
+
+  # --- Investigation ---
+  - id: INV-001
+    description: "Investigation proposes, never authorizes or mutates"
+    workstream: H1
+    verification:
+      type: unit_test
+      expected: finding_status_unchanged
+
+  - id: INV-002
+    description: "Evidence grounding requires both booleans"
+    workstream: H1
+    verification:
+      type: unit_test
+      expected: both_booleans_required
+
+  # --- Reviewer lifecycle ---
+  - id: REV-001
+    description: "Authenticated reviewer can apply permitted transitions"
+    workstream: H1
+    verification:
+      type: integration_test
+      expected: transition_accepted
+
+  - id: REV-002
+    description: "Reviewer separation: distinct verifier required"
+    workstream: H1
+    verification:
+      type: integration_test
+      expected: distinct_principal_required
+
+  - id: REV-003
+    description: "Unauthorized transition rejected and audited"
+    workstream: H1
+    verification:
+      type: integration_test
+      expected: permission_denied_with_audit
+
+  # --- Observability ---
+  - id: OBS-001
+    description: "Metrics endpoint exposes required metric families"
+    workstream: H9
+    verification:
+      type: unit_test
+      expected: metric_families_present
+
+  - id: OBS-002
+    description: "Trace propagation across API, relay, consumer"
+    workstream: H9
+    verification:
+      type: trace_assertion
+      expected: all_required_spans_present
+    status: DEFECT
+
+  - id: OBS-003
+    description: "Structured logs contain correlation fields"
+    workstream: H9
+    verification:
+      type: log_assertion
+      expected: required_fields_present
+
+  # --- Auth ---
+  - id: AUTH-001
+    description: "OIDC token validation (RS256) with pinned CA"
+    workstream: H1
+    verification:
+      type: unit_test
+      expected: token_validated
+
+  - id: AUTH-002
+    description: "HMAC refused in staging"
+    workstream: H1
+    verification:
+      type: unit_test
+      expected: config_error
+
+  # --- Privacy ---
+  - id: PRIV-001
+    description: "Secret redaction in logs and audit payloads"
+    workstream: H1
+    verification:
+      type: unit_test
+      expected: secrets_redacted
+
+  # --- Evidence ---
+  - id: EVID-001
+    description: "Evidence bundle is deterministic and reproducible"
+    workstream: H1
+    verification:
+      type: unit_test
+      expected: deterministic_output
+
+  # --- Migration ---
+  - id: MIG-001
+    description: "Migrations forward-only and idempotent"
+    workstream: H1
+    verification:
+      type: integration_test
+      expected: idempotent_application
+
+  # --- Container-managed consumer ---
+  - id: CONTAINER-001
+    description: "Audit consumer runs as separate Compose service"
+    workstream: H4
+    verification:
+      type: staging_parity
+      expected: service_running
+    status: DEFECT
+
+  - id: CONTAINER-002
+    description: "Consumer restart during processing recovers safely"
+    workstream: H4
+    verification:
+      type: fault_injection
+      expected: no_duplicate_effects
+
+  - id: CONTAINER-003
+    description: "Consumer graceful shutdown handles in-flight work"
+    workstream: H4
+    verification:
+      type: fault_injection
+      expected: graceful_shutdown
+
+  # --- Resilience ---
+  - id: RESIL-001
+    description: "PostgreSQL unavailable during processing → rollback + retry"
+    workstream: H10
+    verification:
+      type: fault_injection
+      expected: rollback_and_retry
+
+  - id: RESIL-002
+    description: "NATS unavailable during publishing → outbox retains records"
+    workstream: H10
+    verification:
+      type: fault_injection
+      expected: outbox_retained
+
+  - id: RESIL-003
+    description: "Duplicate event ingestion → no duplicate canonical evidence"
+    workstream: H10
+    verification:
+      type: integration_test
+      expected: no_duplicate
+
+  - id: RESIL-004
+    description: "Malformed payload → rejected, no partial persistence"
+    workstream: H10
+    verification:
+      type: integration_test
+      expected: rejected_no_partial
+
+  - id: RESIL-005
+    description: "Unknown schema version → quarantined/rejected"
+    workstream: H10
+    verification:
+      type: integration_test
+      expected: quarantined_or_rejected
+
+  - id: RESIL-006
+    description: "Provider timeout → explicit incomplete/fallback"
+    workstream: H10
+    verification:
+      type: unit_test
+      expected: explicit_incomplete
+
+  - id: RESIL-007
+    description: "Collector unavailable → explicit telemetry degradation"
+    workstream: H10
+    verification:
+      type: staging_parity
+      expected: explicit_degradation
+
+  - id: RESIL-008
+    description: "Missing artifacts or zero selected tests → qualification fail"
+    workstream: H10
+    verification:
+      type: ci_job
+      expected: fail_closed
+
+  # --- Documentation ---
+  - id: DOC-001
+    description: "README reflects actual migration count and lifecycle"
+    workstream: H5
+    verification:
+      type: documentation_review
+      expected: no_contradictions
+
+  - id: DOC-002
+    description: "PRD reflects completed qualification"
+    workstream: H5
+    verification:
+      type: documentation_review
+      expected: no_contradictions
+
+  - id: DOC-003
+    description: "Architecture doc reflects completed pivot"
+    workstream: H5
+    verification:
+      type: documentation_review
+      expected: no_contradictions
+
+  # --- Governance ---
+  - id: GOV-001
+    description: "Independent human review completed"
+    workstream: H7
+    verification:
+      type: manual
+      expected: approval_recorded
+    status: BLOCKED
