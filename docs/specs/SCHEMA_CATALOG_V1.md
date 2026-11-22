@@ -58,7 +58,7 @@ All have `tenant_id UUID NOT NULL` and RLS policy: `tenant_id = NULLIF(current_s
 | `erasure_tombstones` | `id UUID` | tenant_id, data_class, record_id, integrity_hash, detail, erase_request_id (FK), erased_at | Append-only |
 | `retention_policies` | `id UUID` | tenant_id, data_class, retention_days, created_at | Controlled |
 | `legal_holds` | `id UUID` | tenant_id, data_class, reason, created_at | Controlled |
-| `finding_transitions` | `id UUID` | tenant_id, finding_id (composite FK), from_status, to_status, actor_id, verifier_id, reason, transitioned_at | Append-only |
+| `finding_transitions` | `id UUID` | tenant_id, finding_id (single-column FK to findings.id), from_status, to_status, actor_id, verifier_id, reason, transitioned_at | Append-only |
 | `investigation_requests` | `id UUID` | tenant_id, finding_id (FK), requested_by, question, evidence_snapshot_ids, max_tool_calls, max_model_calls, status, created_at | Append-only |
 | `investigation_proposals` | `id UUID` | tenant_id, request_id (FK), finding_id, hypothesis, supporting_evidence, contradicting_evidence, missing_evidence, uncertainty, created_at | Append-only |
 

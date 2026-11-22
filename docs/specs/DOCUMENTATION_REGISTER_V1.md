@@ -94,7 +94,7 @@ An SOP that has never been tested is UNVERIFIED, not VALIDATED.
 | # | Location | Claim | Reality | Severity | Disposition |
 |---|----------|-------|---------|----------|-------------|
 | C1 | README.md:112 | No finding status transitions | Finding lifecycle exists (migration 015) | High | DOCUMENTATION_DEFECT |
-| C2 | README.md:159 | Migrations 001–006 | 17 migrations | High | DOCUMENTATION_DEFECT |
+| C2 | README.md:159 | Migrations 001–006 | 16 migrations (001–016) | High | DOCUMENTATION_DEFECT |
 | C3 | README.md:290–291 | No packaged audit consumer entrypoint | `python -m itsm_agent.workers.audit_consumer` exists | Medium | DOCUMENTATION_DEFECT |
 | C4 | PRD.md:5,12 | Qualification in progress | STAGING_READY + DEMO_QUALIFIED passed | Medium | DOCUMENTATION_DEFECT |
 | C5 | docs/architecture.md:76 | Pivot in progress | Pivot complete | Medium | DOCUMENTATION_DEFECT |
