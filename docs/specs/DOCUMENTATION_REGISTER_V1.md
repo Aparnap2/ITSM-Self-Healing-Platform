@@ -19,7 +19,7 @@
 
 | Document | Path | Status | Notes |
 |----------|------|--------|-------|
-| README.md | `README.md` | CONTRADICTORY | Migration count (says 001–006, actual 017); finding transitions (says none, exist); audit consumer entrypoint (says none, exists) |
+| README.md | `README.md` | CONTRADICTORY | Migration count (says 001–006, actual 016); finding transitions (says none, exist); audit consumer entrypoint (says none, exists) |
 | PRD.md | `PRD.md` | OUTDATED | Says qualification in progress; STAGING_READY + DEMO_QUALIFIED passed |
 | Architecture | `docs/architecture.md` | OUTDATED | Describes pivot as in progress; pivot complete |
 | Security boundaries | `docs/security-boundaries.md` | OUTDATED | Refers to old feature branch |
