@@ -82,7 +82,7 @@ Workflows: `ci.yml` (15 jobs), `integration.yml`, `staging-parity.yml` (to be cr
 
 ### 3.3 Migration inventory (verified on main at 3e3a2a0)
 
-Migrations 001–016 applied. H1 adds 017 (on branch `fix/h1-audit-immutability`, PR #30, unmerged).
+Migrations 001–016 applied on baseline. Migration 017 proposed on branch `fix/h1-audit-immutability` (PR #30, unmerged).
 
 | # | File | Purpose |
 |---|------|---------|
@@ -102,7 +102,8 @@ Migrations 001–016 applied. H1 adds 017 (on branch `fix/h1-audit-immutability`
 | 014 | `014_least_privilege_tenant_registry.sql` | Least-privilege tenant registry |
 | 015 | `015_findings_lifecycle.sql` | Findings lifecycle |
 | 016 | `016_investigation_ledger.sql` | Investigation ledger (append-only) |
-| 017 | `017_review_decisions_append_only.sql` | H1: review_decisions append-only (PR #30) |
+
+**Proposed (not in baseline):** Migration 017 (`017_review_decisions_append_only.sql`) on branch `fix/h1-audit-immutability` (PR #30). Adds append-only enforcement for `review_decisions`. Status: pending review.
 
 ### 3.4 Actual tables (from migrations)
 

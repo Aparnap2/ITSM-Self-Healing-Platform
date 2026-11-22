@@ -113,7 +113,7 @@ JavaScript: none (Python-only backend).
 
 ## 2. Database inventory
 
-See `docs/specs/SCHEMA_CATALOG_V1.md` for full schema. Summary: 17 migrations (001–017), ~24 tables, RLS on 23 tenant-owned tables, runtime role `itsm_app` with least-privilege grants.
+See `docs/specs/SCHEMA_CATALOG_V1.md` for full schema. Summary: 16 migrations (001–016) on baseline; ~24 tables, RLS on 23 tenant-owned tables, runtime role `itsm_app` with least-privilege grants. Migration 017 proposed (PR #30).
 
 ## 3. Messaging inventory
 
@@ -275,7 +275,7 @@ All ADRs are in `docs/adr/`.
 | # | Location | Claim | Reality | Severity |
 |---|----------|-------|---------|----------|
 | C1 | README.md:112 | No finding status transitions | Finding lifecycle with ACKNOWLEDGED/VERIFIED exists (migration 015) | High |
-| C2 | README.md:159 | Migrations 001–006 | 17 migrations (001–017) | High |
+| C2 | README.md:159 | Migrations 001–006 | 16 migrations (001–016) | High |
 | C3 | README.md:290–291 | Audit consumer has no packaged entrypoint | `python -m itsm_agent.workers.audit_consumer` exists | Medium |
 | C4 | PRD.md:5,12 | Qualification in progress | STAGING_READY and DEMO_QUALIFIED passed | Medium |
 | C5 | docs/architecture.md:76 | Pivot in progress | Pivot complete | Medium |

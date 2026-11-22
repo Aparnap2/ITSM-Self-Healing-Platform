@@ -1,13 +1,13 @@
 # Schema Catalog v1.0
 
 **Status:** H0 inventory — reconciled against actual migrations on main at `3e3a2a0`.
-**Source of truth:** `migrations/001`–`017` (017 on branch `fix/h1-audit-immutability`, PR #30).
+**Source of truth (baseline SHA 3e3a2a0):** `migrations/001`–`016`. Migration 017 is a proposed H1 change on branch `fix/h1-audit-immutability` (PR #30, unmerged) and is NOT part of the baseline.
 
 ---
 
-## 1. Migration inventory
+## 1. Migration inventory (baseline: 16 migrations)
 
-17 migrations. Forward-only. Applied via `apply_migrations()` (async) or `migrations/apply.py` (sync). Bookkeeping table: `schema_migrations`.
+Forward-only. Applied via `apply_migrations()` (async) or `migrations/apply.py` (sync). Bookkeeping table: `schema_migrations`.
 
 | # | File | Purpose |
 |---|------|---------|
@@ -27,7 +27,8 @@
 | 014 | `014_least_privilege_tenant_registry.sql` | Least-privilege tenant registry |
 | 015 | `015_findings_lifecycle.sql` | Findings lifecycle (status vocabulary, transitions) |
 | 016 | `016_investigation_ledger.sql` | Investigation ledger (append-only) |
-| 017 | `017_review_decisions_append_only.sql` | H1: review_decisions append-only (PR #30) |
+
+**Proposed (not in baseline):** Migration 017 (`017_review_decisions_append_only.sql`) on branch `fix/h1-audit-immutability` (PR #30). Adds append-only enforcement for `review_decisions`. Status: pending review.
 
 ## 2. Table catalog
 
@@ -75,7 +76,7 @@ All have `tenant_id UUID NOT NULL` and RLS policy: `tenant_id = NULLIF(current_s
 |-----------|-------|---------|------------|
 | `fk_review_decisions_tenant_finding` | `review_decisions` | (tenant_id, finding_id) | `findings(tenant_id, id)` |
 | `fk_evidence_references_tenant_finding` | `evidence_references` | (tenant_id, finding_id) | `findings(tenant_id, id)` |
-| `fk_finding_transitions_tenant_finding` | `finding_transitions` | (tenant_id, finding_id) | `findings(tenant_id, id)` |
+| ~~`fk_finding_transitions_tenant_finding`~~ | `finding_transitions` | (tenant_id, finding_id) | `findings(tenant_id, id)` | **NOT YET EXISTS** — migration 015 defines single-column FK only (H3 defect) |
 | `fk_investigation_requests_finding` | `investigation_requests` | (tenant_id, finding_id) | `findings(tenant_id, id)` |
 | `fk_investigation_proposals_request` | `investigation_proposals` | (tenant_id, request_id) | `investigation_requests(tenant_id, id)` |
 
@@ -85,11 +86,11 @@ All have `tenant_id UUID NOT NULL` and RLS policy: `tenant_id = NULLIF(current_s
 |-------|----------------------|---------|-----------|
 | `source_events` | SELECT, INSERT | `trg_source_events_append_only` | 002 |
 | `audit_events` | SELECT, INSERT | `trg_audit_events_append_only` | 006 |
-| `erasure_tombstones` | SELECT, INSERT | `trg_erasure_tombstones_append_only` | 008 + 017 |
+| `erasure_tombstones` | SELECT, INSERT | `trg_erasure_tombstones_append_only` | 008 + 017 (H1, proposed) |
 | `finding_transitions` | SELECT, INSERT | `trg_finding_transitions_append_only` | 015 |
 | `investigation_requests` | SELECT, INSERT | `trg_investigation_requests_append_only` | 016 |
 | `investigation_proposals` | SELECT, INSERT | `trg_investigation_proposals_append_only` | 016 |
-| `review_decisions` | SELECT, INSERT | `trg_review_decisions_append_only` | 005 + 017 (H1) |
+| `review_decisions` | SELECT, INSERT | `trg_review_decisions_append_only` | 005 + 017 (H1, proposed) |
 
 ### 2.5 Runtime role (`itsm_app`)
 

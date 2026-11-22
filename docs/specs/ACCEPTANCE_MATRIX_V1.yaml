@@ -126,7 +126,7 @@ criteria:
 
   - id: TENANT-002
     description: "RLS enabled and forced on all tenant-owned tables"
-    workstream: H1
+    workstream: H3
     verification:
       type: postgres_integration
       expected: rls_enabled_and_forced
@@ -187,21 +187,21 @@ criteria:
   # --- Pipeline ---
   - id: PIPE-001
     description: "Event persistence and outbox insertion atomic"
-    workstream: H1
+    workstream: H8
     verification:
       type: integration_test
       expected: rollback_on_failure
 
   - id: PIPE-002
     description: "Outbox relay publishes committed records"
-    workstream: H1
+    workstream: H8
     verification:
       type: integration_test
       expected: message_published
 
   - id: PIPE-003
     description: "Duplicate delivery is idempotent"
-    workstream: H1
+    workstream: H8
     verification:
       type: integration_test
       expected: no_duplicate_processing
@@ -209,14 +209,14 @@ criteria:
   # --- Detection ---
   - id: DET-001
     description: "Detection creates findings from source events"
-    workstream: H1
+    workstream: baseline
     verification:
       type: unit_test
       expected: finding_created
 
   - id: DET-002
     description: "Unknown identity yields uncertain, not confirmed violation"
-    workstream: H1
+    workstream: baseline
     verification:
       type: unit_test
       expected: inconclusive_outcome
@@ -224,14 +224,14 @@ criteria:
   # --- Investigation ---
   - id: INV-001
     description: "Investigation proposes, never authorizes or mutates"
-    workstream: H1
+    workstream: baseline
     verification:
       type: unit_test
       expected: finding_status_unchanged
 
   - id: INV-002
     description: "Evidence grounding requires both booleans"
-    workstream: H1
+    workstream: baseline
     verification:
       type: unit_test
       expected: both_booleans_required
@@ -239,21 +239,21 @@ criteria:
   # --- Reviewer lifecycle ---
   - id: REV-001
     description: "Authenticated reviewer can apply permitted transitions"
-    workstream: H1
+    workstream: baseline
     verification:
       type: integration_test
       expected: transition_accepted
 
   - id: REV-002
     description: "Reviewer separation: distinct verifier required"
-    workstream: H1
+    workstream: baseline
     verification:
       type: integration_test
       expected: distinct_principal_required
 
   - id: REV-003
     description: "Unauthorized transition rejected and audited"
-    workstream: H1
+    workstream: baseline
     verification:
       type: integration_test
       expected: permission_denied_with_audit
@@ -284,14 +284,14 @@ criteria:
   # --- Auth ---
   - id: AUTH-001
     description: "OIDC token validation (RS256) with pinned CA"
-    workstream: H1
+    workstream: baseline
     verification:
       type: unit_test
       expected: token_validated
 
   - id: AUTH-002
     description: "HMAC refused in staging"
-    workstream: H1
+    workstream: baseline
     verification:
       type: unit_test
       expected: config_error
@@ -299,7 +299,7 @@ criteria:
   # --- Privacy ---
   - id: PRIV-001
     description: "Secret redaction in logs and audit payloads"
-    workstream: H1
+    workstream: baseline
     verification:
       type: unit_test
       expected: secrets_redacted
@@ -307,7 +307,7 @@ criteria:
   # --- Evidence ---
   - id: EVID-001
     description: "Evidence bundle is deterministic and reproducible"
-    workstream: H1
+    workstream: baseline
     verification:
       type: unit_test
       expected: deterministic_output
@@ -315,7 +315,7 @@ criteria:
   # --- Migration ---
   - id: MIG-001
     description: "Migrations forward-only and idempotent"
-    workstream: H1
+    workstream: baseline
     verification:
       type: integration_test
       expected: idempotent_application
