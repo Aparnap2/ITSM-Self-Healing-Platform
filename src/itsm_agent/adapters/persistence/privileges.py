@@ -195,6 +195,11 @@ async def _append_only_trigger_safety(conn: AsyncConnection) -> list[str]:
     violations: list[str] = []
     async with conn.cursor(row_factory=dict_row) as cur:
         for table in APPEND_ONLY_TABLES:
+            # Require a single BEFORE trigger that covers BOTH UPDATE and DELETE,
+            # is enabled (not disabled), and whose function is the expected
+            # append-only guard (name contains 'append_only' and body raises).
+            # A trigger covering only one operation, a disabled trigger, or an
+            # unrelated no-op trigger must NOT satisfy this check.
             await cur.execute(
                 """
                 SELECT EXISTS (
@@ -202,14 +207,19 @@ async def _append_only_trigger_safety(conn: AsyncConnection) -> list[str]:
                       FROM pg_trigger t
                       JOIN pg_class c ON c.oid = t.tgrelid
                       JOIN pg_namespace n ON n.oid = c.relnamespace
+                      JOIN pg_proc p ON p.oid = t.tgfoid
                      WHERE n.nspname = current_schema()
                        AND c.relname = %s
                        AND NOT t.tgisinternal
-                       AND (t.tgtype & 2) <> 0          -- BEFORE
-                       AND (t.tgtype & 24) <> 0         -- UPDATE or DELETE
+                       AND t.tgenabled <> 'D'             -- not disabled
+                       AND (t.tgtype & 2) <> 0           -- BEFORE
+                       AND (t.tgtype & 24) = 24          -- UPDATE AND DELETE
+                       AND t.tgname LIKE %s              -- naming convention
+                       AND p.proname LIKE %s             -- function identity
+                       AND p.prosrc ILIKE '%%RAISE%%'    -- function actually raises
                 ) AS has_trigger
                 """,
-                (table,),
+                (table, "%append_only%", "%append_only%"),
             )
             row = await cur.fetchone()
             if row is None or not row["has_trigger"]:
