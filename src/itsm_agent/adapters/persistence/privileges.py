@@ -211,7 +211,7 @@ async def _append_only_trigger_safety(conn: AsyncConnection) -> list[str]:
                      WHERE n.nspname = current_schema()
                        AND c.relname = %s
                        AND NOT t.tgisinternal
-                       AND t.tgenabled <> 'D'             -- not disabled
+                       AND t.tgenabled IN ('O', 'A')      -- enabled (not disabled or replica-only)
                        AND (t.tgtype & 2) <> 0           -- BEFORE
                        AND (t.tgtype & 24) = 24          -- UPDATE AND DELETE
                        AND t.tgname LIKE %s              -- naming convention

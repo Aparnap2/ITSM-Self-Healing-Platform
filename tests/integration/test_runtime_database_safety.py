@@ -411,6 +411,29 @@ async def test_append_only_trigger_incomplete_fails_closed(
         await admin.close()
 
 
+async def test_append_only_trigger_replica_mode_fails_closed(
+    role_factory: RuntimeRoleFactory, pg_dsn: str
+) -> None:
+    """Verifier fails when the trigger is enabled only in REPLICA mode.
+
+    A replica-only trigger does not fire during ordinary application sessions
+    using the default replication role, so it cannot enforce append-only.
+    """
+    dsn = await role_factory(tables=DML_TABLES)
+    admin = await _admin(pg_dsn)
+    try:
+        await admin.execute(
+            "ALTER TABLE review_decisions ENABLE REPLICA TRIGGER trg_review_decisions_append_only"
+        )
+        with pytest.raises(DatabaseSafetyError, match="append-only trigger"):
+            await _as_role_assert(dsn)
+    finally:
+        await admin.execute(
+            "ALTER TABLE review_decisions ENABLE TRIGGER trg_review_decisions_append_only"
+        )
+        await admin.close()
+
+
 def _user_of(dsn: str) -> str:
     return str(conninfo_to_dict(dsn)["user"])
 
