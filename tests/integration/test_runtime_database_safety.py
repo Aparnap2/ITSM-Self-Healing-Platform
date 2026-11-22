@@ -83,6 +83,7 @@ APPEND_ONLY_TABLES: tuple[str, ...] = (
     "finding_transitions",
     "investigation_requests",
     "investigation_proposals",
+    "review_decisions",
 )
 READ_ONLY_TABLES: tuple[str, ...] = ("reviewer_authorizations",)
 
@@ -308,6 +309,24 @@ async def test_append_only_write_grant_is_rejected(
             )
         )
         with pytest.raises(DatabaseSafetyError, match="UPDATE append-only"):
+            await _as_role_assert(dsn)
+    finally:
+        await admin.close()
+
+
+async def test_review_decisions_append_only_grant_is_rejected(
+    role_factory: RuntimeRoleFactory, pg_dsn: str
+) -> None:
+    """review_decisions must be in the append-only set: an UPDATE grant fails closed."""
+    dsn = await role_factory(tables=DML_TABLES)
+    admin = await _admin(pg_dsn)
+    try:
+        await admin.execute(
+            sql.SQL("GRANT UPDATE ON {} TO {}").format(
+                sql.Identifier("review_decisions"), sql.Identifier(_user_of(dsn))
+            )
+        )
+        with pytest.raises(DatabaseSafetyError, match="review_decisions"):
             await _as_role_assert(dsn)
     finally:
         await admin.close()
