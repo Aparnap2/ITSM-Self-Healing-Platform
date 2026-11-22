@@ -178,6 +178,174 @@ def test_directory_probe_never_raises_when_it_cannot_look(
     assert isinstance(probe["reason"], str) and probe["reason"]
 
 
+async def test_jetstream_requires_the_named_durable_consumer(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A durable consumer with the expected name must be present."""
+
+    class _FakeResponse:
+        def __init__(self, body: dict[str, Any]) -> None:
+            self.status_code = 200
+            self._body = body
+
+        def json(self) -> dict[str, Any]:
+            return self._body
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse(
+                {
+                    "streams": 2,
+                    "consumers": 1,
+                    "account_details": [
+                        {
+                            "consumer_detail": [
+                                {
+                                    "config": {"durable_name": "itsm-workflow"},
+                                }
+                            ]
+                        }
+                    ],
+                }
+            )
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+
+    report = _report(readiness_module)
+    await readiness_module.check_jetstream(report)
+
+    rows = [c for c in report.checks if c.name == "nats jetstream"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "PASS"
+
+
+async def test_jetstream_rejects_an_ephemeral_consumer(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ephemeral consumer (no durable_name) must not satisfy the check."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {
+                        "consumer_detail": [
+                            {"config": {}},
+                        ]
+                    }
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+
+    report = _report(readiness_module)
+    await readiness_module.check_jetstream(report)
+
+    rows = [c for c in report.checks if c.name == "nats jetstream"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+    assert "itsm-workflow" in rows[0].detail
+
+
+async def test_jetstream_rejects_a_wrong_durable_name(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A durable consumer with a different name must not satisfy the check."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {
+                        "consumer_detail": [
+                            {"config": {"durable_name": "wrong-name"}},
+                        ]
+                    }
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+
+    report = _report(readiness_module)
+    await readiness_module.check_jetstream(report)
+
+    rows = [c for c in report.checks if c.name == "nats jetstream"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_jetstream_fails_on_http_error(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An HTTP error must produce a FAIL, not an exception."""
+    import httpx
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> Any:
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+
+    report = _report(readiness_module)
+    await readiness_module.check_jetstream(report)
+
+    rows = [c for c in report.checks if c.name == "nats jetstream"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
 async def test_a_findings_request_failure_is_recorded_and_does_not_abort(
     readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:

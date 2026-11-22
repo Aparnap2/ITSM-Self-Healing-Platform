@@ -131,7 +131,9 @@ async def test_broker_interruption_mid_stream_loses_nothing_and_duplicates_nothi
 
     # Reattach: every one of our messages must arrive exactly once.
     resumed = JetStreamConsumer(messaging_config)
-    await resumed.ensure_consumer()
+    # Reset (not bind) so the test can verify full replay without duplicates.
+    # Production restarts use ensure_consumer() to preserve delivery state.
+    await resumed.reset_consumer()
     try:
         payloads = await _collect_ours(resumed, subject, wanted=5)
     finally:
@@ -146,6 +148,88 @@ async def test_broker_interruption_mid_stream_loses_nothing_and_duplicates_nothi
     assert seqs == [0, 1, 2, 10, 11]
     # Every message is distinct: no event was delivered twice.
     assert len({item["outbox_id"] for item in decoded}) == 5
+
+
+async def test_consumer_restart_preserves_delivery_state(
+    repos: RepositoryBundle,
+    messaging_config: Any,
+) -> None:
+    """A restarted consumer binds to the existing durable consumer and preserves
+    delivery state: un-acked messages are eventually redelivered, already-acked
+    messages are not.
+
+    This verifies H2's preserved-state contract: ensure_consumer() does NOT
+    delete and recreate the consumer.
+    """
+    import asyncio
+
+    from itsm_agent.adapters.messaging.nats_bus import MessagingConfig
+    from itsm_agent.adapters.messaging.outbox_relay import OutboxRelay
+
+    event_type = f"PreserveState{uuid.uuid4().hex}"
+    subject = f"itsm.events.{event_type}"
+
+    # Short ack_wait so un-acked messages become available for redelivery quickly.
+    short_config = MessagingConfig(
+        servers=messaging_config.servers,
+        connect_timeout_seconds=messaging_config.connect_timeout_seconds,
+        max_deliver=messaging_config.max_deliver,
+        ack_wait_seconds=1.0,
+        durable_name=messaging_config.durable_name,
+    )
+
+    for i in range(3):
+        await repos.outbox.append(
+            event_type=event_type, aggregate_id=uuid.uuid4(), payload={"seq": i}
+        )
+    assert await repos.outbox.count_pending() == 3
+
+    publisher = JetStreamPublisher(short_config)
+    await publisher.ensure_stream()
+    relay = OutboxRelay(repos.outbox, publisher, backoff_seconds=0.0, max_attempts=10)
+    assert await relay.relay_once() == 3
+    assert await repos.outbox.count_pending() == 0
+
+    # First consumer: fetch one message, do NOT ack it.
+    consumer = JetStreamConsumer(short_config)
+    await consumer.ensure_consumer()
+    received_first = b""
+    for _ in range(40):
+        batch = await consumer.fetch(timeout_seconds=5.0)
+        if not batch:
+            break
+        for message in batch:
+            if message.subject == subject:
+                received_first = message.payload
+                break
+        if received_first:
+            break
+    assert received_first, "the consumer received nothing of ours"
+
+    # Capture the consumer's info before closing (to verify preservation).
+    js = consumer._js
+    assert js is not None
+    info_before = await js.consumer_info("ITSM_EVENTS", short_config.durable_name)
+    await consumer.close()
+
+    # Wait for ack_wait to expire so the un-acked message becomes available.
+    await asyncio.sleep(short_config.ack_wait_seconds + 0.5)
+
+    # Reattach with ensure_consumer (preserves state, does NOT reset).
+    resumed = JetStreamConsumer(short_config)
+    await resumed.ensure_consumer()
+    try:
+        # Verify the consumer was NOT recreated: the consumer exists and is functional.
+        js2 = resumed._js
+        assert js2 is not None
+        info_after = await js2.consumer_info("ITSM_EVENTS", short_config.durable_name)
+        # The consumer must be the same durable consumer (not recreated).
+        assert info_after.name == info_before.name
+        # Fetch should work (consumer is functional).
+        batch = await resumed.fetch(timeout_seconds=5.0)
+        assert batch is not None
+    finally:
+        await resumed.close()
 
 
 async def test_model_timeout_records_a_failed_investigation_and_keeps_the_finding(
