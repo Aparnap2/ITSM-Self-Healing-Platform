@@ -190,25 +190,33 @@ async def test_consumer_restart_preserves_delivery_state(
     assert await relay.relay_once() == 3
     assert await repos.outbox.count_pending() == 0
 
-    # First consumer: fetch one message, do NOT ack it.
+    # First consumer: fetch and ack 2 messages, fetch 1 but do NOT ack.
     consumer = JetStreamConsumer(short_config)
     await consumer.ensure_consumer()
-    received_first = b""
+    js = consumer._js
+    assert js is not None
+
+    acked_payloads: list[bytes] = []
+    unacked_payload: bytes = b""
     for _ in range(40):
         batch = await consumer.fetch(timeout_seconds=5.0)
         if not batch:
             break
         for message in batch:
-            if message.subject == subject:
-                received_first = message.payload
+            if message.subject != subject:
+                continue
+            if len(acked_payloads) < 2:
+                acked_payloads.append(message.payload)
+                await consumer.ack(message)
+            else:
+                unacked_payload = message.payload
+                # Do NOT ack — leave pending.
+            if len(acked_payloads) >= 2 and unacked_payload:
                 break
-        if received_first:
-            break
-    assert received_first, "the consumer received nothing of ours"
+    assert len(acked_payloads) == 2, "should have acked 2 messages"
+    assert unacked_payload, "should have one un-acked message"
 
-    # Capture the consumer's info before closing (to verify preservation).
-    js = consumer._js
-    assert js is not None
+    # Capture consumer info before close (to verify preservation).
     info_before = await js.consumer_info("ITSM_EVENTS", short_config.durable_name)
     await consumer.close()
 
@@ -218,18 +226,43 @@ async def test_consumer_restart_preserves_delivery_state(
     # Reattach with ensure_consumer (preserves state, does NOT reset).
     resumed = JetStreamConsumer(short_config)
     await resumed.ensure_consumer()
+    js2 = resumed._js
+    assert js2 is not None
+    info_after = await js2.consumer_info("ITSM_EVENTS", short_config.durable_name)
+
+    # Verify the consumer was NOT recreated: same name.
+    assert info_after.name == info_before.name, "consumer was recreated (name changed)"
+    # Verify delivery counter preserved (not reset to 0).
+    assert info_after.delivered.consumer_seq >= info_before.delivered.consumer_seq, (
+        "delivery counter regressed (consumer was reset)"
+    )
+
     try:
-        # Verify the consumer was NOT recreated: the consumer exists and is functional.
-        js2 = resumed._js
-        assert js2 is not None
-        info_after = await js2.consumer_info("ITSM_EVENTS", short_config.durable_name)
-        # The consumer must be the same durable consumer (not recreated).
-        assert info_after.name == info_before.name
-        # Fetch should work (consumer is functional).
-        batch = await resumed.fetch(timeout_seconds=5.0)
-        assert batch is not None
-    finally:
+        # Fetch remaining messages. The un-acked one should be redelivered.
+        collected: list[bytes] = []
+        for _ in range(40):
+            batch = await resumed.fetch(timeout_seconds=5.0)
+            if not batch:
+                break
+            for message in batch:
+                if message.subject != subject:
+                    continue
+                collected.append(message.payload)
+                await resumed.ack(message)
+                if len(collected) >= 2:
+                    break
         await resumed.close()
+
+        # The un-acked message must have been redelivered.
+        assert unacked_payload in collected, "un-acked message was not redelivered"
+        # Already-acked messages must NOT be redelivered.
+        for acked in acked_payloads:
+            assert acked not in collected, "already-acked message was redelivered (duplicate)"
+    finally:
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            await resumed.close()
 
 
 async def test_model_timeout_records_a_failed_investigation_and_keeps_the_finding(

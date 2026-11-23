@@ -541,12 +541,14 @@ async def check_observability(report: Readiness) -> None:
 
 
 async def check_pipeline_processes(report: Readiness) -> None:
-    """The relay and consumer must be live, not merely declared in compose.
+    """Verify durable consumer topology and outbox state.
 
-    Outbox state alone is not process health: this function also verifies that
-    the durable consumer exists in NATS (which requires the consumer process to
-    have started and created it). If the consumer is absent, the check fails
-    even when the outbox is empty.
+    NOTE: A durable consumer persisting in NATS does not prove the worker
+    process is alive. This check verifies that the durable consumer exists
+    with the correct name and configuration. Process liveness is verified
+    separately by the container health check (H4) and by the consumer
+    creating the durable consumer during startup. If the consumer is absent,
+    the check fails even when the outbox is empty.
     """
     # Verify the durable consumer exists (process liveness signal).
     nats_url = _env("ITSM_NATS_MONITOR_URL", "http://127.0.0.1:8223")
@@ -554,22 +556,36 @@ async def check_pipeline_processes(report: Readiness) -> None:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(consumer_url)
-        if _is_ok(response.status_code):
+        if not _is_ok(response.status_code):
+            report.add(
+                "pipeline processes",
+                "FAIL",
+                f"{consumer_url}: HTTP {response.status_code}",
+            )
+            return
+        try:
             body = response.json()
-            accounts = body.get("account_details") or []
-            durable_names: list[str] = []
-            for account in accounts:
-                for consumer in account.get("consumer_detail") or []:
-                    name = consumer.get("config", {}).get("durable_name")
-                    if name:
-                        durable_names.append(str(name))
-            if "itsm-workflow" not in durable_names:
-                report.add(
-                    "pipeline processes",
-                    "FAIL",
-                    f"durable consumer 'itsm-workflow' not found in NATS (found: {durable_names})",
-                )
-                return
+        except (ValueError, KeyError) as exc:
+            report.add(
+                "pipeline processes",
+                "FAIL",
+                f"{consumer_url}: unparseable response ({type(exc).__name__})",
+            )
+            return
+        accounts = body.get("account_details") or []
+        durable_names: list[str] = []
+        for account in accounts:
+            for consumer in account.get("consumer_detail") or []:
+                name = consumer.get("config", {}).get("durable_name")
+                if name:
+                    durable_names.append(str(name))
+        if "itsm-workflow" not in durable_names:
+            report.add(
+                "pipeline processes",
+                "FAIL",
+                f"durable consumer 'itsm-workflow' not found in NATS (found: {durable_names})",
+            )
+            return
     except httpx.HTTPError as exc:
         report.add("pipeline processes", "FAIL", f"{consumer_url}: {exc}"[:300])
         return

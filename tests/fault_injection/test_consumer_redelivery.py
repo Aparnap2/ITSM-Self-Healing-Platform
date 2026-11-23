@@ -57,7 +57,7 @@ async def test_crash_between_handler_and_ack_redelivers_without_duplicate_side_e
     )
 
     consumer = JetStreamConsumer(messaging_config)
-    await consumer.ensure_consumer()
+    await consumer.reset_consumer()
 
     calls: list[str] = []
 
