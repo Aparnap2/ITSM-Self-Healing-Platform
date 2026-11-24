@@ -569,7 +569,7 @@ async def check_pipeline_processes(report: Readiness) -> None:
     yet verified (H4 is pending). If the consumer is absent, the check fails
     even when the outbox is empty.
     """
-    # Verify the durable consumer exists (process liveness signal).
+    # Verify the durable consumer exists (topology check, not process liveness).
     nats_url = _env("ITSM_NATS_MONITOR_URL", "http://127.0.0.1:8223")
     consumer_url = nats_url + "/jsz?consumers=true"
     try:
@@ -609,16 +609,36 @@ async def check_pipeline_processes(report: Readiness) -> None:
         durable_names: list[str] = []
         for account in accounts:
             if not isinstance(account, dict):
-                continue
+                report.add(
+                    "pipeline processes",
+                    "FAIL",
+                    f"{consumer_url}: account entry is not an object",
+                )
+                return
             consumer_detail = account.get("consumer_detail") or []
             if not isinstance(consumer_detail, list):
-                continue
+                report.add(
+                    "pipeline processes",
+                    "FAIL",
+                    f"{consumer_url}: consumer_detail is not a list",
+                )
+                return
             for consumer in consumer_detail:
                 if not isinstance(consumer, dict):
-                    continue
+                    report.add(
+                        "pipeline processes",
+                        "FAIL",
+                        f"{consumer_url}: consumer entry is not an object",
+                    )
+                    return
                 cfg = consumer.get("config") or {}
                 if not isinstance(cfg, dict):
-                    continue
+                    report.add(
+                        "pipeline processes",
+                        "FAIL",
+                        f"{consumer_url}: consumer config is not an object",
+                    )
+                    return
                 name = cfg.get("durable_name")
                 if name:
                     durable_names.append(str(name))

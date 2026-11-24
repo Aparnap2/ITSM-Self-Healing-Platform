@@ -462,6 +462,249 @@ async def test_jetstream_fails_on_http_error(
     assert rows[0].verdict == "FAIL"
 
 
+async def test_pipeline_processes_fails_on_malformed_account_entry(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-dict account entry must fail closed."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": ["not-a-dict"],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_malformed_consumer_detail(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-list consumer_detail must fail closed."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {"consumer_detail": "not-a-list"},
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_malformed_consumer_entry(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-dict consumer entry must fail closed."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {
+                        "consumer_detail": ["not-a-dict"],
+                    }
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_malformed_config(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A consumer with a non-dict config must fail closed."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {
+                        "consumer_detail": [
+                            {"config": "not-a-dict"},
+                        ]
+                    }
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_malformed_top_level(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A valid JSON list (not an object) must fail closed."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return [1, 2, 3]
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
 async def test_pipeline_processes_fails_on_http_error(
     readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
