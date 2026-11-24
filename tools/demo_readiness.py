@@ -230,22 +230,31 @@ async def check_jetstream(report: Readiness) -> None:
     try:
         streams = int(body.get("streams") or 0)
         consumers = int(body.get("consumers") or 0)
-        accounts = body.get("account_details") or []
-        if not isinstance(accounts, list):
-            raise TypeError("account_details is not a list")
+        if "account_details" in body and body.get("account_details") is not None:
+            accounts = body.get("account_details")
+            if not isinstance(accounts, list):
+                raise TypeError("account_details is not a list")
+        else:
+            accounts = []
         durable_names: list[str] = []
         for account in accounts:
             if not isinstance(account, dict):
                 raise TypeError("account entry is not an object")
-            consumer_detail = account.get("consumer_detail") or []
-            if not isinstance(consumer_detail, list):
-                raise TypeError("consumer_detail is not a list")
+            if "consumer_detail" in account and account.get("consumer_detail") is not None:
+                consumer_detail = account.get("consumer_detail")
+                if not isinstance(consumer_detail, list):
+                    raise TypeError("consumer_detail is not a list")
+            else:
+                consumer_detail = []
             for consumer in consumer_detail:
                 if not isinstance(consumer, dict):
                     raise TypeError("consumer entry is not an object")
-                cfg = consumer.get("config") or {}
-                if not isinstance(cfg, dict):
-                    raise TypeError("consumer config is not an object")
+                if "config" in consumer and consumer.get("config") is not None:
+                    cfg = consumer.get("config")
+                    if not isinstance(cfg, dict):
+                        raise TypeError("consumer config is not an object")
+                else:
+                    cfg = {}
                 name = cfg.get("durable_name")
                 if name:
                     durable_names.append(str(name))
@@ -598,14 +607,17 @@ async def check_pipeline_processes(report: Readiness) -> None:
                 f"{consumer_url}: response is not a JSON object",
             )
             return
-        accounts = body.get("account_details") or []
-        if not isinstance(accounts, list):
-            report.add(
-                "pipeline processes",
-                "FAIL",
-                f"{consumer_url}: account_details is not a list",
-            )
-            return
+        if "account_details" in body and body.get("account_details") is not None:
+            accounts = body.get("account_details")
+            if not isinstance(accounts, list):
+                report.add(
+                    "pipeline processes",
+                    "FAIL",
+                    f"{consumer_url}: account_details is not a list",
+                )
+                return
+        else:
+            accounts = []
         durable_names: list[str] = []
         for account in accounts:
             if not isinstance(account, dict):
@@ -615,14 +627,17 @@ async def check_pipeline_processes(report: Readiness) -> None:
                     f"{consumer_url}: account entry is not an object",
                 )
                 return
-            consumer_detail = account.get("consumer_detail") or []
-            if not isinstance(consumer_detail, list):
-                report.add(
-                    "pipeline processes",
-                    "FAIL",
-                    f"{consumer_url}: consumer_detail is not a list",
-                )
-                return
+            if "consumer_detail" in account and account.get("consumer_detail") is not None:
+                consumer_detail = account.get("consumer_detail")
+                if not isinstance(consumer_detail, list):
+                    report.add(
+                        "pipeline processes",
+                        "FAIL",
+                        f"{consumer_url}: consumer_detail is not a list",
+                    )
+                    return
+            else:
+                consumer_detail = []
             for consumer in consumer_detail:
                 if not isinstance(consumer, dict):
                     report.add(
@@ -631,14 +646,17 @@ async def check_pipeline_processes(report: Readiness) -> None:
                         f"{consumer_url}: consumer entry is not an object",
                     )
                     return
-                cfg = consumer.get("config") or {}
-                if not isinstance(cfg, dict):
-                    report.add(
-                        "pipeline processes",
-                        "FAIL",
-                        f"{consumer_url}: consumer config is not an object",
-                    )
-                    return
+                if "config" in consumer and consumer.get("config") is not None:
+                    cfg = consumer.get("config")
+                    if not isinstance(cfg, dict):
+                        report.add(
+                            "pipeline processes",
+                            "FAIL",
+                            f"{consumer_url}: consumer config is not an object",
+                        )
+                        return
+                else:
+                    cfg = {}
                 name = cfg.get("durable_name")
                 if name:
                     durable_names.append(str(name))
