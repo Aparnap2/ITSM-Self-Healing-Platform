@@ -131,7 +131,9 @@ async def test_broker_interruption_mid_stream_loses_nothing_and_duplicates_nothi
 
     # Reattach: every one of our messages must arrive exactly once.
     resumed = JetStreamConsumer(messaging_config)
-    await resumed.ensure_consumer()
+    # Reset (not bind) so the test can verify full replay without duplicates.
+    # Production restarts use ensure_consumer() to preserve delivery state.
+    await resumed.reset_consumer()
     try:
         payloads = await _collect_ours(resumed, subject, wanted=5)
     finally:
@@ -146,6 +148,121 @@ async def test_broker_interruption_mid_stream_loses_nothing_and_duplicates_nothi
     assert seqs == [0, 1, 2, 10, 11]
     # Every message is distinct: no event was delivered twice.
     assert len({item["outbox_id"] for item in decoded}) == 5
+
+
+async def test_consumer_restart_preserves_delivery_state(
+    repos: RepositoryBundle,
+    messaging_config: Any,
+) -> None:
+    """A restarted consumer binds to the existing durable consumer and preserves
+    delivery state: un-acked messages are eventually redelivered, already-acked
+    messages are not.
+
+    This verifies H2's preserved-state contract: ensure_consumer() does NOT
+    delete and recreate the consumer.
+    """
+    import asyncio
+
+    from itsm_agent.adapters.messaging.nats_bus import MessagingConfig
+    from itsm_agent.adapters.messaging.outbox_relay import OutboxRelay
+
+    event_type = f"PreserveState{uuid.uuid4().hex}"
+    subject = f"itsm.events.{event_type}"
+
+    # Short ack_wait so un-acked messages become available for redelivery quickly.
+    short_config = MessagingConfig(
+        servers=messaging_config.servers,
+        connect_timeout_seconds=messaging_config.connect_timeout_seconds,
+        max_deliver=messaging_config.max_deliver,
+        ack_wait_seconds=1.0,
+        durable_name=messaging_config.durable_name,
+    )
+
+    for i in range(3):
+        await repos.outbox.append(
+            event_type=event_type, aggregate_id=uuid.uuid4(), payload={"seq": i}
+        )
+    assert await repos.outbox.count_pending() == 3
+
+    publisher = JetStreamPublisher(short_config)
+    await publisher.ensure_stream()
+    relay = OutboxRelay(repos.outbox, publisher, backoff_seconds=0.0, max_attempts=10)
+    assert await relay.relay_once() == 3
+    assert await repos.outbox.count_pending() == 0
+
+    # First consumer: fetch and ack 2 messages, fetch 1 but do NOT ack.
+    consumer = JetStreamConsumer(short_config)
+    await consumer.ensure_consumer()
+    js = consumer._js
+    assert js is not None
+
+    acked_payloads: list[bytes] = []
+    unacked_payload: bytes = b""
+    for _ in range(40):
+        batch = await consumer.fetch(timeout_seconds=5.0)
+        if not batch:
+            break
+        for message in batch:
+            if message.subject != subject:
+                continue
+            if len(acked_payloads) < 2:
+                acked_payloads.append(message.payload)
+                await consumer.ack(message)
+            else:
+                unacked_payload = message.payload
+                # Do NOT ack — leave pending.
+            if len(acked_payloads) >= 2 and unacked_payload:
+                break
+    assert len(acked_payloads) == 2, "should have acked 2 messages"
+    assert unacked_payload, "should have one un-acked message"
+
+    # Capture consumer info before close (to verify preservation).
+    info_before = await js.consumer_info("ITSM_EVENTS", short_config.durable_name)
+    await consumer.close()
+
+    # Wait for ack_wait to expire so the un-acked message becomes available.
+    await asyncio.sleep(short_config.ack_wait_seconds + 0.5)
+
+    # Reattach with ensure_consumer (preserves state, does NOT reset).
+    resumed = JetStreamConsumer(short_config)
+    await resumed.ensure_consumer()
+    js2 = resumed._js
+    assert js2 is not None
+    info_after = await js2.consumer_info("ITSM_EVENTS", short_config.durable_name)
+
+    # Verify the consumer was NOT recreated: same name.
+    assert info_after.name == info_before.name, "consumer was recreated (name changed)"
+    # Verify delivery counter preserved (not reset to 0).
+    assert info_after.delivered.consumer_seq >= info_before.delivered.consumer_seq, (
+        "delivery counter regressed (consumer was reset)"
+    )
+
+    try:
+        # Fetch remaining messages. The un-acked one should be redelivered.
+        collected: list[bytes] = []
+        for _ in range(40):
+            batch = await resumed.fetch(timeout_seconds=5.0)
+            if not batch:
+                break
+            for message in batch:
+                if message.subject != subject:
+                    continue
+                collected.append(message.payload)
+                await resumed.ack(message)
+                if len(collected) >= 2:
+                    break
+        await resumed.close()
+
+        # The un-acked message must have been redelivered.
+        assert unacked_payload in collected, "un-acked message was not redelivered"
+        # Already-acked messages must NOT be redelivered.
+        for acked in acked_payloads:
+            assert acked not in collected, "already-acked message was redelivered (duplicate)"
+    finally:
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            await resumed.close()
 
 
 async def test_model_timeout_records_a_failed_investigation_and_keeps_the_finding(

@@ -178,6 +178,982 @@ def test_directory_probe_never_raises_when_it_cannot_look(
     assert isinstance(probe["reason"], str) and probe["reason"]
 
 
+async def test_jetstream_requires_the_named_durable_consumer(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A durable consumer with the expected name must be present."""
+
+    class _FakeResponse:
+        def __init__(self, body: dict[str, Any]) -> None:
+            self.status_code = 200
+            self._body = body
+
+        def json(self) -> dict[str, Any]:
+            return self._body
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse(
+                {
+                    "streams": 2,
+                    "consumers": 1,
+                    "account_details": [
+                        {
+                            "consumer_detail": [
+                                {
+                                    "config": {"durable_name": "itsm-workflow"},
+                                }
+                            ]
+                        }
+                    ],
+                }
+            )
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+
+    report = _report(readiness_module)
+    await readiness_module.check_jetstream(report)
+
+    rows = [c for c in report.checks if c.name == "nats jetstream"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "PASS"
+
+
+async def test_jetstream_rejects_an_ephemeral_consumer(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ephemeral consumer (no durable_name) must not satisfy the check."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {
+                        "consumer_detail": [
+                            {"config": {}},
+                        ]
+                    }
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+
+    report = _report(readiness_module)
+    await readiness_module.check_jetstream(report)
+
+    rows = [c for c in report.checks if c.name == "nats jetstream"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+    assert "itsm-workflow" in rows[0].detail
+
+
+async def test_jetstream_rejects_a_wrong_durable_name(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A durable consumer with a different name must not satisfy the check."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {
+                        "consumer_detail": [
+                            {"config": {"durable_name": "wrong-name"}},
+                        ]
+                    }
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+
+    report = _report(readiness_module)
+    await readiness_module.check_jetstream(report)
+
+    rows = [c for c in report.checks if c.name == "nats jetstream"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_jetstream_fails_on_malformed_structure_list(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A valid JSON list (not an object) must fail closed."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return [1, 2, 3]
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+
+    report = _report(readiness_module)
+    await readiness_module.check_jetstream(report)
+
+    rows = [c for c in report.checks if c.name == "nats jetstream"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_jetstream_fails_on_malformed_structure_string_accounts(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """account_details as a string (not a list) must fail closed."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": "not-a-list",
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+
+    report = _report(readiness_module)
+    await readiness_module.check_jetstream(report)
+
+    rows = [c for c in report.checks if c.name == "nats jetstream"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_jetstream_fails_on_malformed_structure_bad_config(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A consumer with a non-dict config must fail closed."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {
+                        "consumer_detail": [
+                            {"config": "not-a-dict"},
+                        ]
+                    }
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+
+    report = _report(readiness_module)
+    await readiness_module.check_jetstream(report)
+
+    rows = [c for c in report.checks if c.name == "nats jetstream"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_jetstream_fails_on_falsey_account_details(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """account_details as empty string must not become [] and pass."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": "",
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+
+    report = _report(readiness_module)
+    await readiness_module.check_jetstream(report)
+
+    rows = [c for c in report.checks if c.name == "nats jetstream"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_jetstream_fails_on_falsey_consumer_detail(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """consumer_detail as empty string must not become [] and pass."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {
+                        "consumer_detail": "",
+                    }
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+
+    report = _report(readiness_module)
+    await readiness_module.check_jetstream(report)
+
+    rows = [c for c in report.checks if c.name == "nats jetstream"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_jetstream_fails_on_falsey_config(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """config as empty list must not become {} and pass."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {
+                        "consumer_detail": [
+                            {"config": []},
+                        ]
+                    }
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+
+    report = _report(readiness_module)
+    await readiness_module.check_jetstream(report)
+
+    rows = [c for c in report.checks if c.name == "nats jetstream"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_falsey_account_details(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """account_details as empty string must not become [] and pass."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": "",
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_falsey_consumer_detail(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """consumer_detail as empty string must not become [] and pass."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {
+                        "consumer_detail": "",
+                    }
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_falsey_config(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """config as empty list must not become {} and pass."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {
+                        "consumer_detail": [
+                            {"config": []},
+                        ]
+                    }
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_jetstream_fails_on_http_error(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An HTTP error must produce a FAIL, not an exception."""
+    import httpx
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> Any:
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+
+    report = _report(readiness_module)
+    await readiness_module.check_jetstream(report)
+
+    rows = [c for c in report.checks if c.name == "nats jetstream"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_malformed_account_entry(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-dict account entry must fail closed."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": ["not-a-dict"],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_malformed_consumer_detail(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-list consumer_detail must fail closed."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {"consumer_detail": "not-a-list"},
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_malformed_consumer_entry(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-dict consumer entry must fail closed."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {
+                        "consumer_detail": ["not-a-dict"],
+                    }
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_malformed_config(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A consumer with a non-dict config must fail closed."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {
+                        "consumer_detail": [
+                            {"config": "not-a-dict"},
+                        ]
+                    }
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_malformed_top_level(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A valid JSON list (not an object) must fail closed."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return [1, 2, 3]
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_http_error(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An HTTP error must produce a FAIL, not an exception."""
+    import httpx
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> Any:
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_non_2xx_status(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-2xx HTTP status must fail closed, not fall through."""
+
+    class _FakeResponse:
+        status_code = 500
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_malformed_json(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A valid HTTP 200 with malformed JSON must fail closed."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            raise ValueError("invalid json")
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
+async def test_pipeline_processes_fails_on_missing_durable_consumer(
+    readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A response without the expected durable consumer must fail."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "streams": 2,
+                "consumers": 1,
+                "account_details": [
+                    {
+                        "consumer_detail": [
+                            {"config": {"durable_name": "wrong-name"}},
+                        ]
+                    }
+                ],
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(readiness_module.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(
+        readiness_module,
+        "_env",
+        lambda key, default="": (
+            "http://127.0.0.1:8223"
+            if "MONITOR" in key
+            else "postgresql://itsm:itsm@127.0.0.1:5544/itsm_test"
+        ),
+    )
+
+    report = _report(readiness_module)
+    await readiness_module.check_pipeline_processes(report)
+
+    rows = [c for c in report.checks if c.name == "pipeline processes"]
+    assert len(rows) == 1
+    assert rows[0].verdict == "FAIL"
+
+
 async def test_a_findings_request_failure_is_recorded_and_does_not_abort(
     readiness_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:

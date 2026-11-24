@@ -219,22 +219,57 @@ async def check_jetstream(report: Readiness) -> None:
     if not _is_ok(response.status_code):
         report.add("nats jetstream", "FAIL", f"{url}: HTTP {response.status_code}")
         return
-    body = response.json()
-    streams = int(body.get("streams") or 0)
-    consumers = int(body.get("consumers") or 0)
-    accounts = body.get("account_details") or []
+    try:
+        body = response.json()
+    except (ValueError, TypeError) as exc:
+        report.add("nats jetstream", "FAIL", f"{url}: unparseable response ({type(exc).__name__})")
+        return
+    if not isinstance(body, dict):
+        report.add("nats jetstream", "FAIL", f"{url}: response is not a JSON object")
+        return
+    try:
+        streams = int(body.get("streams") or 0)
+        consumers = int(body.get("consumers") or 0)
+        if "account_details" in body and body.get("account_details") is not None:
+            accounts = body.get("account_details")
+            if not isinstance(accounts, list):
+                raise TypeError("account_details is not a list")
+        else:
+            accounts = []
+        durable_names: list[str] = []
+        for account in accounts:
+            if not isinstance(account, dict):
+                raise TypeError("account entry is not an object")
+            if "consumer_detail" in account and account.get("consumer_detail") is not None:
+                consumer_detail = account.get("consumer_detail")
+                if not isinstance(consumer_detail, list):
+                    raise TypeError("consumer_detail is not a list")
+            else:
+                consumer_detail = []
+            for consumer in consumer_detail:
+                if not isinstance(consumer, dict):
+                    raise TypeError("consumer entry is not an object")
+                if "config" in consumer and consumer.get("config") is not None:
+                    cfg = consumer.get("config")
+                    if not isinstance(cfg, dict):
+                        raise TypeError("consumer config is not an object")
+                else:
+                    cfg = {}
+                name = cfg.get("durable_name")
+                if name:
+                    durable_names.append(str(name))
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        report.add("nats jetstream", "FAIL", f"{url}: malformed response ({type(exc).__name__})")
+        return
     if streams < 1:
         report.add("nats jetstream", "FAIL", f"{url}: no streams ({streams})")
         return
-    durable = 0
-    for account in accounts:
-        for consumer in account.get("consumer_detail") or []:
-            if consumer.get("config", {}).get("durable_name"):
-                durable += 1
+    has_expected = "itsm-workflow" in durable_names
     report.add(
         "nats jetstream",
-        "PASS" if durable or consumers else "FAIL",
-        f"{url}: streams={streams} consumers={consumers} durable={durable}",
+        "PASS" if (streams >= 1 and has_expected) else "FAIL",
+        f"{url}: streams={streams} consumers={consumers} "
+        f"durable={durable_names} expected=itsm-workflow",
     )
 
 
@@ -535,7 +570,107 @@ async def check_observability(report: Readiness) -> None:
 
 
 async def check_pipeline_processes(report: Readiness) -> None:
-    """The relay and consumer must be live, not merely declared in compose."""
+    """Verify durable consumer topology and outbox state.
+
+    NOTE: A durable consumer persisting in NATS does not prove the worker
+    process is alive. This check verifies that the durable consumer exists
+    with the correct name and configuration. Worker process liveness is NOT
+    yet verified (H4 is pending). If the consumer is absent, the check fails
+    even when the outbox is empty.
+    """
+    # Verify the durable consumer exists (topology check, not process liveness).
+    nats_url = _env("ITSM_NATS_MONITOR_URL", "http://127.0.0.1:8223")
+    consumer_url = nats_url + "/jsz?consumers=true"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(consumer_url)
+        if not _is_ok(response.status_code):
+            report.add(
+                "pipeline processes",
+                "FAIL",
+                f"{consumer_url}: HTTP {response.status_code}",
+            )
+            return
+        try:
+            body = response.json()
+        except (ValueError, TypeError) as exc:
+            report.add(
+                "pipeline processes",
+                "FAIL",
+                f"{consumer_url}: unparseable response ({type(exc).__name__})",
+            )
+            return
+        if not isinstance(body, dict):
+            report.add(
+                "pipeline processes",
+                "FAIL",
+                f"{consumer_url}: response is not a JSON object",
+            )
+            return
+        if "account_details" in body and body.get("account_details") is not None:
+            accounts = body.get("account_details")
+            if not isinstance(accounts, list):
+                report.add(
+                    "pipeline processes",
+                    "FAIL",
+                    f"{consumer_url}: account_details is not a list",
+                )
+                return
+        else:
+            accounts = []
+        durable_names: list[str] = []
+        for account in accounts:
+            if not isinstance(account, dict):
+                report.add(
+                    "pipeline processes",
+                    "FAIL",
+                    f"{consumer_url}: account entry is not an object",
+                )
+                return
+            if "consumer_detail" in account and account.get("consumer_detail") is not None:
+                consumer_detail = account.get("consumer_detail")
+                if not isinstance(consumer_detail, list):
+                    report.add(
+                        "pipeline processes",
+                        "FAIL",
+                        f"{consumer_url}: consumer_detail is not a list",
+                    )
+                    return
+            else:
+                consumer_detail = []
+            for consumer in consumer_detail:
+                if not isinstance(consumer, dict):
+                    report.add(
+                        "pipeline processes",
+                        "FAIL",
+                        f"{consumer_url}: consumer entry is not an object",
+                    )
+                    return
+                if "config" in consumer and consumer.get("config") is not None:
+                    cfg = consumer.get("config")
+                    if not isinstance(cfg, dict):
+                        report.add(
+                            "pipeline processes",
+                            "FAIL",
+                            f"{consumer_url}: consumer config is not an object",
+                        )
+                        return
+                else:
+                    cfg = {}
+                name = cfg.get("durable_name")
+                if name:
+                    durable_names.append(str(name))
+        if "itsm-workflow" not in durable_names:
+            report.add(
+                "pipeline processes",
+                "FAIL",
+                f"durable consumer 'itsm-workflow' not found in NATS (found: {durable_names})",
+            )
+            return
+    except httpx.HTTPError as exc:
+        report.add("pipeline processes", "FAIL", f"{consumer_url}: {exc}"[:300])
+        return
+
     dsn = _env("ITSM_POSTGRES_DSN") or _env("DATABASE_URL")
     if not dsn:
         report.add("pipeline processes", "NOT RUN", "no DSN configured")

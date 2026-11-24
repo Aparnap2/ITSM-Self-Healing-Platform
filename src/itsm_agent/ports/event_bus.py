@@ -63,8 +63,13 @@ class EventBusPublisher(Protocol):
 @runtime_checkable
 class EventBusConsumer(Protocol):
     async def ensure_consumer(self) -> None:
-        """Idempotently create the durable pull consumer with bounded
-        redelivery (max_deliver) and explicit ack policy."""
+        """Idempotently get-or-create the durable pull consumer with bounded
+        redelivery (max_deliver) and explicit ack policy. Preserves existing
+        delivery state on restart."""
+
+    async def reset_consumer(self) -> None:
+        """Explicitly delete and recreate the durable consumer, resetting
+        delivery state. Test/reset use only — never in production startup."""
 
     async def fetch(self, *, timeout_seconds: float, batch: int = 1) -> list[ConsumedMessage]:
         """Fetch up to ``batch`` messages; empty list on timeout."""

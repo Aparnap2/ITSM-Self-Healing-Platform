@@ -172,11 +172,66 @@ class JetStreamConsumer:
         self._sub = None
 
     async def ensure_consumer(self) -> None:
+        """Idempotent get-or-create of the durable consumer.
+
+        If the consumer already exists, bind to it WITHOUT resetting delivery
+        state (preserves retry counts and redelivery history). If it does not
+        exist, create it with the configured policy.
+
+        This is safe to call on every worker startup: a restarted worker
+        binds to the existing durable consumer instead of wiping its state.
+        """
         await self.connect()
         js = self._js
         assert js is not None
-        # Recreate the durable consumer so tests/runs start from a clean
-        # delivery state; stream data is untouched.
+
+        # Check whether the durable consumer already exists.
+        exists = False
+        try:
+            await js.consumer_info(EVENT_STREAM, self._config.durable_name)
+            exists = True
+        except NotFoundError:
+            exists = False
+
+        if exists:
+            # Bind to the existing consumer; do NOT override its config or
+            # reset delivery state.
+            logger.info(
+                "binding to existing durable consumer %s (delivery state preserved)",
+                self._config.durable_name,
+            )
+            self._sub = await js.pull_subscribe(
+                self._subject,
+                durable=self._config.durable_name,
+            )
+        else:
+            # Create a new consumer with the configured policy.
+            logger.info(
+                "creating durable consumer %s (deliver_policy=ALL)",
+                self._config.durable_name,
+            )
+            self._sub = await js.pull_subscribe(
+                self._subject,
+                durable=self._config.durable_name,
+                config=ConsumerConfig(
+                    durable_name=self._config.durable_name,
+                    deliver_policy=DeliverPolicy.ALL,
+                    ack_policy=AckPolicy.EXPLICIT,
+                    max_deliver=self._config.max_deliver,
+                    ack_wait=self._config.ack_wait_seconds,
+                ),
+            )
+
+    async def reset_consumer(self) -> None:
+        """Explicitly delete and recreate the durable consumer.
+
+        This RESETS delivery state (redelivery counts, pending messages).
+        Use ONLY in controlled test/reset scenarios — never in production
+        startup. Prefer ``ensure_consumer()`` for idempotent startup.
+        """
+        await self.connect()
+        js = self._js
+        assert js is not None
         with contextlib.suppress(NotFoundError):
             await js.delete_consumer(EVENT_STREAM, self._config.durable_name)
         self._sub = await js.pull_subscribe(
