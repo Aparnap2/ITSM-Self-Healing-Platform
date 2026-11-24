@@ -565,10 +565,9 @@ async def check_pipeline_processes(report: Readiness) -> None:
 
     NOTE: A durable consumer persisting in NATS does not prove the worker
     process is alive. This check verifies that the durable consumer exists
-    with the correct name and configuration. Process liveness is verified
-    separately by the container health check (H4) and by the consumer
-    creating the durable consumer during startup. If the consumer is absent,
-    the check fails even when the outbox is empty.
+    with the correct name and configuration. Worker process liveness is NOT
+    yet verified (H4 is pending). If the consumer is absent, the check fails
+    even when the outbox is empty.
     """
     # Verify the durable consumer exists (process liveness signal).
     nats_url = _env("ITSM_NATS_MONITOR_URL", "http://127.0.0.1:8223")
@@ -585,18 +584,42 @@ async def check_pipeline_processes(report: Readiness) -> None:
             return
         try:
             body = response.json()
-        except (ValueError, KeyError) as exc:
+        except (ValueError, TypeError) as exc:
             report.add(
                 "pipeline processes",
                 "FAIL",
                 f"{consumer_url}: unparseable response ({type(exc).__name__})",
             )
             return
+        if not isinstance(body, dict):
+            report.add(
+                "pipeline processes",
+                "FAIL",
+                f"{consumer_url}: response is not a JSON object",
+            )
+            return
         accounts = body.get("account_details") or []
+        if not isinstance(accounts, list):
+            report.add(
+                "pipeline processes",
+                "FAIL",
+                f"{consumer_url}: account_details is not a list",
+            )
+            return
         durable_names: list[str] = []
         for account in accounts:
-            for consumer in account.get("consumer_detail") or []:
-                name = consumer.get("config", {}).get("durable_name")
+            if not isinstance(account, dict):
+                continue
+            consumer_detail = account.get("consumer_detail") or []
+            if not isinstance(consumer_detail, list):
+                continue
+            for consumer in consumer_detail:
+                if not isinstance(consumer, dict):
+                    continue
+                cfg = consumer.get("config") or {}
+                if not isinstance(cfg, dict):
+                    continue
+                name = cfg.get("durable_name")
                 if name:
                     durable_names.append(str(name))
         if "itsm-workflow" not in durable_names:
