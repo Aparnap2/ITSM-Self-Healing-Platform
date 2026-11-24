@@ -219,28 +219,48 @@ async def check_jetstream(report: Readiness) -> None:
     if not _is_ok(response.status_code):
         report.add("nats jetstream", "FAIL", f"{url}: HTTP {response.status_code}")
         return
-    body = response.json()
-    streams = int(body.get("streams") or 0)
-    consumers = int(body.get("consumers") or 0)
-    accounts = body.get("account_details") or []
+    try:
+        body = response.json()
+    except (ValueError, TypeError) as exc:
+        report.add("nats jetstream", "FAIL", f"{url}: unparseable response ({type(exc).__name__})")
+        return
+    if not isinstance(body, dict):
+        report.add("nats jetstream", "FAIL", f"{url}: response is not a JSON object")
+        return
+    try:
+        streams = int(body.get("streams") or 0)
+        consumers = int(body.get("consumers") or 0)
+        accounts = body.get("account_details") or []
+        if not isinstance(accounts, list):
+            raise TypeError("account_details is not a list")
+        durable_names: list[str] = []
+        for account in accounts:
+            if not isinstance(account, dict):
+                raise TypeError("account entry is not an object")
+            consumer_detail = account.get("consumer_detail") or []
+            if not isinstance(consumer_detail, list):
+                raise TypeError("consumer_detail is not a list")
+            for consumer in consumer_detail:
+                if not isinstance(consumer, dict):
+                    raise TypeError("consumer entry is not an object")
+                cfg = consumer.get("config") or {}
+                if not isinstance(cfg, dict):
+                    raise TypeError("consumer config is not an object")
+                name = cfg.get("durable_name")
+                if name:
+                    durable_names.append(str(name))
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        report.add("nats jetstream", "FAIL", f"{url}: malformed response ({type(exc).__name__})")
+        return
     if streams < 1:
         report.add("nats jetstream", "FAIL", f"{url}: no streams ({streams})")
         return
-    # Require a durable consumer with the expected name. An ephemeral consumer
-    # or a durable consumer with a different name must NOT satisfy this check.
-    expected_durable = "itsm-workflow"
-    durable_names: list[str] = []
-    for account in accounts:
-        for consumer in account.get("consumer_detail") or []:
-            name = consumer.get("config", {}).get("durable_name")
-            if name:
-                durable_names.append(str(name))
-    has_expected = expected_durable in durable_names
+    has_expected = "itsm-workflow" in durable_names
     report.add(
         "nats jetstream",
         "PASS" if (streams >= 1 and has_expected) else "FAIL",
         f"{url}: streams={streams} consumers={consumers} "
-        f"durable={durable_names} expected={expected_durable}",
+        f"durable={durable_names} expected=itsm-workflow",
     )
 
 
